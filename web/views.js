@@ -947,7 +947,7 @@ export async function apiDocs(view) {
             href: 'https://github.com/exec/folding-stats',
             target: '_blank', rel: 'noopener noreferrer',
           }, 'github.com/exec/folding-stats'),
-          '. Run your own instance if you would rather.'))));
+          '. Run your own instance if you would rather.')))));
 
   if (snap) {
     view.append(el('section.section', card('Live response',
