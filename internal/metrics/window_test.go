@@ -470,3 +470,30 @@ func TestRetainedCyclesStayBounded(t *testing.T) {
 		t.Errorf("Last7d = %d, want %d", got, 24*7*10)
 	}
 }
+
+func TestGrowKeepsAllocationProportionate(t *testing.T) {
+	// Replay grows the window once per cycle as the corpus was at the time, so this
+	// is called ~168 times at startup with small increments. Sizing exactly to n
+	// would recopy five arrays every time; doubling would strand the member windows
+	// in twice the memory they need for the life of the process.
+	w := New(0)
+	w.Grow(1_000_000)
+	first := cap(w.last24)
+	if first < 1_000_000 || first > 1_200_000 {
+		t.Errorf("cap after Grow(1e6) = %d, want between 1e6 and 1.2e6", first)
+	}
+	// A run of small increments must not reallocate at all.
+	for i := 0; i < 168; i++ {
+		w.Grow(1_000_000 + i*100)
+	}
+	if got := cap(w.last24); got != first {
+		t.Errorf("cap after 168 small grows = %d, want %d (no reallocation)", got, first)
+	}
+	if got := len(w.last24); got != 1_000_000+167*100 {
+		t.Errorf("len = %d, want %d", got, 1_000_000+167*100)
+	}
+	// Newly exposed entries must read as zero, not as another entity's leftovers.
+	if w.Last7d(1_000_000) != 0 || w.Today(1_000_000+500) != 0 {
+		t.Error("grown tail is not zero")
+	}
+}

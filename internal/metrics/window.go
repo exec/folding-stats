@@ -92,10 +92,12 @@ func New(n int) *Window {
 // Grow extends the window to cover at least n entities. New entities start at zero,
 // which is correct: an entity first seen this cycle has no observed production.
 //
-// Capacity grows geometrically because replay calls this once per cycle, following
-// the corpus as it was at the time. Sizing exactly to n would reallocate five arrays
-// on every one of 168 cycles — tens of gigabytes of copying at corpus scale to end up
-// where a handful of doublings arrive.
+// A little headroom is kept because replay calls this once per cycle, following the
+// corpus as it was at the time. Sizing exactly to n would reallocate five arrays on
+// every one of 168 cycles — tens of gigabytes of copying at corpus scale — while
+// doubling would leave 108 MB of member windows sitting in 217 MB of allocation
+// forever. An eighth covers a week of replay and months of hourly growth (the corpus
+// gains a few thousand members a day against 2.7M) for ~13 MB.
 func (w *Window) Grow(n int) {
 	if n <= len(w.last24) {
 		return
@@ -110,10 +112,7 @@ func (w *Window) Grow(n int) {
 		w.update = w.update[:n]
 		return
 	}
-	c := 2 * cap(w.last24)
-	if c < n {
-		c = n
-	}
+	c := n + n/8
 	grow := func(s []int64) []int64 {
 		out := make([]int64, n, c)
 		copy(out, s)
