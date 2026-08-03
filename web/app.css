@@ -264,6 +264,18 @@ a.icon-btn:hover { color: var(--ink); }
 }
 main.refreshed { animation: data-refreshed 900ms ease-out; }
 
+/* Swapping a leaderboard tab or page keeps the old rows on screen until the new ones
+   are ready, so the only thing signalling that a click landed is this. Short and
+   shallow on purpose: deep enough to read as "working", nowhere near a blank.
+   A cached response resolves inside one frame and never paints it at all. */
+main { transition: opacity 90ms ease-out; }
+main.swapping { opacity: 0.55; }
+
+@media (prefers-reduced-motion: reduce) {
+  main { transition: none; }
+  main.refreshed { animation: none; }
+}
+
 .icon-btn {
   display: grid;
   flex: none;

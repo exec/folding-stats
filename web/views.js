@@ -75,10 +75,18 @@ function listHref(base, { page = 1, sort = 'lifetime' } = {}) {
 /**
  * Tabs for a leaderboard. Switching ordering returns to page 1: holding position
  * would land the reader on page 40 of a board they have not seen the top of.
+ *
+ * The pressed tab moves on click rather than when the response lands. The rows stay
+ * on screen through the swap, so without this the only thing that changes on click is
+ * nothing at all, and the tab reads as not having taken.
  */
 function sortTabs(base, sort, nav) {
-  return el('div.board-tabs',
-    segmented(SORTS, sort, (v) => nav(listHref(base, { sort: v }))));
+  const tabs = segmented(SORTS, sort, (v) => {
+    const buttons = tabs.querySelectorAll('button');
+    SORTS.forEach((o, i) => buttons[i]?.setAttribute('aria-pressed', String(o.value === v)));
+    nav(listHref(base, { sort: v }), { keepContent: true });
+  });
+  return el('div.board-tabs', tabs);
 }
 
 /** Empty chart state. Says what window was searched, so "nothing" is informative. */
@@ -433,7 +441,7 @@ export async function teamsList(view, { page = 1, sort = 'lifetime' }, nav) {
       card(null,
         teamTable(res.data, { sort, offset: (res.page.page - 1) * res.page.per_page }),
         pager(res.page.page, res.page.total_pages, res.page.total_items,
-          (p) => nav(listHref('/teams', { page: p, sort }))))
+          (p) => nav(listHref('/teams', { page: p, sort }), { keepContent: true })))
     );
   } catch (err) {
     errorView(view, err);
@@ -621,7 +629,7 @@ export async function donorsList(view, { page = 1, sort = 'lifetime' }, nav) {
       card(null,
         donorTable(res.data, { sort, offset: (res.page.page - 1) * res.page.per_page }),
         pager(res.page.page, res.page.total_pages, res.page.total_items,
-          (p) => nav(listHref('/donors', { page: p, sort }))))
+          (p) => nav(listHref('/donors', { page: p, sort }), { keepContent: true })))
     );
   } catch (err) {
     errorView(view, err);

@@ -120,8 +120,20 @@ const routes = [
 ];
 
 let rendering = false;
+// Kept-content renders currently in flight; see the dim below.
+let swapping = 0;
 
-async function render({ quiet = false } = {}) {
+/**
+ * @param quiet        an in-place refresh from new data: keep content, keep scroll,
+ *                     bypass the cache the previous snapshot filled.
+ * @param keepContent  a navigation within the same view — a leaderboard tab or a page
+ *                     of the same list. The skeleton is ~450px against a leaderboard
+ *                     thousands of pixels tall, so showing it collapses the page and
+ *                     springs it back: a flicker, and a scroll position thrown away.
+ *                     The old rows stay put until the new ones are ready to replace
+ *                     them in a single frame.
+ */
+async function render({ quiet = false, keepContent = false } = {}) {
   const path = location.pathname;
   const query = new URLSearchParams(location.search);
   const href = path + location.search;
@@ -144,17 +156,30 @@ async function render({ quiet = false } = {}) {
     if (m) {
       // A quiet refresh is a data swap under a reader's cursor: no skeletons, and no
       // yanking them back to the top of a page they had scrolled down.
-      if (!quiet) window.scrollTo(0, 0);
-      setQuiet(quiet);
+      if (!quiet && !keepContent) window.scrollTo(0, 0);
+      setQuiet(quiet || keepContent);
       // A quiet render is triggered by a new snapshot, so its fetches must not be
-      // answered from the previous one's cache.
+      // answered from the previous one's cache. A tab switch is a different URL and
+      // wants the cache, so it is deliberately not included here.
       if (quiet) setCacheMode('reload');
+      // Nothing blanks during a kept-content swap, so without this the click has no
+      // acknowledgement at all until the response lands. A short dim is feedback; a
+      // skeleton is a flash.
+      //
+      // Counted rather than a flag: clicking a second tab before the first responds
+      // leaves two renders in flight, and whichever finishes first would otherwise
+      // clear the dim while the other is still loading — reintroducing exactly the
+      // flicker this removes.
+      if (keepContent) swapping++;
+      view.classList.toggle('swapping', swapping > 0);
       rendering = true;
       try {
         cleanup = (await handler(m, query)) || null;
       } finally {
         setQuiet(false);
         setCacheMode('default');
+        if (keepContent) swapping--;
+        view.classList.toggle('swapping', swapping > 0);
         rendering = false;
       }
       // The reader navigated while this was in flight, so what just landed is the
@@ -170,9 +195,9 @@ async function render({ quiet = false } = {}) {
   );
 }
 
-export function navigate(to) {
+export function navigate(to, { keepContent = false } = {}) {
   if (to !== location.pathname + location.search) history.pushState(null, '', to);
-  render();
+  render({ keepContent });
 }
 
 // New data landed. Repaint the current page in place — no reload, no scroll jump.
