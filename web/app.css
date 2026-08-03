@@ -767,16 +767,43 @@ footer {
   .header { padding-left: var(--s4); padding-right: var(--s4); }
   main { padding: var(--s5) var(--s4) var(--s6); }
 }
-@media (max-width: 620px) {
-  .nav { display: none; }
+/* The nav takes a row of its own rather than disappearing.
+
+   It used to be display:none below 620px, which left a phone with a search box, a
+   clock and two icons and no way to reach any page at all — the links are the one
+   thing in this header that cannot be dropped. Below about 360px the five items are
+   wider than the screen, so the row scrolls sideways rather than wrapping into a
+   ragged block.
+
+   The breakpoint is 800px, not the width where the nav stops fitting, because the nav
+   is what squeezes everything else: with it inline the search box collapsed to 16-136px
+   between 640 and 780 — present, focusable and far too narrow to use — and the GitHub
+   icon was pushed onto a row of its own around 630. Moving the nav off first leaves the
+   remaining row with room for a real search box. */
+@media (max-width: 800px) {
+  .nav {
+    order: 6;                 /* after the search, before the freshness line */
+    flex-basis: 100%;
+    gap: 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav a { padding: 6px 10px; white-space: nowrap; }
 }
 
 /* On a phone the search box can no longer share a row with the brand without
    squeezing the toggle onto a line of its own — a 34px button with a whole row to
    itself. Giving search the row instead spends the same vertical space on the thing
    that benefits from the width. */
+/* On a phone the wordmark goes and the search keeps its place on the first row.
+
+   Giving search a row of its own instead costs a fourth header row — and with the nav
+   now needing one, that put a sticky header at 169px, a fifth of the screen, on every
+   page. The diamond still links home, which is the part that was doing the work. */
 @media (max-width: 480px) {
-  .search { order: 5; flex-basis: 100%; margin-left: 0; }
+  .brand-name { display: none; }
   #theme-toggle { margin-left: auto; }
 }
 
