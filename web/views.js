@@ -874,11 +874,30 @@ export async function apiDocs(view) {
   const snap = await api.status().catch(() => null);
   const base = location.origin;
 
-  const endpoint = (method, path, desc) =>
-    el('tr',
+  // Placeholders resolve to entities that exist in every corpus, so each row is a
+  // link you can actually follow: team 0 is "Default (No team specified)", the
+  // largest team, and Anonymous is the most widely shared donor name. The column
+  // still shows the template, because that is the documentation; the href is a
+  // worked example, and the title says where it goes.
+  //
+  // This previously read `.replace(/\{[^}]+\}/g, (m) => m)` — a substitution that
+  // returns the match unchanged — so every templated row linked to a literal
+  // `/v1/donors/{name}` and 404'd.
+  const EXAMPLES = { '{id}': '0', '{name}': 'Anonymous' };
+  const exampleOf = (path) => {
+    const p = path.replace(/\{[^}]+\}/g, (m) => EXAMPLES[m] ?? m);
+    return p === '/v1/search' ? p + '?q=Anonymous' : p;
+  };
+
+  const endpoint = (method, path, desc) => {
+    const ex = exampleOf(path);
+    return el('tr',
       el('td.left', el('code', { style: 'color:var(--series-3)' }, method)),
-      el('td.left', el('a', { href: base + path.replace(/\{[^}]+\}/g, (m) => m) }, el('code', path))),
+      el('td.left',
+        el('a', { href: base + ex, title: `Example: ${ex}` }, el('code', path)),
+        ex === path ? null : el('span.muted', { style: 'margin-left:8px;font-size:12px' }, `try ${ex}`)),
       el('td.left.muted', desc));
+  };
 
   view.append(
     el('div.page-head',
