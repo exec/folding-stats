@@ -60,6 +60,11 @@ type WarmingUp struct {
 	// rather than from observed publishes, before enough cycles exist to measure the
 	// real cadence.
 	IntervalEstimated bool `json:"interval_estimated,omitempty"`
+	// RankChange24hUnavailable is true while no rank_change_24h can be computed for
+	// anyone, because less than 24 hours of cycles have been observed. It
+	// distinguishes "nobody has moved" from "we cannot say yet" for a client that
+	// finds the field missing on every entity at once.
+	RankChange24hUnavailable bool `json:"rank_change_24h_unavailable,omitempty"`
 }
 
 // PageInfo describes a paginated collection.
@@ -104,6 +109,15 @@ type Team struct {
 	Name   string `json:"name"`
 	Rank   int32  `json:"rank"`
 
+	// RankChange24h is places gained since 24 hours ago, negative for places lost.
+	//
+	// A pointer because absent and zero are different answers: zero means the rank
+	// is genuinely unchanged, while absent means there is nothing to compare against
+	// — the entity is newer than a day, or the service has not yet observed one.
+	// Rendering "no change" for an entity we simply were not watching would be a
+	// measurement we never made.
+	RankChange24h *int32 `json:"rank_change_24h,omitempty"`
+
 	MembersTotal  int32 `json:"members_total"`
 	MembersActive int32 `json:"members_active"`
 
@@ -121,6 +135,11 @@ type Member struct {
 	RankGlobal int32  `json:"rank_global"`
 	RankInTeam int32  `json:"rank_in_team"`
 
+	// RankChange24h tracks rank_global. In-team movement is not reported: it is
+	// derived by walking the global order, so it would need a second historical
+	// pass per team to answer a question nobody has asked for.
+	RankChange24h *int32 `json:"rank_change_24h,omitempty"`
+
 	Production
 }
 
@@ -131,6 +150,10 @@ type Member struct {
 type Donor struct {
 	Name string `json:"name"`
 	Rank int32  `json:"rank"`
+
+	// RankChange24h is places gained since 24 hours ago; see Team.RankChange24h for
+	// why it is a pointer.
+	RankChange24h *int32 `json:"rank_change_24h,omitempty"`
 
 	TeamCount int32 `json:"team_count"`
 

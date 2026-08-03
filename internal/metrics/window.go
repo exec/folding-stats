@@ -44,6 +44,12 @@ const (
 type cycleDeltas struct {
 	at     time.Time
 	deltas []model.Delta
+
+	// count is how many entities existed once this cycle had been applied. Slots are
+	// assigned densely in first-seen order and never reused, so "id < count" is
+	// exactly "this entity already existed at this cycle" — which is what separates a
+	// genuine rank movement from an entity that simply was not there before.
+	count int32
 }
 
 // Window tracks rolling and calendar production for a dense set of entity ids.
@@ -139,7 +145,9 @@ func (w *Window) Push(at time.Time, deltas []model.Delta) {
 		w.week[id] += d.DScore
 		w.update[id] = d.DScore
 	}
-	w.cycles = append(w.cycles, cycleDeltas{at: at, deltas: deltas})
+	// Callers Grow to the current entity count before pushing, so the window's own
+	// length is that count.
+	w.cycles = append(w.cycles, cycleDeltas{at: at, deltas: deltas, count: int32(len(w.last24))})
 	w.prev = deltas
 	w.at = at
 
@@ -174,6 +182,30 @@ func (w *Window) expire(now time.Time) {
 			w.idx24 = 0
 		}
 	}
+}
+
+// Baseline returns the entity count as of the cycle the 24-hour window is measured
+// against — the newest cycle at or before at-24h — and whether such a cycle exists.
+//
+// This is the companion to Last24h. Subtracting Last24h from a current total gives
+// that entity's total as of exactly this cycle, so the two together reconstruct the
+// corpus as it stood a day ago. An entity whose id is at or above the returned count
+// did not exist then, and any movement computed for it would be invented rather than
+// measured.
+//
+// ok is false until a full 24 hours has been observed, because until then nothing has
+// aged out of the window and there is no earlier state to compare against.
+//
+// ponytail: after a restart the windows are replayed with the corpus already at its
+// final size, so every replayed cycle reports today's count and entities created in
+// the 24h since the restart are treated as pre-existing. It self-corrects once the
+// baseline cycle is one this process pushed live. Fixing it properly means growing
+// the window cycle by cycle during replay, using cycles.new_members/new_teams.
+func (w *Window) Baseline() (int32, bool) {
+	if w.idx24 == 0 {
+		return 0, false
+	}
+	return w.cycles[w.idx24-1].count, true
 }
 
 // At returns the timestamp of the newest cycle.

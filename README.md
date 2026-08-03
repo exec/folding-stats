@@ -127,6 +127,12 @@ Every response carries a `snapshot` block describing freshness, then the data.
 - **Compare timestamps against `server_time`**, not your own clock. Unsynced client
   clocks are routinely minutes out, and every relative figure derived from one is wrong
   by exactly that much.
+- **`rank_change_24h` is absent, not zero, when it is unknown.** Teams, donors and
+  members carry places gained over the last 24 hours (negative for places lost). The
+  field is omitted entirely when there is nothing to compare against — the entity is
+  newer than a day, or the service has not yet observed one. Zero means the rank
+  genuinely held. When no entity anywhere can be compared yet,
+  `snapshot.warming_up.rank_change_24h_unavailable` says so.
 - **Names are raw upstream text.** They contain tabs, newlines and non-ASCII.
   URL-encode them in paths.
 - **A UTC day has ~23.94 publishes, not 24.** See [Cadence](#cadence-is-measured-not-assumed).

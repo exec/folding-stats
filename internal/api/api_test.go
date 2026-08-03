@@ -1006,3 +1006,127 @@ func TestWarmingUpDisappearsWhenWarm(t *testing.T) {
 		t.Error("warming_up returned an empty object; it should be nil")
 	}
 }
+
+// rankChangeFixture builds a world whose two cycles are more than a day apart, so a
+// 24h baseline exists and rank movement is actually reportable. The shared fixture
+// deliberately spans one hour, which is the opposite case.
+func rankChangeFixture(t *testing.T) *Server {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "h.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	state := model.NewState()
+	memberWin, teamWin := metrics.New(0), metrics.New(0)
+	ctx := context.Background()
+
+	cycles := []struct {
+		when  time.Time
+		teams []parse.TeamRow
+		users []parse.UserRow
+	}{
+		{at(1),
+			[]parse.TeamRow{tr(32, "overclockers", 500), tr(51, "Alliance", 900)},
+			[]parse.UserRow{u("climber", 100, 32), u("faller", 800, 51)},
+		},
+		// 25 hours on: the first cycle ages out of the rolling window and becomes the
+		// baseline. climber overtakes faller, so both must report movement.
+		{at(1).Add(25 * time.Hour),
+			[]parse.TeamRow{tr(32, "overclockers", 5000), tr(51, "Alliance", 900)},
+			[]parse.UserRow{u("climber", 4000, 32), u("faller", 800, 51), u("newcomer", 9000, 32)},
+		},
+	}
+	var last time.Time
+	for _, c := range cycles {
+		cy := state.Apply(c.when, c.teams, c.users)
+		if err := st.WriteCycle(ctx, state, cy, store.CycleMeta{
+			TeamSnapshotAt: c.when, UserSnapshotAt: c.when}); err != nil {
+			t.Fatal(err)
+		}
+		memberWin.Grow(len(state.Members))
+		memberWin.Push(c.when, cy.MemberDeltas)
+		teamWin.Grow(len(state.Teams))
+		teamWin.Push(c.when, cy.TeamDeltas)
+		last = c.when
+	}
+
+	tbl := rank.Build(state, last, rank.DefaultConfig)
+	tbl.BuildChange24h(state, memberWin, teamWin)
+
+	srv := NewServer()
+	srv.Publish(Build(state, memberWin, teamWin, tbl, st, last, last.Add(time.Hour), "rc-etag"))
+	return srv
+}
+
+func TestRankChange24hOnTheWire(t *testing.T) {
+	srv := rankChangeFixture(t)
+
+	// Rank movement is movement in position, not in who you beat. climber overtakes
+	// faller but a newcomer lands above both, so climber holds position 2 and reports
+	// no movement — while faller drops two, one to each. Asserting the arithmetic
+	// rather than just the sign is the point: an entity that gained ground on a rival
+	// while the list grew above it genuinely has not climbed.
+	for _, tc := range []struct {
+		donor string
+		want  float64
+	}{
+		{"climber", 0},
+		{"faller", -2},
+	} {
+		_, env := get(t, srv, "/v1/donors/"+tc.donor)
+		d := env.Data.(map[string]any)
+		got, ok := d["rank_change_24h"]
+		if !ok {
+			t.Errorf("%s: rank_change_24h absent, want %+v", tc.donor, tc.want)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%s: rank_change_24h = %v, want %+v", tc.donor, got, tc.want)
+		}
+	}
+
+	// An entity younger than the baseline has no earlier rank. The field must be
+	// absent rather than 0, which would read as "held its position".
+	_, env := get(t, srv, "/v1/donors/newcomer")
+	if v, ok := env.Data.(map[string]any)["rank_change_24h"]; ok {
+		t.Errorf("newcomer: rank_change_24h = %v, want the field to be absent", v)
+	}
+
+	// Teams travel the same path through a different window, and no team is created
+	// in the second cycle — so this is the clean overtake: 32 passes 51, +1 and -1.
+	for _, tc := range []struct {
+		id   string
+		want float64
+	}{
+		{"32", 1},
+		{"51", -1},
+	} {
+		_, env := get(t, srv, "/v1/teams/"+tc.id)
+		got, ok := env.Data.(map[string]any)["rank_change_24h"]
+		if !ok {
+			t.Errorf("team %s: rank_change_24h absent, want %+v", tc.id, tc.want)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("team %s: rank_change_24h = %v, want %+v", tc.id, got, tc.want)
+		}
+	}
+}
+
+func TestRankChangeUnavailableIsAdvertisedWhileWarmingUp(t *testing.T) {
+	// The one-hour fixture cannot compute movement for anyone. A client seeing the
+	// field missing everywhere needs to tell "nobody moved" from "we cannot say yet".
+	_, env := get(t, fixture(t), "/v1/donors")
+	if env.Snapshot.WarmingUp == nil || !env.Snapshot.WarmingUp.RankChange24hUnavailable {
+		t.Errorf("warming_up.rank_change_24h_unavailable not set with under 24h of cycles: %+v",
+			env.Snapshot.WarmingUp)
+	}
+
+	// And it must clear once a baseline exists, or it would be permanent noise.
+	_, env = get(t, rankChangeFixture(t), "/v1/donors")
+	if env.Snapshot.WarmingUp != nil && env.Snapshot.WarmingUp.RankChange24hUnavailable {
+		t.Error("rank_change_24h_unavailable still set once a 24h baseline exists")
+	}
+}

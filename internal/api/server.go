@@ -163,7 +163,9 @@ func warmingUp(snap *Snapshot) *WarmingUp {
 	if !snap.AvgWindowComplete() {
 		w.HistorySpanSec = int64(snap.Members.Span().Seconds())
 	}
-	if w.HistorySpanSec == 0 && !w.IntervalEstimated {
+	_, haveBaseline := snap.Members.Baseline()
+	w.RankChange24hUnavailable = !haveBaseline
+	if w.HistorySpanSec == 0 && !w.IntervalEstimated && !w.RankChange24hUnavailable {
 		return nil
 	}
 	return &w

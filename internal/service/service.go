@@ -268,6 +268,7 @@ func (s *Service) publish() {
 	defer s.guard.RUnlock()
 
 	tbl := rank.Build(s.state, s.state.At, rank.DefaultConfig)
+	tbl.BuildChange24h(s.state, s.memberWin, s.teamWin)
 
 	next := s.cadence.NextAfter(s.state.At)
 	// The ETag identifies the snapshot; the cycle time is exactly that identity.

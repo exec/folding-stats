@@ -668,6 +668,38 @@ body is precisely the wrong answer. Without it the page announces fresh data ove
 numbers — verified by tagging the payload per generation and watching the headline
 figure change.
 
+### Rank history is derived, not stored
+
+Rank movement over 24 hours is reconstructed each cycle rather than recorded. A
+cumulative total minus that entity's own last-24h production **is** its total a day
+ago, so the earlier leaderboard comes back from a second pass of the radix sort Build
+already runs. Nothing is persisted and no migration was needed to start reporting it —
+the rolling windows are replayed from the delta tables at boot, so the feature works
+against history that was already on disk.
+
+Storing ranks instead would have meant a rank per entity per cycle: ~11 MB a cycle for
+members, ~92 GB a year, to answer a question the deltas already contain.
+
+Two things the reconstruction has to get right:
+
+1. **Entities younger than the baseline have no earlier rank.** The window records the
+   corpus size at each cycle, and slots are assigned densely in first-seen order, so
+   `id < count` is exactly "existed then". The earlier ranking covers only those, and a
+   newer entity reports nothing rather than a position it never held.
+2. **The reconstructed total is clamped at zero.** `sortDescByScore` orders on inverted
+   key bits, which only holds for non-negative values. A feed glitch producing deltas
+   larger than an entity's lifetime total would otherwise not misplace one row — it
+   would scramble the entire ranking.
+
+Measured cost on a synthetic 47k-member, 36k-donor corpus: publish went from 10 ms to
+12 ms. That is a second sort over a corpus 57× smaller than production, so it bounds
+nothing about the real one — it only says the shape is right. The work is off the read
+path either way, and lands on publish rather than on any request.
+
+Verified by reconstructing all 36,012 donors' historical positions from their own
+published figures — zero mismatches, and the movements sum to zero, as they must when
+every place gained is a place lost.
+
 ### Guard: reads take a lock
 
 The published `Snapshot` shares the live ingest structures rather than copying ~300 MB

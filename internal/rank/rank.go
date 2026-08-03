@@ -21,6 +21,7 @@ import (
 	"sort"
 	"time"
 
+	"folding/internal/metrics"
 	"folding/internal/model"
 )
 
@@ -85,6 +86,20 @@ type Table struct {
 	// nameOrder indexes into Donors, sorted case-insensitively by name, for
 	// prefix search.
 	nameOrder []int32
+
+	// 24-hour rank movement, positive meaning improved. Indexed by member slot, team
+	// slot and donor position respectively, and nil until a 24h baseline exists.
+	//
+	// The baselines are entity counts, not timestamps: an id at or above one belongs
+	// to an entity that did not exist a day ago, so it has no earlier rank. Storing
+	// the cutoff rather than a parallel "known" array keeps this to one int per
+	// dimension instead of a bitmap over 2.7M members.
+	memberChange   []int32
+	teamChange     []int32
+	donorChange    []int32
+	memberBaseline int32
+	teamBaseline   int32
+	donorKnown     []bool
 
 	buf sortBuf
 }
@@ -279,17 +294,154 @@ func window(order []int32, rank int32, n int) []int32 {
 	return order[lo:hi]
 }
 
-// Change reports rank movement between two tables, positive meaning improved.
-// Entities absent from the earlier table return 0 rather than a fabricated jump.
-func Change(now, then []int32, id int32) int32 {
-	if int(id) >= len(now) || int(id) >= len(then) {
-		return 0
+// ------------------------------------------------------- 24-hour movement ---
+
+// BuildChange24h fills in rank movement over the last 24 hours.
+//
+// It is a second phase rather than part of Build because it needs the rate windows,
+// and because it is the one part of the table that can legitimately be absent: for
+// the first day of a cold start there is no earlier corpus to compare against.
+//
+// Nothing about a past ranking is stored. A cumulative total minus its own last-24h
+// production is that entity's total a day ago, so the earlier ranking is recovered by
+// sorting reconstructed totals — the same radix sort Build already uses. Persisting
+// ranks instead would cost a rank per entity per cycle (~92 GB a year for members
+// alone) to answer a question the deltas already contain.
+func (t *Table) BuildChange24h(st *model.State, members, teams *metrics.Window) {
+	t.memberChange, t.memberBaseline = t.change24h(memberScores(st), members, t.MemberRank)
+	t.teamChange, t.teamBaseline = t.change24h(teamScores(st), teams, t.TeamRank)
+	t.donorChange24h(st, members)
+	// The sort scratch is ~22 MB and, as in Build, useless once the orders are
+	// materialised.
+	t.buf = sortBuf{}
+}
+
+func memberScores(st *model.State) func(int32) int64 {
+	return func(i int32) int64 { return st.Members[i].Score }
+}
+
+func teamScores(st *model.State) func(int32) int64 {
+	return func(i int32) int64 { return st.Teams[i].Score }
+}
+
+// change24h ranks the corpus as it stood a day ago and returns the movement since,
+// indexed by slot. The returned baseline is the exclusive upper bound of slots that
+// existed then.
+func (t *Table) change24h(score func(int32) int64, w *metrics.Window, nowRank []int32) ([]int32, int32) {
+	base, ok := w.Baseline()
+	if !ok {
+		return nil, 0
 	}
-	before, after := then[id], now[id]
-	if before == 0 || after == 0 {
-		return 0
+	if int(base) > len(nowRank) {
+		base = int32(len(nowRank))
 	}
-	return before - after
+	if base == 0 {
+		return nil, 0
+	}
+
+	hist := make([]int64, base)
+	for i := int32(0); i < base; i++ {
+		hist[i] = histScore(score(i), w.Last24h(i))
+	}
+
+	// Ranked over only the entities that existed, so an entity that has appeared
+	// since does not silently displace everyone below it in the earlier ordering.
+	order := sortDescByScore(hist, &t.buf)
+	change := make([]int32, base)
+	for pos, id := range order {
+		change[id] = int32(pos) + 1 - nowRank[id]
+	}
+	return change, base
+}
+
+// histScore reconstructs a total as of 24 hours ago.
+//
+// Clamped at zero because sortDescByScore inverts the key bits, which only orders
+// correctly for non-negative values. A total can only go negative here if a feed
+// glitch produced deltas summing to more than the entity has ever scored — which the
+// model already counts as a regression, and which must not be allowed to scramble an
+// entire ranking.
+func histScore(now, last24 int64) int64 {
+	if v := now - last24; v > 0 {
+		return v
+	}
+	return 0
+}
+
+// donorChange24h is the same reconstruction aggregated by name.
+//
+// A donor's earlier total is summed only over the members that existed then, and a
+// donor with no such members is new — reported as unknown rather than as movement.
+func (t *Table) donorChange24h(st *model.State, w *metrics.Window) {
+	base, ok := w.Baseline()
+	if !ok || len(t.Donors) == 0 {
+		return
+	}
+	if int(base) > len(st.Members) {
+		base = int32(len(st.Members))
+	}
+
+	hist := make([]int64, len(t.Donors))
+	known := make([]bool, len(t.Donors))
+	for slot := int32(0); slot < base; slot++ {
+		d := t.DonorIndex[st.Members[slot].NameID]
+		if d < 0 {
+			continue
+		}
+		hist[d] += histScore(st.Members[slot].Score, w.Last24h(slot))
+		known[d] = true
+	}
+
+	// Compact to the donors that existed, so the earlier ranking covers exactly them.
+	idx := make([]int32, 0, len(t.Donors))
+	for d, ok := range known {
+		if ok {
+			idx = append(idx, int32(d))
+		}
+	}
+	if len(idx) == 0 {
+		return
+	}
+	sub := make([]int64, len(idx))
+	for i, d := range idx {
+		sub[i] = hist[d]
+	}
+
+	order := sortDescByScore(sub, &t.buf)
+	change := make([]int32, len(t.Donors))
+	for pos, oi := range order {
+		// Donors is stored in rank order, so a donor's current rank is its index + 1.
+		d := idx[oi]
+		change[d] = int32(pos) + 1 - (d + 1)
+	}
+	t.donorChange, t.donorKnown = change, known
+}
+
+// MemberChange24h reports a member's rank movement over the last 24 hours, positive
+// meaning improved. ok is false when there is no earlier ranking to compare against —
+// either the window has not yet covered a day, or the member did not exist then.
+func (t *Table) MemberChange24h(slot int32) (int32, bool) {
+	return lookupChange(t.memberChange, t.memberBaseline, slot)
+}
+
+// TeamChange24h is MemberChange24h for teams.
+func (t *Table) TeamChange24h(slot int32) (int32, bool) {
+	return lookupChange(t.teamChange, t.teamBaseline, slot)
+}
+
+// DonorChange24h reports movement for the donor at index i.
+func (t *Table) DonorChange24h(i int32) (int32, bool) {
+	if t.donorChange == nil || i < 0 || int(i) >= len(t.donorChange) || !t.donorKnown[i] {
+		return 0, false
+	}
+	return t.donorChange[i], true
+}
+
+func lookupChange(change []int32, baseline, id int32) (int32, bool) {
+	if change == nil || id < 0 || id >= baseline {
+		return 0, false
+	}
+	return change[id], true
 }
 
 // ---------------------------------------------------------------- search ---

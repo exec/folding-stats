@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"folding/internal/metrics"
 	"folding/internal/model"
 	"folding/internal/parse"
 )
@@ -221,22 +222,156 @@ func TestWindowClampsAtBoundaries(t *testing.T) {
 	}
 }
 
-func TestChangeReportsMovement(t *testing.T) {
-	then := []int32{5, 10, 0}
-	nowR := []int32{3, 12, 7}
-	if got := Change(nowR, then, 0); got != 2 {
-		t.Errorf("improvement = %d, want +2", got)
+// applyCycle mirrors the service's per-cycle sequence: fold the snapshot into state,
+// grow the windows to the new corpus size, then push that cycle's deltas. The order
+// matters — the window records the entity count at push time, which is what tells a
+// pre-existing entity apart from one that has only just appeared.
+func applyCycle(st *model.State, mw, tw *metrics.Window, at time.Time,
+	teams []parse.TeamRow, users []parse.UserRow) {
+	c := st.Apply(at, teams, users)
+	mw.Grow(len(st.Members))
+	mw.Push(at, c.MemberDeltas)
+	tw.Grow(len(st.Teams))
+	tw.Push(at, c.TeamDeltas)
+}
+
+func slotOf(t *testing.T, st *model.State, name string, team int32) int32 {
+	t.Helper()
+	nameID, ok := st.Names.Lookup(name)
+	if !ok {
+		t.Fatalf("name %q not interned", name)
 	}
-	if got := Change(nowR, then, 1); got != -2 {
-		t.Errorf("decline = %d, want -2", got)
+	slot, ok := st.MemberSlot(nameID, team)
+	if !ok {
+		t.Fatalf("no member slot for (%q, %d)", name, team)
 	}
-	// An entity that did not exist before has not "moved"; reporting a jump from
-	// nowhere would be worse than reporting nothing.
-	if got := Change(nowR, then, 2); got != 0 {
-		t.Errorf("new entity = %d, want 0", got)
+	return slot
+}
+
+func TestRankChange24hReportsMovement(t *testing.T) {
+	st := model.NewState()
+	mw, tw := metrics.New(0), metrics.New(0)
+
+	t0 := now()
+	applyCycle(st, mw, tw, t0, nil, []parse.UserRow{u("a", 100, 1), u("b", 200, 1), u("c", 300, 1)})
+	// More than 24h later, so the first cycle ages out of the rolling window and
+	// becomes the baseline the comparison is made against.
+	t1 := t0.Add(25 * time.Hour)
+	applyCycle(st, mw, tw, t1, nil, []parse.UserRow{u("a", 1000, 1), u("b", 200, 1), u("c", 300, 1)})
+
+	tbl := Build(st, t1, DefaultConfig)
+	tbl.BuildChange24h(st, mw, tw)
+
+	// Was 3rd on 100 points, now 1st on 1000: two places gained.
+	for _, tc := range []struct {
+		name string
+		want int32
+	}{
+		{"a", 2},  // 3rd -> 1st
+		{"b", -1}, // 2nd -> 3rd
+		{"c", -1}, // 1st -> 2nd
+	} {
+		slot := slotOf(t, st, tc.name, 1)
+		got, ok := tbl.MemberChange24h(slot)
+		if !ok {
+			t.Errorf("%s: no rank change reported, want %+d", tc.name, tc.want)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%s: rank change = %+d, want %+d", tc.name, got, tc.want)
+		}
 	}
-	if got := Change(nowR, then, 99); got != 0 {
-		t.Errorf("out-of-range id = %d, want 0", got)
+
+	// Each donor here folds for one team, so donor movement must match the member's.
+	for _, name := range []string{"a", "b", "c"} {
+		nameID, _ := st.Names.Lookup(name)
+		idx := tbl.DonorIndex[nameID]
+		donor, ok := tbl.DonorChange24h(idx)
+		if !ok {
+			t.Fatalf("%s: no donor rank change reported", name)
+		}
+		member, _ := tbl.MemberChange24h(slotOf(t, st, name, 1))
+		if donor != member {
+			t.Errorf("%s: donor change %+d, member change %+d — single-team donor should match",
+				name, donor, member)
+		}
+	}
+}
+
+func TestRankChange24hIsAbsentForEntitiesNewerThanADay(t *testing.T) {
+	st := model.NewState()
+	mw, tw := metrics.New(0), metrics.New(0)
+
+	t0 := now()
+	applyCycle(st, mw, tw, t0, nil, []parse.UserRow{u("a", 100, 1), u("b", 200, 1)})
+	t1 := t0.Add(25 * time.Hour)
+	// "newcomer" arrives with a large lifetime total accumulated before we ever saw
+	// it. Ranking it against a reconstructed past would invent a position it never
+	// held, so it must report nothing at all.
+	applyCycle(st, mw, tw, t1, nil, []parse.UserRow{
+		u("a", 100, 1), u("b", 200, 1), u("newcomer", 9000, 1),
+	})
+
+	tbl := Build(st, t1, DefaultConfig)
+	tbl.BuildChange24h(st, mw, tw)
+
+	if got, ok := tbl.MemberChange24h(slotOf(t, st, "newcomer", 1)); ok {
+		t.Errorf("newcomer reported a rank change of %+d; want none", got)
+	}
+	nameID, _ := st.Names.Lookup("newcomer")
+	if got, ok := tbl.DonorChange24h(tbl.DonorIndex[nameID]); ok {
+		t.Errorf("new donor reported a rank change of %+d; want none", got)
+	}
+	// The established members still report, and their movement is measured against
+	// each other rather than against the entity that displaced them.
+	if _, ok := tbl.MemberChange24h(slotOf(t, st, "a", 1)); !ok {
+		t.Error("established member reported no rank change; want one")
+	}
+}
+
+func TestRankChange24hAbsentBeforeADayHasPassed(t *testing.T) {
+	st := model.NewState()
+	mw, tw := metrics.New(0), metrics.New(0)
+
+	t0 := now()
+	applyCycle(st, mw, tw, t0, nil, []parse.UserRow{u("a", 100, 1), u("b", 200, 1)})
+	// One hour on: the window holds both cycles, so nothing has aged out and there
+	// is no earlier corpus to compare against.
+	applyCycle(st, mw, tw, t0.Add(time.Hour), nil, []parse.UserRow{u("a", 500, 1), u("b", 200, 1)})
+
+	tbl := Build(st, t0.Add(time.Hour), DefaultConfig)
+	tbl.BuildChange24h(st, mw, tw)
+
+	if got, ok := tbl.MemberChange24h(slotOf(t, st, "a", 1)); ok {
+		t.Errorf("rank change %+d reported after one hour; want none until 24h is observed", got)
+	}
+}
+
+func TestRankChange24hSurvivesScoreRegression(t *testing.T) {
+	// A feed glitch can make an entity's deltas exceed its current total, which would
+	// reconstruct a negative past score. The radix sort orders on inverted bits and
+	// only holds for non-negative values, so an unclamped negative would not merely
+	// misplace one entity — it would scramble the whole ranking.
+	st := model.NewState()
+	mw, tw := metrics.New(0), metrics.New(0)
+
+	t0 := now()
+	applyCycle(st, mw, tw, t0, nil, []parse.UserRow{u("a", 900, 1), u("b", 200, 1), u("c", 50, 1)})
+	t1 := t0.Add(25 * time.Hour)
+	applyCycle(st, mw, tw, t1, nil, []parse.UserRow{u("a", 10, 1), u("b", 200, 1), u("c", 50, 1)})
+
+	tbl := Build(st, t1, DefaultConfig)
+	tbl.BuildChange24h(st, mw, tw)
+
+	// b outscores c now and did a day ago, so whatever happened to a must not have
+	// disturbed their relative order.
+	bChange, okB := tbl.MemberChange24h(slotOf(t, st, "b", 1))
+	cChange, okC := tbl.MemberChange24h(slotOf(t, st, "c", 1))
+	if !okB || !okC {
+		t.Fatal("regression suppressed rank change for unaffected members")
+	}
+	if bChange != 1 || cChange != 1 {
+		t.Errorf("b %+d, c %+d; both should have gained one place as a fell", bChange, cChange)
 	}
 }
 

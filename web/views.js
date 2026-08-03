@@ -138,6 +138,20 @@ export async function postPage(view, { slug }) {
   }
 }
 
+/**
+ * The subtitle of a Rank tile: how far the entity moved over the last day.
+ *
+ * An absent rank_change_24h is not "no movement". It means there is no ranking a day
+ * back to compare against — either the entity is newer than that, or the service has
+ * not yet been watching for a full 24 hours. Those are different facts from a rank
+ * that held steady, and rendering both as "–" would claim a measurement never made,
+ * so the tile falls back to describing what the rank means instead.
+ */
+function rankMovement(change, fallback) {
+  if (change === undefined || change === null) return fallback;
+  return el('span.stat-move', delta(change), ' in 24h');
+}
+
 /** The production figures every entity shares, as a row of stat tiles. */
 function productionStats(d, extra = []) {
   return el(
@@ -391,7 +405,9 @@ export async function teamDetail(view, { id }, nav) {
     );
 
     view.append(el('section.section', productionStats(t, [
-      statTile('Rank', `#${n(t.rank)}`, 'by lifetime points'),
+      statTile('Rank', `#${n(t.rank)}`,
+        rankMovement(t.rank_change_24h, 'by lifetime points'),
+        'Rank by lifetime points, and places moved over the last 24 hours'),
     ])));
 
     const hist = historyCard('Production', (p) => api.teamHistory(t.team_id, p));
@@ -578,7 +594,9 @@ export async function donorDetail(view, { name }, nav) {
     }
 
     view.append(el('section.section', productionStats(d, [
-      statTile('Rank', `#${n(d.rank)}`, 'across all donors'),
+      statTile('Rank', `#${n(d.rank)}`,
+        rankMovement(d.rank_change_24h, 'across all donors'),
+        'Rank across all donors, and places moved over the last 24 hours'),
     ])));
 
     const teams = d.teams || [];

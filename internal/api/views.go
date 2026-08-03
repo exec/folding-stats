@@ -20,6 +20,15 @@ func roundDiv7(v int64) int64 {
 	return (v + 3) / 7
 }
 
+// change turns the table's (value, known) pair into a field that marshals to null-by-
+// omission when there is nothing to report.
+func change(v int32, ok bool) *int32 {
+	if !ok {
+		return nil
+	}
+	return &v
+}
+
 func (s *Snapshot) teamView(slot int32) Team {
 	t := s.State.Teams[slot]
 	total, active := s.TeamMemberCounts(t.ID)
@@ -27,6 +36,7 @@ func (s *Snapshot) teamView(slot int32) Team {
 		TeamID:        t.ID,
 		Name:          s.State.Names.Name(t.NameID),
 		Rank:          s.Ranks.TeamRank[slot],
+		RankChange24h: change(s.Ranks.TeamChange24h(slot)),
 		MembersTotal:  total,
 		MembersActive: active,
 		Production: Production{
@@ -45,10 +55,11 @@ func (s *Snapshot) teamView(slot int32) Team {
 func (s *Snapshot) memberView(slot int32, withTeamName bool) Member {
 	m := s.State.Members[slot]
 	out := Member{
-		Name:       s.State.Names.Name(m.NameID),
-		TeamID:     m.TeamID,
-		RankGlobal: s.Ranks.MemberRank[slot],
-		RankInTeam: s.Ranks.InTeamRank[slot],
+		Name:          s.State.Names.Name(m.NameID),
+		TeamID:        m.TeamID,
+		RankGlobal:    s.Ranks.MemberRank[slot],
+		RankInTeam:    s.Ranks.InTeamRank[slot],
+		RankChange24h: change(s.Ranks.MemberChange24h(slot)),
 		Production: Production{
 			PointsTotal:       m.Score,
 			WUsTotal:          m.WUs,
@@ -79,6 +90,7 @@ func (s *Snapshot) donorView(idx int32, withTeams bool) Donor {
 	out := Donor{
 		Name:             s.State.Names.Name(d.NameID),
 		Rank:             idx + 1,
+		RankChange24h:    change(s.Ranks.DonorChange24h(idx)),
 		TeamCount:        d.TeamCount,
 		LikelyNotAPerson: d.LikelyNotAPerson,
 		Production: Production{
