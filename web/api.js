@@ -77,9 +77,14 @@ async function request(path, { signal, cache } = {}) {
   return body;
 }
 
+// `params` is optional here, and has to be: several endpoints take nothing but a
+// path. Object.entries throws on undefined rather than returning nothing, so an
+// endpoint whose query string is entirely optional used to depend on every one of
+// its callers remembering to pass {} — and the first one that forgot took the whole
+// view down with "Object.entries requires that input parameter not be null".
 function qs(params) {
   const p = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
+  for (const [k, v] of Object.entries(params || {})) {
     if (v !== undefined && v !== null && v !== '') p.set(k, v);
   }
   const s = p.toString();

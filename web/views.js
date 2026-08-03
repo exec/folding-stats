@@ -176,6 +176,28 @@ function rivalsCard(data, kind, { href } = {}) {
     : card('Rivals', body);
 }
 
+/**
+ * The rivals card, or a note saying why it is not there.
+ *
+ * A rivals table is an extra and must never take down the figures the reader actually
+ * came for — but swallowing the failure outright turned out worse than the crash it
+ * was guarding against. A missing-parameters bug left the card silently absent from
+ * every detail page, with nothing on the page or in the console to say that anything
+ * was meant to be there; the standalone view, which had no such catch, was the only
+ * thing that ever reported it.
+ */
+async function rivalsSection(load, kind, href) {
+  try {
+    const res = await load();
+    return el('section.section', rivalsCard(res.data, kind, { href }));
+  } catch (err) {
+    console.warn('rivals: could not load', err);
+    return el('section.section', card('Rivals',
+      el('div.card-body',
+        el('div.muted', `Couldn\u2019t load rivals \u2014 ${err?.message || err}`))));
+  }
+}
+
 /** Empty chart state. Says what window was searched, so "nothing" is informative. */
 function emptyChart(granularity) {
   const window_ = {
@@ -561,14 +583,8 @@ export async function teamDetail(view, { id }, nav) {
         'Rank by lifetime points, and places moved over the last 24 hours'),
     ])));
 
-    try {
-      const rv = await api.teamRivals(t.team_id);
-      view.append(el('section.section', rivalsCard(rv.data, 'team',
-        { href: `/teams/${t.team_id}/rivals` })));
-    } catch {
-      // A rivals table is an extra, not the page. If it fails the team's own
-      // figures are still what the reader came for.
-    }
+    view.append(await rivalsSection(
+      () => api.teamRivals(t.team_id), 'team', `/teams/${t.team_id}/rivals`));
 
     const hist = historyCard('Production', (p) => api.teamHistory(t.team_id, p));
     cleanups.push(hist.destroy);
@@ -765,13 +781,8 @@ export async function donorDetail(view, { name }, nav) {
         'Rank across all donors, and places moved over the last 24 hours'),
     ])));
 
-    try {
-      const rv = await api.donorRivals(d.name);
-      view.append(el('section.section', rivalsCard(rv.data, 'donor',
-        { href: `/donors/${encodeURIComponent(d.name)}/rivals` })));
-    } catch {
-      // As on a team page: an extra, never the reason the page exists.
-    }
+    view.append(await rivalsSection(
+      () => api.donorRivals(d.name), 'donor', `/donors/${encodeURIComponent(d.name)}/rivals`));
 
     const teams = d.teams || [];
     if (teams.length > 1) {
