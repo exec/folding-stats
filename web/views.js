@@ -1239,7 +1239,7 @@ export async function apiDocs(view) {
           el('tr',
             el('td.left', el('code', k)),
             el('td.left', col),
-            el('td.left.muted', field))))))),
+            el('td.left.muted', field)))))),
     el('div.card-body', { style: 'border-top:1px solid var(--line)' },
       el('p', { style: 'margin:0' }, el('span.muted',
         'daily, weekly and monthly are still accepted as aliases for today, this_week ' +
