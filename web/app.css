@@ -415,13 +415,32 @@ main { max-width: var(--wide); margin: 0 auto; padding: var(--s6) var(--s5) var(
 .overtake .loss { color: var(--critical); }
 .overtake .muted { color: var(--ink-muted); }
 
-/* Leaderboard period tabs. They sit under the page subtitle and wrap on narrow
-   viewports rather than shrinking the hit target. */
-.board-tabs { margin-top: var(--s4); }
-.board-tabs .seg { flex-wrap: wrap; }
+/* Sortable column headings. These replaced a row of period tabs: once every numeric
+   column can be ordered by, a separate control for four of them is a second way to say
+   the same thing — and the one that silently omitted the column most people rank by.
 
-/* The column a period board is sorted by, emphasised so the ordering is legible as
-   an ordering rather than looking arbitrary next to the lifetime total. */
+   The whole heading is the target rather than a small glyph inside it, and the caret
+   marks the active column so the ordering is never inferred from the numbers alone. */
+.data th.sortable { padding: 0; }
+.data th.sortable button {
+  width: 100%;
+  padding: 10px var(--s3);
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  text-align: right;
+  cursor: pointer;
+  white-space: nowrap;
+  border-radius: var(--radius-sm);
+}
+.data th.sortable button:hover { background: var(--surface-hover); color: var(--ink); }
+.data th.sortable.active button { color: var(--ink); }
+.sort-caret { margin-left: 4px; font-size: 10px; vertical-align: 1px; }
+
+/* The column currently ordered by, emphasised so the ordering is legible as an
+   ordering rather than looking arbitrary next to the lifetime total. */
 .data td.metric { color: var(--ink); font-weight: 600; }
 
 /* --------------------------------------------------------------- tables --- */

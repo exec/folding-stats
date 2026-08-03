@@ -107,8 +107,8 @@ type Table struct {
 	// Only the ordering is kept, not a rank per entity: a leaderboard page is a slice
 	// of the order, and a position is its index. Storing a rank array per period as
 	// well would triple this for a number the page already knows.
-	teamPeriod  map[Period][]int32
-	donorPeriod map[Period][]int32
+	teamOrders  map[SortKey][]int32
+	donorOrders map[SortKey][]int32
 
 	// donorMonth is each donor's month-to-date total, summed from its members. Kept
 	// because it is the sort key the API also has to report — recomputing it per
@@ -118,76 +118,151 @@ type Table struct {
 	buf sortBuf
 }
 
-// Period selects which production window a leaderboard is ordered by.
-type Period string
+// SortKey names a leaderboard ordering. One per numeric column a reader can see, so
+// "sort by what that column shows" is always available and always means what the
+// column heading says.
+type SortKey string
 
 const (
-	// Lifetime is cumulative score, the default and the only ordering that is not a
-	// rate.
-	Lifetime Period = "lifetime"
-	// Daily, Weekly and Monthly are calendar buckets in UTC, not rolling windows —
-	// the same buckets points_today_utc, points_this_week_utc and
-	// points_this_month_utc report. So Daily resets at 00:00 UTC and reads low just
-	// after midnight, which is correct: it answers "produced today", not "produced
-	// in the last 24 hours". Last24h remains the rolling figure.
-	Daily   Period = "daily"
-	Weekly  Period = "weekly"
-	Monthly Period = "monthly"
+	// Lifetime is cumulative score, the default and the only ordering here that is
+	// not a rate.
+	Lifetime SortKey = "lifetime"
+
+	// PerDay is points_per_day_7d_avg — the seven-day moving average. It is the
+	// column most people actually rank by, and it is deliberately not called "daily":
+	// Today is a calendar bucket and this is an average over a window, and conflating
+	// the two is the mistake the field naming exists to prevent.
+	PerDay SortKey = "per_day"
+
+	// Today, ThisWeek and ThisMonth are calendar buckets in UTC, not rolling windows —
+	// the same buckets points_today_utc, points_this_week_utc and points_this_month_utc
+	// report. Today therefore reads low just after 00:00 UTC, which is correct: it
+	// answers "produced today", not "produced in the last 24 hours".
+	Today     SortKey = "today"
+	ThisWeek  SortKey = "this_week"
+	ThisMonth SortKey = "this_month"
+
+	// Last24h is the rolling twenty-four hours, the counterpart to Today.
+	Last24h SortKey = "last_24h"
+
+	// WUs is work units rather than points — a different measure of the same effort,
+	// and the one people compare when point values across projects are in dispute.
+	WUs SortKey = "wus"
+
+	// Roster size. Members applies to teams and Teams to donors; each is ignored on
+	// the other, where it falls back to lifetime rather than erroring, because a
+	// column that does not exist there was never orderable in the first place.
+	Members SortKey = "members"
+	Teams   SortKey = "teams"
 )
 
-// ValidPeriod reports whether p names a leaderboard ordering.
-func ValidPeriod(p Period) bool {
-	switch p {
-	case Lifetime, Daily, Weekly, Monthly:
-		return true
-	}
-	return false
+// sortAliases keeps the first published names working. daily/weekly/monthly shipped
+// before per_day existed, at which point "daily" became ambiguous with it.
+var sortAliases = map[SortKey]SortKey{
+	"daily":   Today,
+	"weekly":  ThisWeek,
+	"monthly": ThisMonth,
 }
 
-// BuildPeriods computes the leaderboard orderings for the non-lifetime tabs.
+// NormalizeSort resolves an alias and reports whether the result is a known ordering.
+func NormalizeSort(k SortKey) (SortKey, bool) {
+	if alias, ok := sortAliases[k]; ok {
+		k = alias
+	}
+	switch k {
+	case Lifetime, PerDay, Today, ThisWeek, ThisMonth, Last24h, WUs, Members, Teams:
+		return k, true
+	}
+	return "", false
+}
+
+// BuildOrders computes every leaderboard ordering.
 //
-// teamMonth and memberMonth are month-to-date totals indexed by team slot and member
-// slot; the daily and weekly figures come from the rolling windows, which already
-// maintain calendar buckets. A nil or short month slice yields an empty Monthly
-// ordering rather than a wrong one.
-func (t *Table) BuildPeriods(st *model.State, members, teams *metrics.Window,
+// One radix sort per key per entity kind, once a cycle, against many thousands of
+// reads — the same trade the rest of this package makes. Sorting on demand is not an
+// option at 2.1M donors, and a lazily filled cache would put a full sort on whichever
+// unlucky request arrived first after a publish.
+//
+// teamMonth and memberMonth are month-to-date totals indexed by slot; everything else
+// comes from the rolling windows, which already maintain calendar buckets. A nil or
+// short month slice yields a zeroed ordering rather than a wrong one.
+func (t *Table) BuildOrders(st *model.State, members, teams *metrics.Window,
 	teamMonth, memberMonth []int64) {
 
-	t.teamPeriod = map[Period][]int32{}
-	t.donorPeriod = map[Period][]int32{}
+	t.teamOrders = map[SortKey][]int32{}
+	t.donorOrders = map[SortKey][]int32{}
 
-	teamScore := func(get func(int32) int64) []int64 {
-		out := make([]int64, len(st.Teams))
-		for i := range st.Teams {
+	tMonth := indexed(teamMonth, len(st.Teams))
+	fill := func(n int, get func(int32) int64) []int64 {
+		out := make([]int64, n)
+		for i := range out {
 			out[i] = get(int32(i))
 		}
 		return out
 	}
-	t.teamPeriod[Daily] = t.orderBy(teamScore(teams.Today))
-	t.teamPeriod[Weekly] = t.orderBy(teamScore(teams.ThisWeek))
-	t.teamPeriod[Monthly] = t.orderBy(indexed(teamMonth, len(st.Teams)))
+
+	for _, o := range []struct {
+		key SortKey
+		val func(int32) int64
+	}{
+		{PerDay, teams.PointsPerDay},
+		{Today, teams.Today},
+		{ThisWeek, teams.ThisWeek},
+		{ThisMonth, func(i int32) int64 { return tMonth[i] }},
+		{Last24h, teams.Last24h},
+		{WUs, func(i int32) int64 { return st.Teams[i].WUs }},
+		{Members, func(i int32) int64 { return int64(len(t.TeamMembers(st.Teams[i].ID))) }},
+	} {
+		t.teamOrders[o.key] = t.orderBy(fill(len(st.Teams), o.val))
+	}
+	t.teamOrders[Lifetime] = t.TeamOrder
 
 	// Donor figures aggregate across the donor's members, the same read-time view
-	// buildDonors takes for lifetime totals.
-	donorDay := make([]int64, len(t.Donors))
-	donorWeek := make([]int64, len(t.Donors))
-	donorMonth := make([]int64, len(t.Donors))
-	month := indexed(memberMonth, len(st.Members))
+	// buildDonors takes for lifetime totals. One pass over every member fills them
+	// all, because the pass itself — 2.7M random reads into the member array — costs
+	// far more than the arithmetic inside it.
+	n := len(t.Donors)
+	day := make([]int64, n)
+	week := make([]int64, n)
+	month := make([]int64, n)
+	last24 := make([]int64, n)
+	last7d := make([]int64, n)
+	observed := make([]time.Duration, n)
+	mMonth := indexed(memberMonth, len(st.Members))
 	for slot := range st.Members {
 		d := t.DonorIndex[st.Members[slot].NameID]
 		if d < 0 {
 			continue
 		}
-		donorDay[d] += members.Today(int32(slot))
-		donorWeek[d] += members.ThisWeek(int32(slot))
-		donorMonth[d] += month[slot]
+		id := int32(slot)
+		day[d] += members.Today(id)
+		week[d] += members.ThisWeek(id)
+		month[d] += mMonth[slot]
+		last24[d] += members.Last24h(id)
+		last7d[d] += members.Last7d(id)
+		// A donor has been observed since the first of its members was; see donorView.
+		if span := members.ObservedSpan(id); span > observed[d] {
+			observed[d] = span
+		}
 	}
-	t.teamPeriod[Lifetime] = t.TeamOrder
-	t.donorPeriod[Lifetime] = identity(len(t.Donors)) // Donors is already rank-ordered
-	t.donorPeriod[Daily] = t.orderBy(donorDay)
-	t.donorPeriod[Weekly] = t.orderBy(donorWeek)
-	t.donorPeriod[Monthly] = t.orderBy(donorMonth)
-	t.donorMonth = donorMonth
+	perDay := make([]int64, n)
+	wus := make([]int64, n)
+	teamCount := make([]int64, n)
+	for d := range t.Donors {
+		perDay[d] = metrics.PerDay(last7d[d], observed[d])
+		wus[d] = t.Donors[d].WUs
+		teamCount[d] = int64(t.Donors[d].TeamCount)
+	}
+
+	t.donorOrders[Lifetime] = identity(n) // Donors is already in lifetime order
+	t.donorOrders[PerDay] = t.orderBy(perDay)
+	t.donorOrders[Today] = t.orderBy(day)
+	t.donorOrders[ThisWeek] = t.orderBy(week)
+	t.donorOrders[ThisMonth] = t.orderBy(month)
+	t.donorOrders[Last24h] = t.orderBy(last24)
+	t.donorOrders[WUs] = t.orderBy(wus)
+	t.donorOrders[Teams] = t.orderBy(teamCount)
+	t.donorMonth = month
 
 	t.buf = sortBuf{}
 }
@@ -220,24 +295,20 @@ func identity(n int) []int32 {
 	return out
 }
 
-// TeamOrderFor returns team slots ordered best-first for the period.
-func (t *Table) TeamOrderFor(p Period) []int32 {
-	if p == Lifetime || t.teamPeriod == nil {
-		return t.TeamOrder
-	}
-	if o, ok := t.teamPeriod[p]; ok {
+// TeamOrderFor returns team slots ordered best-first for the key. Keys that name a
+// column teams do not have fall back to lifetime rather than erroring.
+func (t *Table) TeamOrderFor(k SortKey) []int32 {
+	if o, ok := t.teamOrders[k]; ok && o != nil {
 		return o
 	}
 	return t.TeamOrder
 }
 
-// DonorOrderFor returns donor indices ordered best-first for the period. For Lifetime
-// this is the identity, because Donors is stored in lifetime order.
-func (t *Table) DonorOrderFor(p Period) []int32 {
-	if p != Lifetime && t.donorPeriod != nil {
-		if o, ok := t.donorPeriod[p]; ok {
-			return o
-		}
+// DonorOrderFor is TeamOrderFor for donors. For Lifetime this is the identity, because
+// Donors is stored in lifetime order.
+func (t *Table) DonorOrderFor(k SortKey) []int32 {
+	if o, ok := t.donorOrders[k]; ok && o != nil {
+		return o
 	}
 	return identity(len(t.Donors))
 }

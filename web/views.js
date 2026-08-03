@@ -38,29 +38,42 @@ const GRANULARITIES = [
 ];
 
 /**
- * Leaderboard orderings. These are calendar buckets in UTC, not rolling windows, so
- * Daily reads low just after 00:00 UTC — it answers "produced today", which is what a
- * daily board means, rather than "produced in the last 24 hours".
+ * The columns a leaderboard can be ordered by, in table order.
+ *
+ * Each one is a heading the reader can click, and the key is the same string the API
+ * takes — so what the column says, what the URL says and what the server sorts by are
+ * one value rather than three that have to be kept in step.
+ *
+ * `today`, `this_week` and `this_month` are calendar buckets in UTC, not rolling
+ * windows: `today` reads low just after 00:00 UTC because it answers "produced
+ * today". `per_day` is the seven-day average, and `last_24h` the rolling day — three
+ * different questions that are easy to mistake for one.
  */
-const SORTS = [
-  { value: 'lifetime', label: 'Lifetime', title: 'Cumulative points, all time' },
-  { value: 'daily', label: 'Daily', title: 'Points since 00:00 UTC today' },
-  { value: 'weekly', label: 'Weekly', title: 'Points since Sunday 00:00 UTC' },
-  { value: 'monthly', label: 'Monthly', title: 'Points since the 1st, 00:00 UTC' },
+const COLUMNS = [
+  { key: 'members', label: 'Members', kind: 'team', title: 'Active of total members' },
+  { key: 'teams', label: 'Teams', kind: 'donor', title: 'Teams this donor folds for' },
+  { key: 'per_day', label: 'Per day', field: 'points_per_day_7d_avg',
+    title: 'Points over the last 7 days divided by 7' },
+  { key: 'today', label: 'Today', field: 'points_today_utc', title: 'Points since 00:00 UTC' },
+  { key: 'this_week', label: 'This week', field: 'points_this_week_utc',
+    title: 'Points since Sunday 00:00 UTC' },
+  { key: 'this_month', label: 'This month', field: 'points_this_month_utc',
+    title: 'Points since the 1st, 00:00 UTC' },
+  { key: 'last_24h', label: 'Last 24h', field: 'points_last_24h', title: 'Rolling 24 hours' },
+  { key: 'wus', label: 'WUs', field: 'wus_total', title: 'Work units completed' },
+  { key: 'lifetime', label: 'Points', field: 'points_total', title: 'Cumulative points, all time' },
 ];
-
-/** The column a period-sorted board is actually ordered by, so the sort is visible. */
-const SORT_FIELD = {
-  daily: { key: 'points_today_utc', label: 'Today' },
-  weekly: { key: 'points_this_week_utc', label: 'This week' },
-  monthly: { key: 'points_this_month_utc', label: 'This month' },
-};
 
 const SORT_BLURB = {
   lifetime: 'lifetime points',
-  daily: 'points since 00:00 UTC today',
-  weekly: 'points since Sunday 00:00 UTC',
-  monthly: 'points since the 1st of the month, UTC',
+  per_day: 'the 7-day average',
+  today: 'points since 00:00 UTC today',
+  this_week: 'points since Sunday 00:00 UTC',
+  this_month: 'points since the 1st of the month, UTC',
+  last_24h: 'points in the rolling last 24 hours',
+  wus: 'work units',
+  members: 'member count',
+  teams: 'team count',
 };
 
 /** A list URL that carries only the parameters that differ from the defaults. */
@@ -73,20 +86,19 @@ function listHref(base, { page = 1, sort = 'lifetime' } = {}) {
 }
 
 /**
- * Tabs for a leaderboard. Switching ordering returns to page 1: holding position
- * would land the reader on page 40 of a board they have not seen the top of.
+ * A sortable column heading.
  *
- * The pressed tab moves on click rather than when the response lands. The rows stay
- * on screen through the swap, so without this the only thing that changes on click is
- * nothing at all, and the tab reads as not having taken.
+ * Sorting is descending only. Every column here is "how much", and nobody opens a
+ * leaderboard to find who is doing the least — an ascending pass would mostly return
+ * the millions of donors tied on zero.
  */
-function sortTabs(base, sort, nav) {
-  const tabs = segmented(SORTS, sort, (v) => {
-    const buttons = tabs.querySelectorAll('button');
-    SORTS.forEach((o, i) => buttons[i]?.setAttribute('aria-pressed', String(o.value === v)));
-    nav(listHref(base, { sort: v }), { keepContent: true });
-  });
-  return el('div.board-tabs', tabs);
+function sortHeader(col, sort, onPick) {
+  const active = col.key === sort;
+  return el('th', { class: active ? 'sortable active' : 'sortable', 'aria-sort': active ? 'descending' : 'none' },
+    el('button', {
+      title: col.title,
+      onclick: () => onPick(col.key),
+    }, col.label, active ? el('span.sort-caret', '▾') : null));
 }
 
 /**
@@ -525,42 +537,40 @@ export async function overview(view) {
 
 /* ---------------------------------------------------------------- teams --- */
 
-function teamTable(teams, { compact = false, sort = 'lifetime', offset = 0 } = {}) {
-  const metric = SORT_FIELD[sort];
-  const head = el(
-    'tr',
+function teamTable(teams, { compact = false, sort = 'lifetime', offset = 0, onSort } = {}) {
+  // The compact table on the overview has no room for nine columns and nothing to
+  // sort — it is a preview of a board that lives elsewhere.
+  const cols = compact
+    ? COLUMNS.filter((c) => ['per_day', 'lifetime'].includes(c.key))
+    : COLUMNS.filter((c) => c.kind !== 'donor');
+  const ranked = sort !== 'lifetime';
+
+  const head = el('tr',
     el('th.left', 'Rank'),
     el('th.left', 'Team'),
-    compact ? null : el('th', 'Members'),
-    metric ? el('th', metric.label) : null,
-    el('th', 'Per day'),
-    compact ? null : el('th', 'Last 24h'),
-    el('th', 'Points')
-  );
+    ...cols.map((c) => (onSort ? sortHeader(c, sort, onSort) : el('th', { title: c.title }, c.label))));
+
   const body = el('tbody');
   teams.forEach((t, i) => {
     const idle = (t.points_per_day_7d_avg ?? 0) === 0;
     const nameLink = el('a', { href: `/teams/${t.team_id}` });
     tierName(nameLink, t.name, t.points_per_day_7d_avg);
-    body.append(
-      el(
-        'tr',
-        { class: idle ? 'dim' : null },
-        // On a period board the position is the position in that board. The
-        // lifetime rank is a different number and showing it here would look like
-        // the ordering was simply broken.
-        metric
-          ? el('td.rank', { title: `Lifetime rank #${n(t.rank)}` }, n(offset + i + 1))
-          : el('td.rank', n(t.rank)),
-        el('td.left.name-cell', nameLink),
-        compact ? null : el('td.num', { title: `${n(t.members_active)} active of ${n(t.members_total)}` },
-          `${short(t.members_active)} / ${short(t.members_total)}`),
-        metric ? el('td.num.metric', { title: n(t[metric.key]) }, short(t[metric.key])) : null,
-        el('td.num', { title: n(t.points_per_day_7d_avg) }, short(t.points_per_day_7d_avg)),
-        compact ? null : el('td.num', { title: n(t.points_last_24h) }, short(t.points_last_24h)),
-        el('td.num', { title: n(t.points_total) }, short(t.points_total))
-      )
-    );
+    body.append(el('tr', { class: idle ? 'dim' : null },
+      // Under a non-default ordering the position is the position in *that* board.
+      // The lifetime rank is a different number, and showing it here would look like
+      // the sort had simply not worked.
+      ranked
+        ? el('td.rank', { title: `Lifetime rank #${n(t.rank)}` }, n(offset + i + 1))
+        : el('td.rank', n(t.rank)),
+      el('td.left.name-cell', nameLink),
+      ...cols.map((c) => {
+        const active = c.key === sort ? '.metric' : '';
+        if (c.key === 'members') {
+          return el(`td.num${active}`, { title: `${n(t.members_active)} active of ${n(t.members_total)}` },
+            `${short(t.members_active)} / ${short(t.members_total)}`);
+        }
+        return el(`td.num${active}`, { title: n(t[c.field]) }, short(t[c.field]));
+      })));
   });
   return el('div.table-wrap', el('table.data', el('thead', head), body));
 }
@@ -573,12 +583,17 @@ export async function teamsList(view, { page = 1, sort = 'lifetime' }, nav) {
     view.append(
       el('div.page-head',
         el('h1.page-title', 'Teams'),
-        el('p.page-sub', `${n(res.page.total_items)} teams, ranked by ${SORT_BLURB[sort]}.`),
-        sortTabs('/teams', sort, nav))
+        el('p.page-sub', `${n(res.page.total_items)} teams, ranked by ${SORT_BLURB[sort]}.`))
     );
     view.append(
       card(null,
-        teamTable(res.data, { sort, offset: (res.page.page - 1) * res.page.per_page }),
+        teamTable(res.data, {
+          sort,
+          offset: (res.page.page - 1) * res.page.per_page,
+          // A new ordering starts at page 1: holding position would land the reader
+          // on page 40 of a board they have not seen the top of.
+          onSort: (key) => nav(listHref('/teams', { sort: key }), { keepContent: true }),
+        }),
         pager(res.page.page, res.page.total_pages, res.page.total_items,
           (p) => nav(listHref('/teams', { page: p, sort }), { keepContent: true })))
     );
@@ -709,8 +724,12 @@ function memberTable(members) {
 
 /* --------------------------------------------------------------- donors --- */
 
-function donorTable(donors, { compact = false, sort = 'lifetime', offset = 0 } = {}) {
-  const metric = SORT_FIELD[sort];
+function donorTable(donors, { compact = false, sort = 'lifetime', offset = 0, onSort } = {}) {
+  const cols = compact
+    ? COLUMNS.filter((c) => ['per_day', 'lifetime'].includes(c.key))
+    : COLUMNS.filter((c) => c.kind !== 'team');
+  const ranked = sort !== 'lifetime';
+
   const body = el('tbody');
   donors.forEach((d, i) => {
     const idle = (d.points_per_day_7d_avg ?? 0) === 0;
@@ -723,36 +742,23 @@ function donorTable(donors, { compact = false, sort = 'lifetime', offset = 0 } =
     if (d.likely_not_a_person) {
       cell.title = `Appears on ${n(d.team_count)} teams — almost certainly a shared default name.`;
     }
-    body.append(
-      el(
-        'tr',
-        { class: idle ? 'dim' : null },
-        metric
-          ? el('td.rank', { title: `Lifetime rank #${n(d.rank)}` }, n(offset + i + 1))
-          : el('td.rank', n(d.rank)),
-        cell,
-        compact ? null : el('td.num', n(d.team_count)),
-        metric ? el('td.num.metric', { title: n(d[metric.key]) }, short(d[metric.key])) : null,
-        el('td.num', { title: n(d.points_per_day_7d_avg) }, short(d.points_per_day_7d_avg)),
-        compact ? null : el('td.num', { title: n(d.points_last_24h) }, short(d.points_last_24h)),
-        el('td.num', { title: n(d.points_total) }, short(d.points_total))
-      )
-    );
+    body.append(el('tr', { class: idle ? 'dim' : null },
+      ranked
+        ? el('td.rank', { title: `Lifetime rank #${n(d.rank)}` }, n(offset + i + 1))
+        : el('td.rank', n(d.rank)),
+      cell,
+      ...cols.map((c) => {
+        const active = c.key === sort ? '.metric' : '';
+        if (c.key === 'teams') return el(`td.num${active}`, n(d.team_count));
+        return el(`td.num${active}`, { title: n(d[c.field]) }, short(d[c.field]));
+      })));
   });
-  return el(
-    'div.table-wrap',
-    el(
-      'table.data',
-      el('thead', el('tr',
-        el('th.left', 'Rank'), el('th.left', 'Donor'),
-        compact ? null : el('th', 'Teams'),
-        metric ? el('th', metric.label) : null,
-        el('th', 'Per day'),
-        compact ? null : el('th', 'Last 24h'),
-        el('th', 'Points'))),
-      body
-    )
-  );
+
+  return el('div.table-wrap', el('table.data',
+    el('thead', el('tr',
+      el('th.left', 'Rank'), el('th.left', 'Donor'),
+      ...cols.map((c) => (onSort ? sortHeader(c, sort, onSort) : el('th', { title: c.title }, c.label))))),
+    body));
 }
 
 export async function donorsList(view, { page = 1, sort = 'lifetime' }, nav) {
@@ -763,13 +769,17 @@ export async function donorsList(view, { page = 1, sort = 'lifetime' }, nav) {
     view.append(
       el('div.page-head',
         el('h1.page-title', 'Donors'),
-        el('p.page-sub',
-          `${n(res.page.total_items)} donors, ranked by ${SORT_BLURB[sort]} across every team they fold for.`),
-        sortTabs('/donors', sort, nav))
+        el('p.page-sub', `${n(res.page.total_items)} donors, ranked by ${SORT_BLURB[sort]} across every team they fold for.`))
     );
     view.append(
       card(null,
-        donorTable(res.data, { sort, offset: (res.page.page - 1) * res.page.per_page }),
+        donorTable(res.data, {
+          sort,
+          offset: (res.page.page - 1) * res.page.per_page,
+          // A new ordering starts at page 1: holding position would land the reader
+          // on page 40 of a board they have not seen the top of.
+          onSort: (key) => nav(listHref('/donors', { sort: key }), { keepContent: true }),
+        }),
         pager(res.page.page, res.page.total_pages, res.page.total_items,
           (p) => nav(listHref('/donors', { page: p, sort }), { keepContent: true })))
     );
@@ -1190,18 +1200,51 @@ export async function apiDocs(view) {
         endpoint('GET', '/v1/summary', 'Project-wide totals'),
         endpoint('GET', '/v1/status', 'Snapshot and corpus size'),
         endpoint('GET', '/v1/summary/history', 'Project-wide production over time'),
-        endpoint('GET', '/v1/teams', 'Team leaderboard, paginated. ?sort=lifetime|daily|weekly|monthly'),
+        endpoint('GET', '/v1/teams', 'Team leaderboard, paginated. ?sort= any numeric column'),
         endpoint('GET', '/v1/teams/{id}', 'One team'),
         endpoint('GET', '/v1/teams/{id}/members', 'Team roster, ?active_only=true'),
         endpoint('GET', '/v1/teams/{id}/history', '?granularity=hourly|daily|weekly|monthly'),
         endpoint('GET', '/v1/teams/{id}/rivals', 'Ranking around this team with projected overtakes; opens on its own page'),
-        endpoint('GET', '/v1/donors', 'Donor leaderboard, paginated. ?sort=lifetime|daily|weekly|monthly'),
+        endpoint('GET', '/v1/donors', 'Donor leaderboard, paginated. ?sort= any numeric column'),
         endpoint('GET', '/v1/donors/{name}', 'Per-team breakdown, ?sort=production'),
         endpoint('GET', '/v1/donors/{name}/teams', 'Full team list, paginated'),
         endpoint('GET', '/v1/donors/{name}/history', '?team_id= to scope to one team, same granularities'),
         endpoint('GET', '/v1/donors/{name}/rivals', 'Ranking around this donor with projected overtakes; opens on its own page'),
         endpoint('GET', '/v1/search', '?q= name prefix, exact name, or team ID')
       ))))));
+
+  view.append(el('section.section', card('Sorting leaderboards',
+    el('div.card-body', { style: 'padding-bottom:0' },
+      el('p', { style: 'margin-top:0' },
+        el('code', '?sort='), ' on ', el('code', '/v1/teams'), ' and ', el('code', '/v1/donors'),
+        ' orders by any numeric column, descending, defaulting to ', el('code', 'lifetime'),
+        '. Every key names the field it sorts by, so the column you see and the key you ' +
+        'send are the same thing. Under a non-default ordering ', el('code', 'rank'),
+        ' stays the lifetime rank — a row\u2019s position for that ordering is its index ' +
+        'in the page.')),
+    el('div.table-wrap', el('table.data',
+      el('thead', el('tr', el('th.left', 'sort'), el('th.left', 'Column'), el('th.left', 'Field'))),
+      el('tbody',
+        ...[
+          ['lifetime', 'Points', 'points_total — the default'],
+          ['per_day', 'Per day', 'points_per_day_7d_avg — the 7-day average'],
+          ['today', 'Today', 'points_today_utc — calendar day, resets 00:00 UTC'],
+          ['this_week', 'This week', 'points_this_week_utc — resets Sunday 00:00 UTC'],
+          ['this_month', 'This month', 'points_this_month_utc — resets on the 1st, UTC'],
+          ['last_24h', 'Last 24h', 'points_last_24h — rolling, not a calendar bucket'],
+          ['wus', 'WUs', 'wus_total'],
+          ['members', 'Members', 'members_total — teams only'],
+          ['teams', 'Teams', 'team_count — donors only'],
+        ].map(([k, col, field]) =>
+          el('tr',
+            el('td.left', el('code', k)),
+            el('td.left', col),
+            el('td.left.muted', field))))))),
+    el('div.card-body', { style: 'border-top:1px solid var(--line)' },
+      el('p', { style: 'margin:0' }, el('span.muted',
+        'daily, weekly and monthly are still accepted as aliases for today, this_week ' +
+        'and this_month. They were the first published names, from before per_day ' +
+        'existed \u2014 at which point “daily” became ambiguous with it.'))))));
 
   view.append(el('section.section', card('Notes',
     el('div.card-body',

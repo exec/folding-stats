@@ -99,9 +99,17 @@ trackHeaderHeight();
 // Leaderboard orderings, validated here rather than passed through: a hand-typed
 // ?sort= would otherwise reach the API, come back 400, and render as an error page
 // where the honest answer is the default board.
-const SORT_VALUES = ['lifetime', 'daily', 'weekly', 'monthly'];
+//
+// The aliases are the first published names. Mapping rather than merely accepting
+// them means an old bookmark lands on the column it used to mean, with that column's
+// heading marked, instead of silently on lifetime.
+const SORT_VALUES = [
+  'lifetime', 'per_day', 'today', 'this_week', 'this_month',
+  'last_24h', 'wus', 'members', 'teams',
+];
+const SORT_ALIAS = { daily: 'today', weekly: 'this_week', monthly: 'this_month' };
 const sortParam = (q) => {
-  const v = q.get('sort');
+  const v = SORT_ALIAS[q.get('sort')] || q.get('sort');
   return SORT_VALUES.includes(v) ? v : 'lifetime';
 };
 

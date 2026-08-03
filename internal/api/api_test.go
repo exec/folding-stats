@@ -76,7 +76,7 @@ func fixture(t *testing.T) *Server {
 	tbl := rank.Build(state, at(2), rank.DefaultConfig)
 	// Mirror the service: it builds the period orderings on every publish, so a
 	// fixture without them would let a sort bug pass unnoticed here.
-	tbl.BuildPeriods(state, memberWin, teamWin, nil, nil)
+	tbl.BuildOrders(state, memberWin, teamWin, nil, nil)
 	snap := Build(state, memberWin, teamWin, tbl, st, at(2), at(3), "test-etag")
 
 	srv := NewServer()
@@ -1212,7 +1212,7 @@ func periodFixture(t *testing.T) *Server {
 	}
 
 	tbl := rank.Build(state, at(2), rank.DefaultConfig)
-	tbl.BuildPeriods(state, memberWin, teamWin, teamMonth, memberMonth)
+	tbl.BuildOrders(state, memberWin, teamWin, teamMonth, memberMonth)
 	snap := Build(state, memberWin, teamWin, tbl, st, at(2), at(3), "period-etag")
 	snap.TeamMonth, snap.MemberMonth = teamMonth, memberMonth
 
@@ -1474,5 +1474,74 @@ func TestRivalsOpenOnTheSubjectsOwnPage(t *testing.T) {
 		if rec, _ := get(t, srv, "/v1/teams/1/rivals?"+bad); rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: status %d, want 400", bad, rec.Code)
 		}
+	}
+}
+
+func TestEveryNumericColumnIsSortable(t *testing.T) {
+	// Every numeric column a reader can see has to be orderable by it, or the table
+	// has headings that look clickable and are not. per_day is the one that matters
+	// most and the one that was missing: it is the column people actually rank by.
+	srv := periodFixture(t)
+
+	names := func(path string) []string {
+		t.Helper()
+		rec, env := get(t, srv, path)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d", path, rec.Code)
+		}
+		var out []string
+		for _, row := range env.Data.([]any) {
+			out = append(out, row.(map[string]any)["name"].(string))
+		}
+		return out
+	}
+
+	for _, ep := range []string{"/v1/teams", "/v1/donors"} {
+		base := names(ep)
+		for _, key := range []string{
+			"lifetime", "per_day", "today", "this_week", "this_month",
+			"last_24h", "wus", "members", "teams",
+		} {
+			got := names(ep + "?sort=" + key)
+			if len(got) != len(base) {
+				t.Errorf("%s sort=%s: %d rows, want %d — an ordering must not drop anyone",
+					ep, key, len(got), len(base))
+			}
+		}
+	}
+
+	// per_day orders by the seven-day average, which is a different question from
+	// lifetime: surging out-produces steady while trailing it on cumulative points.
+	if got := names("/v1/donors?sort=per_day"); got[0] != "surging" {
+		t.Errorf("sort=per_day leader = %s, want surging", got[0])
+	}
+	if got := names("/v1/teams?sort=per_day"); got[0] != "surging" {
+		t.Errorf("teams sort=per_day leader = %s, want surging", got[0])
+	}
+	// ...and is not merely lifetime under another name.
+	if names("/v1/donors?sort=per_day")[0] == names("/v1/donors?sort=lifetime")[0] {
+		t.Error("sort=per_day returned the lifetime order; the key is not wired to the average")
+	}
+
+	// The first published names still mean what they meant. They shipped before
+	// per_day existed, at which point "daily" became ambiguous with it.
+	for alias, canonical := range map[string]string{
+		"daily": "today", "weekly": "this_week", "monthly": "this_month",
+	} {
+		a, c := names("/v1/donors?sort="+alias), names("/v1/donors?sort="+canonical)
+		if len(a) != len(c) || (len(a) > 0 && a[0] != c[0]) {
+			t.Errorf("alias %s no longer matches %s", alias, canonical)
+		}
+	}
+
+	if rec, _ := get(t, srv, "/v1/teams?sort=nonsense"); rec.Code != http.StatusBadRequest {
+		t.Errorf("unknown sort: status %d, want 400", rec.Code)
+	}
+	// The error has to name the alternatives; a bare "invalid" makes the caller guess.
+	_, _ = get(t, srv, "/v1/teams?sort=nonsense")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/teams?sort=nonsense", nil))
+	if !strings.Contains(rec.Body.String(), "per_day") {
+		t.Errorf("400 body does not list the valid keys: %s", rec.Body.String())
 	}
 }

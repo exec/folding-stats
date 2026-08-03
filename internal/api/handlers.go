@@ -86,25 +86,36 @@ func (s *Server) projectHistory(snap *Snapshot, r *http.Request) (any, *PageInfo
 	return historyView(q, pts), nil, nil
 }
 
-// parsePeriod resolves the ?sort= leaderboard ordering, defaulting to lifetime.
-func parsePeriod(r *http.Request) (rank.Period, error) {
+// sortKeys is the accepted ?sort= set, in the order the docs list them. Kept here so
+// the error message and the documentation cannot drift from what is actually served.
+var sortKeys = []rank.SortKey{
+	rank.Lifetime, rank.PerDay, rank.Today, rank.ThisWeek, rank.ThisMonth,
+	rank.Last24h, rank.WUs, rank.Members, rank.Teams,
+}
+
+// parseSort resolves the ?sort= leaderboard ordering, defaulting to lifetime.
+func parseSort(r *http.Request) (rank.SortKey, error) {
 	v := r.URL.Query().Get("sort")
 	if v == "" {
 		return rank.Lifetime, nil
 	}
-	p := rank.Period(v)
-	if !rank.ValidPeriod(p) {
-		return "", badRequest("sort must be lifetime, daily, weekly or monthly")
+	k, ok := rank.NormalizeSort(rank.SortKey(v))
+	if !ok {
+		names := make([]string, len(sortKeys))
+		for i, k := range sortKeys {
+			names[i] = string(k)
+		}
+		return "", badRequest("sort must be one of: %s", strings.Join(names, ", "))
 	}
-	return p, nil
+	return k, nil
 }
 
 func (s *Server) teams(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
-	period, err := parsePeriod(r)
+	sortKey, err := parseSort(r)
 	if err != nil {
 		return nil, nil, err
 	}
-	order := snap.Ranks.TeamOrderFor(period)
+	order := snap.Ranks.TeamOrderFor(sortKey)
 	lo, hi, page, err := paginate(r, len(order))
 	if err != nil {
 		return nil, nil, err
@@ -169,11 +180,11 @@ func (s *Server) teamMembers(snap *Snapshot, r *http.Request) (any, *PageInfo, e
 }
 
 func (s *Server) donors(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
-	period, err := parsePeriod(r)
+	sortKey, err := parseSort(r)
 	if err != nil {
 		return nil, nil, err
 	}
-	order := snap.Ranks.DonorOrderFor(period)
+	order := snap.Ranks.DonorOrderFor(sortKey)
 	lo, hi, page, err := paginate(r, len(order))
 	if err != nil {
 		return nil, nil, err

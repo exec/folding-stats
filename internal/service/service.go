@@ -322,7 +322,7 @@ func (s *Service) publish() {
 	if s.tbl == nil || !s.tblAt.Equal(s.state.At) {
 		tbl := rank.Build(s.state, s.state.At, rank.DefaultConfig)
 		tbl.BuildChange24h(s.state, s.memberWin, s.teamWin)
-		tbl.BuildPeriods(s.state, s.memberWin, s.teamWin, s.teamMonth, s.memberMonth)
+		tbl.BuildOrders(s.state, s.memberWin, s.teamWin, s.teamMonth, s.memberMonth)
 		s.tbl, s.tblAt = tbl, s.state.At
 	}
 	tbl := s.tbl

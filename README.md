@@ -107,12 +107,12 @@ Every response carries a `snapshot` block describing freshness, then the data.
 | `GET` | `/v1/status` | snapshot and corpus size. `no-store` — never cached |
 | `GET` | `/v1/summary` | project-wide totals |
 | `GET` | `/v1/summary/history` | project production over time |
-| `GET` | `/v1/teams` | team leaderboard, paginated. `?sort=lifetime\|daily\|weekly\|monthly` |
+| `GET` | `/v1/teams` | team leaderboard, paginated. `?sort=` any numeric column |
 | `GET` | `/v1/teams/{id}` | one team |
 | `GET` | `/v1/teams/{id}/members` | roster, `?active_only=true` |
 | `GET` | `/v1/teams/{id}/history` | `?granularity=hourly\|daily\|weekly\|monthly` |
 | `GET` | `/v1/teams/{id}/rivals` | ranking around this team, with projected overtakes. Paginated |
-| `GET` | `/v1/donors` | donor leaderboard, paginated. `?sort=lifetime\|daily\|weekly\|monthly` |
+| `GET` | `/v1/donors` | donor leaderboard, paginated. `?sort=` any numeric column |
 | `GET` | `/v1/donors/{name}` | one donor, `?sort=production` |
 | `GET` | `/v1/donors/{name}/teams` | full team list, paginated |
 | `GET` | `/v1/donors/{name}/history` | `?team_id=` to scope to one team |
@@ -143,10 +143,27 @@ Every response carries a `snapshot` block describing freshness, then the data.
   after midnight, while `points_last_24h` is the rolling figure. Weeks were ISO
   (Monday) before 2026-08-03; they start Sunday now, matching the site most donors
   reconcile against.
-- **Leaderboards can be ordered by period.** `?sort=` on `/v1/teams` and `/v1/donors`
-  takes `lifetime` (default), `daily`, `weekly` or `monthly`. The `rank` field is
-  always the lifetime rank, so under a period sort a row's position in the returned
-  list is its rank for that period — position is `(page - 1) * per_page + index + 1`.
+- **Leaderboards order by any numeric column.** `?sort=` on `/v1/teams` and
+  `/v1/donors` takes one of:
+
+  | key | column | field |
+  |---|---|---|
+  | `lifetime` | Points | `points_total` — the default |
+  | `per_day` | Per day | `points_per_day_7d_avg` — the 7-day average |
+  | `today` | Today | `points_today_utc` — calendar day, resets 00:00 UTC |
+  | `this_week` | This week | `points_this_week_utc` — resets Sunday 00:00 UTC |
+  | `this_month` | This month | `points_this_month_utc` — resets on the 1st, UTC |
+  | `last_24h` | Last 24h | `points_last_24h` — rolling, not a calendar bucket |
+  | `wus` | WUs | `wus_total` |
+  | `members` | Members | `members_total` — teams only |
+  | `teams` | Teams | `team_count` — donors only |
+
+  Ordering is descending: every one of these is "how much", and nobody opens a
+  leaderboard to find who is doing the least. `rank` stays the lifetime rank under
+  every ordering, so a row's position for the selected one is
+  `(page - 1) * per_page + index + 1`. `daily`, `weekly` and `monthly` are accepted
+  as aliases for `today`, `this_week` and `this_month` — they were the first
+  published names, from before `per_day` existed made "daily" ambiguous with it.
 - **`overtake_days` is a projection, not a measurement.** `/rivals` reports when two
   entities would swap places if both held their current per-day average forever.
   Nobody does. It is null when the one behind is not gaining, or would not arrive
