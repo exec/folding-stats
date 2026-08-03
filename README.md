@@ -375,9 +375,9 @@ not catch.
 
 ## Not affiliated
 
-This project is not run by Folding@home, Stanford, Washington University, or any other
-statistics site. Data comes from the official Folding@home feeds. Nothing here is
-scraped from anyone's pages.
+This project is not run by or endorsed by the Folding@home project, its host
+institution, or any other statistics site. Data comes from the official Folding@home
+feeds. Nothing here is scraped from anyone's pages.
 
 ## License
 

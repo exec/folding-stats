@@ -83,7 +83,7 @@ Anything bucketed by calendar day or month is explicitly UTC and says so. Timest
 
 **No overtake projections.** These are a popular feature elsewhere and I understand the appeal. I have left them out because the projection assumes your output and your rival's both hold constant, which is not true of anybody with a job or a power bill. If enough people want it anyway, I will revisit.
 
-**No affiliation.** This site is not run by Folding@home, Stanford, Washington University, or ExtremeOverclocking. The data comes from the official Folding@home feeds.
+**No affiliation.** This site is not run by or endorsed by the Folding@home project — today based at the University of Pennsylvania, after Stanford and Washington University in St. Louis before it — nor by ExtremeOverclocking. The data comes from the official Folding@home feeds.
 
 ## What is next
 
