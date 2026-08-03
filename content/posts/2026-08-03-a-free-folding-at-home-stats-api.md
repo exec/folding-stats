@@ -55,7 +55,7 @@ Every response carries a `snapshot` block saying how fresh the data is and when 
 
 ## Open source, MIT
 
-The entire site is open source under the MIT license — the collector, the storage engine, the API, and this frontend.
+The entire site is open source under the MIT license — the collector, the storage engine, the API, and this frontend. It lives at [github.com/exec/folding-stats](https://github.com/exec/folding-stats).
 
 That is deliberate. If your team would rather run its own instance, or point it at a different subset of the data, or fork it and take it somewhere I have not thought of, you should be able to. It also means this site is not a single point of failure: if I get hit by a bus, the thing that makes the numbers is still sitting there, and somebody else can stand it back up.
 

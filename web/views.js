@@ -938,7 +938,16 @@ export async function apiDocs(view) {
         'stays right on a machine whose clock is minutes off.'),
       el('p', { style: 'margin-bottom:0' },
         el('strong', 'Names are raw upstream text. '),
-        'They may contain tabs, newlines and non-ASCII; URL-encode them in paths.')))));
+        'They may contain tabs, newlines and non-ASCII; URL-encode them in paths.')),
+      el('div.card-body', { style: 'border-top:1px solid var(--line)' },
+        el('p', { style: 'margin:0' },
+          'This site is open source under the MIT license — collector, storage engine, ' +
+          'API and frontend. ',
+          el('a', {
+            href: 'https://github.com/exec/folding-stats',
+            target: '_blank', rel: 'noopener noreferrer',
+          }, 'github.com/exec/folding-stats'),
+          '. Run your own instance if you would rather.'))));
 
   if (snap) {
     view.append(el('section.section', card('Live response',
