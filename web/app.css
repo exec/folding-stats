@@ -385,6 +385,31 @@ main { max-width: var(--wide); margin: 0 auto; padding: var(--s6) var(--s5) var(
 .stat-move { color: var(--ink-muted); }
 .stat-move .delta { font-weight: 600; }
 
+/* The reader's own row in a rivals table. It travels inside the ranking rather than
+   being pulled out above it, because the whole point of the view is seeing where you
+   sit between the two people either side of you. A left rule and a raised surface
+   locate it without making it shout. */
+.rival-self > td { background: var(--surface-raised); }
+.rival-self > td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+.rival-you {
+  margin-left: var(--s2);
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  background: var(--accent-quiet);
+  vertical-align: 1px;
+}
+
+/* Direction of an overtake. Never colour alone: the arrow says which way it goes and
+   the text says when, so this reads the same in greyscale. */
+.overtake { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.overtake .gain { color: var(--good); }
+.overtake .loss { color: var(--critical); }
+.overtake .muted { color: var(--ink-muted); }
+
 /* Leaderboard period tabs. They sit under the page subtitle and wrap on narrow
    viewports rather than shrinking the hit target. */
 .board-tabs { margin-top: var(--s4); }

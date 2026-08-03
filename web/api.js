@@ -112,11 +112,13 @@ export const api = {
   team: (id, o) => request(`/v1/teams/${encodeURIComponent(id)}`, o),
   teamMembers: (id, params, o) => request(`/v1/teams/${encodeURIComponent(id)}/members${qs(params)}`, o),
   teamHistory: (id, params, o) => request(`/v1/teams/${encodeURIComponent(id)}/history${qs(params)}`, o),
+  teamRivals: (id, params, o) => request(`/v1/teams/${encodeURIComponent(id)}/rivals${qs(params)}`, o),
 
   donors: (params, o) => request(`/v1/donors${qs(params)}`, o),
   donor: (name, o) => request(`/v1/donors/${seg(name)}`, o),
   donorTeams: (name, params, o) => request(`/v1/donors/${seg(name)}/teams${qs(params)}`, o),
   donorHistory: (name, params, o) => request(`/v1/donors/${seg(name)}/history${qs(params)}`, o),
+  donorRivals: (name, params, o) => request(`/v1/donors/${seg(name)}/rivals${qs(params)}`, o),
 
   search: (q, type, o) => request(`/v1/search${qs({ q, type, limit: o?.limit })}`, o),
 };

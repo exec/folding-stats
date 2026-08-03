@@ -89,6 +89,93 @@ function sortTabs(base, sort, nav) {
   return el('div.board-tabs', tabs);
 }
 
+/**
+ * How long until an overtake, in the coarsest unit that still says something.
+ *
+ * The input is a seven-day average projected forward, so precision past the leading
+ * couple of digits is invented. "in 3 days" is a claim worth making; "in 3.17 days"
+ * dresses the same guess up as a measurement.
+ */
+function overtakeIn(days) {
+  if (days === null || days === undefined) return null;
+  if (days <= 0) return 'level now';
+  if (days < 1) {
+    const h = Math.max(1, Math.round(days * 24));
+    return `in ${h} ${h === 1 ? 'hour' : 'hours'}`;
+  }
+  if (days < 14) {
+    const d = Math.round(days);
+    return `in ${d} ${d === 1 ? 'day' : 'days'}`;
+  }
+  if (days < 90) return `in ${Math.round(days / 7)} weeks`;
+  if (days < 730) return `in ${Math.round(days / 30.4)} months`;
+  return `in ${Math.round(days / 365)} years`;
+}
+
+/**
+ * The rivals table: who this entity is about to pass, and who is about to pass it.
+ *
+ * The subject's own row travels in the list rather than being spliced in by the
+ * client, so the neighbourhood renders as one continuous ranking with the reader
+ * inside it — which is the whole point of the view. Rows above are targets, rows
+ * below are chasers, and the two are distinguished by position rather than by being
+ * split into separate tables.
+ */
+function rivalsTable(data, kind) {
+  const rows = data.rivals || [];
+  const selfRank = data.rank;
+  const body = el('tbody');
+
+  for (const r of rows) {
+    const when = overtakeIn(r.overtake_days);
+    // Above the reader is someone to catch; below is someone catching up. Same
+    // projection either way — only the reader's stake in it differs.
+    const chasing = r.rank < selfRank;
+    const href = kind === 'team' ? `/teams/${r.team_id}` : `/donors/${encodeURIComponent(r.name)}`;
+    const nameEl = r.self ? el('span') : el('a', { href });
+    tierName(nameEl, r.name, r.points_per_day_7d_avg);
+
+    body.append(el('tr', { class: r.self ? 'rival-self' : null },
+      el('td.rank', n(r.rank)),
+      el('td.left.name-cell', nameEl, r.self ? el('span.rival-you', 'you') : null),
+      el('td.num', { title: n(r.points_total) }, short(r.points_total)),
+      el('td.num', { title: n(r.points_per_day_7d_avg) }, short(r.points_per_day_7d_avg)),
+      el('td.num', r.self ? '—' : el('span', { title: n(r.points_gap) }, short(r.points_gap))),
+      r.self
+        ? el('td.left.muted', '—')
+        : el('td.left.overtake',
+            when
+              ? el('span', { class: chasing ? 'gain' : 'loss' },
+                  `${chasing ? '▲' : '▼'} ${when}`)
+              : el('span.muted', { title: 'Neither is closing on the other at current rates' }, 'not closing'))
+    ));
+  }
+
+  return el('div.table-wrap', el('table.data',
+    el('thead', el('tr',
+      el('th.left', 'Rank'),
+      el('th.left', kind === 'team' ? 'Team' : 'Donor'),
+      el('th', 'Points'),
+      el('th', 'Per day'),
+      el('th', 'Gap'),
+      el('th.left', 'Overtake'))),
+    body));
+}
+
+/** A rivals card, with the caveat that makes the numbers honest. */
+function rivalsCard(data, kind, { href } = {}) {
+  const controls = href ? el('a.section-link', { href }, 'Open ↗') : null;
+  const body = el('div',
+    rivalsTable(data, kind),
+    el('div.chart-note',
+      'Projected from each side’s current per-day average, held constant. ',
+      'Nobody folds at a constant rate, so treat these as “about when”, not a date. ',
+      `Anything further out than ${Math.round(data.horizon_days / 365)} years is reported as not closing.`));
+  return controls
+    ? cardWith('Rivals', controls, body)
+    : card('Rivals', body);
+}
+
 /** Empty chart state. Says what window was searched, so "nothing" is informative. */
 function emptyChart(granularity) {
   const window_ = {
@@ -474,6 +561,15 @@ export async function teamDetail(view, { id }, nav) {
         'Rank by lifetime points, and places moved over the last 24 hours'),
     ])));
 
+    try {
+      const rv = await api.teamRivals(t.team_id);
+      view.append(el('section.section', rivalsCard(rv.data, 'team',
+        { href: `/teams/${t.team_id}/rivals` })));
+    } catch {
+      // A rivals table is an extra, not the page. If it fails the team's own
+      // figures are still what the reader came for.
+    }
+
     const hist = historyCard('Production', (p) => api.teamHistory(t.team_id, p));
     cleanups.push(hist.destroy);
     view.append(el('section.section', hist.node));
@@ -668,6 +764,14 @@ export async function donorDetail(view, { name }, nav) {
         rankMovement(d.rank_change_24h, 'across all donors'),
         'Rank across all donors, and places moved over the last 24 hours'),
     ])));
+
+    try {
+      const rv = await api.donorRivals(d.name);
+      view.append(el('section.section', rivalsCard(rv.data, 'donor',
+        { href: `/donors/${encodeURIComponent(d.name)}/rivals` })));
+    } catch {
+      // As on a team page: an extra, never the reason the page exists.
+    }
 
     const teams = d.teams || [];
     if (teams.length > 1) {
@@ -925,6 +1029,37 @@ function teamsCard(donor, teams) {
 
 /* --------------------------------------------------------------- search --- */
 
+/**
+ * The rivals view on a page of its own.
+ *
+ * The card on the detail page is where people find this; the page is where they send
+ * it from. "Four days off passing them" is a thing worth linking to, and a link into
+ * the middle of somebody else's team page is not that.
+ */
+export async function rivalsPage(view, { kind, id }, nav) {
+  loading(view);
+  try {
+    const res = kind === 'team' ? await api.teamRivals(id) : await api.donorRivals(id);
+    const d = res.data;
+    clear(view);
+
+    const back = kind === 'team' ? `/teams/${id}` : `/donors/${encodeURIComponent(id)}`;
+    const title = el('h1.page-title');
+    nameText(title, d.name);
+    view.append(el('div.page-head',
+      el('div.breadcrumb',
+        el('a', { href: kind === 'team' ? '/teams' : '/donors' }, kind === 'team' ? 'Teams' : 'Donors'),
+        el('span', '/'), el('a', { href: back }, `#${n(d.rank)}`),
+        el('span', '/'), el('span', 'Rivals')),
+      title,
+      el('p.page-sub', `Ranked #${n(d.rank)}. Who is within reach, and who is within reach of them.`)));
+
+    view.append(el('section.section', rivalsCard(d, kind)));
+  } catch (err) {
+    errorView(view, err);
+  }
+}
+
 export async function searchPage(view, { q }, nav) {
   loading(view);
   try {
@@ -1008,10 +1143,12 @@ export async function apiDocs(view) {
         endpoint('GET', '/v1/teams/{id}', 'One team'),
         endpoint('GET', '/v1/teams/{id}/members', 'Team roster, ?active_only=true'),
         endpoint('GET', '/v1/teams/{id}/history', '?granularity=hourly|daily|weekly|monthly'),
+        endpoint('GET', '/v1/teams/{id}/rivals', 'Neighbours either side, with projected overtakes. ?n='),
         endpoint('GET', '/v1/donors', 'Donor leaderboard, paginated. ?sort=lifetime|daily|weekly|monthly'),
         endpoint('GET', '/v1/donors/{name}', 'Per-team breakdown, ?sort=production'),
         endpoint('GET', '/v1/donors/{name}/teams', 'Full team list, paginated'),
         endpoint('GET', '/v1/donors/{name}/history', '?team_id= to scope to one team, same granularities'),
+        endpoint('GET', '/v1/donors/{name}/rivals', 'Neighbours either side, with projected overtakes. ?n='),
         endpoint('GET', '/v1/search', '?q= name prefix, exact name, or team ID')
       ))))));
 
@@ -1038,6 +1175,13 @@ export async function apiDocs(view) {
         el('code', 'sort'), ' orderings. They are calendar periods, not rolling windows: ',
         el('code', 'points_today_utc'), ' reads low just after midnight, while ',
         el('code', 'points_last_24h'), ' is the rolling figure.'),
+      el('p',
+        el('strong', 'Overtakes are projections, not measurements. '),
+        el('code', 'overtake_days'), ' on ', el('code', '/rivals'),
+        ' is when two entities would swap places if both held their current per-day ' +
+        'average forever. Nobody does. It is null when the one behind is not gaining, ' +
+        'or would not arrive inside ', el('code', 'horizon_days'),
+        ' — the common case, and not an error.'),
       el('p',
         el('strong', 'Rank movement is absent, not zero, when unknown. '),
         el('code', 'rank_change_24h'),

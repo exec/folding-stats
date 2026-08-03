@@ -52,11 +52,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/teams/{id}", s.handle(s.team))
 	s.mux.HandleFunc("GET /v1/teams/{id}/members", s.handle(s.teamMembers))
 	s.mux.HandleFunc("GET /v1/teams/{id}/history", s.handle(s.teamHistory))
+	s.mux.HandleFunc("GET /v1/teams/{id}/rivals", s.handle(s.teamRivals))
 
 	s.mux.HandleFunc("GET /v1/donors", s.handle(s.donors))
 	s.mux.HandleFunc("GET /v1/donors/{name}", s.handle(s.donor))
 	s.mux.HandleFunc("GET /v1/donors/{name}/teams", s.handle(s.donorTeams))
 	s.mux.HandleFunc("GET /v1/donors/{name}/history", s.handle(s.donorHistory))
+	s.mux.HandleFunc("GET /v1/donors/{name}/rivals", s.handle(s.donorRivals))
 
 	s.mux.HandleFunc("GET /v1/search", s.handle(s.search))
 }

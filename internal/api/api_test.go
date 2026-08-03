@@ -1317,3 +1317,123 @@ func TestBuildIDIsStableWithinAProcess(t *testing.T) {
 		}
 	}
 }
+
+func TestOvertakeProjection(t *testing.T) {
+	now := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	day := func(d float64) *float64 { return &d }
+
+	for _, tc := range []struct {
+		name                  string
+		selfScore, selfRate   int64
+		rivalScore, rivalRate int64
+		wantGap               int64
+		wantDays              *float64
+	}{
+		// Chasing someone ahead: 1000 behind, gaining 100 a day.
+		{"catching the one ahead", 9000, 500, 10000, 400, 1000, day(10)},
+		// Being chased: symmetric, and the same number of days either way round.
+		{"being caught from behind", 10000, 400, 9000, 500, 1000, day(10)},
+		// Ahead and pulling away.
+		{"leader pulling away", 10000, 500, 9000, 400, 1000, nil},
+		// Behind and falling further behind.
+		{"trailing and losing ground", 9000, 400, 10000, 500, 1000, nil},
+		// Equal rates never converge, however small the gap.
+		{"identical rates", 9000, 500, 10000, 500, 1000, nil},
+		// An idle leader is caught by anyone still producing.
+		{"idle leader", 9000, 100, 10000, 0, 1000, day(10)},
+		// Nobody catches anybody at a standstill.
+		{"both idle", 9000, 0, 10000, 0, 1000, nil},
+		// Already level.
+		{"dead level", 10000, 300, 10000, 100, 0, day(0)},
+		// Beyond the horizon: a trillion-point gap closing at one point a day is
+		// arithmetic, not a forecast, and must not be reported as a date.
+		{"past the horizon", 0, 2, 1_000_000_000_000, 1, 1_000_000_000_000, nil},
+	} {
+		gap, days, at := projectOvertake(now, tc.selfScore, tc.selfRate, tc.rivalScore, tc.rivalRate)
+		if gap != tc.wantGap {
+			t.Errorf("%s: gap = %d, want %d", tc.name, gap, tc.wantGap)
+		}
+		switch {
+		case tc.wantDays == nil && days != nil:
+			t.Errorf("%s: projected %.2f days, want no projection", tc.name, *days)
+		case tc.wantDays != nil && days == nil:
+			t.Errorf("%s: no projection, want %.2f days", tc.name, *tc.wantDays)
+		case tc.wantDays != nil && *days != *tc.wantDays:
+			t.Errorf("%s: projected %.2f days, want %.2f", tc.name, *days, *tc.wantDays)
+		}
+		if (days == nil) != (at == nil) {
+			t.Errorf("%s: overtake_days and overtake_at disagree about whether there is one", tc.name)
+		}
+		if days != nil && at != nil {
+			want := now.Add(time.Duration(*days * float64(24*time.Hour)))
+			if !at.Equal(want) {
+				t.Errorf("%s: overtake_at = %v, want %v", tc.name, at, want)
+			}
+		}
+	}
+}
+
+func TestRivalsEndpoint(t *testing.T) {
+	srv := fixture(t)
+
+	_, env := get(t, srv, "/v1/teams/32/rivals")
+	got := decode[Rivals](t, env.Data)
+	if got.Name != "overclockers" || got.Rank != 1 {
+		t.Errorf("subject = %q rank %d, want overclockers rank 1", got.Name, got.Rank)
+	}
+	if got.HorizonDays == 0 {
+		t.Error("horizon_days not reported; a client cannot tell a null projection from a missing feature")
+	}
+	// The neighbourhood includes the subject, so a client renders one list rather
+	// than splicing two.
+	var selves int
+	for _, rv := range got.Rivals {
+		if rv.Self {
+			selves++
+			if rv.PointsGap != 0 {
+				t.Errorf("subject's own row has a gap of %d, want 0", rv.PointsGap)
+			}
+			// "You will overtake yourself, now" is not a thing to publish.
+			if rv.OvertakeDays != nil || rv.OvertakeAt != nil {
+				t.Errorf("subject's own row projects an overtake against itself: %v", rv.OvertakeDays)
+			}
+		}
+	}
+	if selves != 1 {
+		t.Errorf("%d rows marked self, want exactly 1", selves)
+	}
+	// Ordered best-first, like every other ranked list here.
+	for i := 1; i < len(got.Rivals); i++ {
+		if got.Rivals[i].Rank <= got.Rivals[i-1].Rank {
+			t.Errorf("rivals not in rank order: %d then %d", got.Rivals[i-1].Rank, got.Rivals[i].Rank)
+		}
+	}
+
+	// Donors travel a separate path to the same shape.
+	_, env = get(t, srv, "/v1/donors/DH/rivals")
+	d := decode[Rivals](t, env.Data)
+	if d.Name != "DH" {
+		t.Errorf("donor subject = %q, want DH", d.Name)
+	}
+	if len(d.Rivals) == 0 {
+		t.Error("no donor rivals returned")
+	}
+	for _, rv := range d.Rivals {
+		if rv.TeamID != nil {
+			t.Errorf("donor rival %q carries a team_id; a donor is not a member", rv.Name)
+		}
+	}
+
+	// Window size is bounded, and a bad one is a 400 rather than a silent clamp.
+	if rec, _ := get(t, srv, "/v1/teams/32/rivals?n=1"); rec.Code != http.StatusOK {
+		t.Errorf("n=1: status %d, want 200", rec.Code)
+	}
+	for _, bad := range []string{"0", "26", "abc"} {
+		if rec, _ := get(t, srv, "/v1/teams/32/rivals?n="+bad); rec.Code != http.StatusBadRequest {
+			t.Errorf("n=%s: status %d, want 400", bad, rec.Code)
+		}
+	}
+	if rec, _ := get(t, srv, "/v1/teams/999999/rivals"); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown team: status %d, want 404", rec.Code)
+	}
+}

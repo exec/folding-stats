@@ -70,6 +70,50 @@ type WarmingUp struct {
 	RankChange24hUnavailable bool `json:"rank_change_24h_unavailable,omitempty"`
 }
 
+// Rivals is the neighbourhood around one entity in the rankings, with the moment
+// each order would swap if both sides held their current rate.
+type Rivals struct {
+	Rank int32  `json:"rank"`
+	Name string `json:"name"`
+
+	// HorizonDays is how far ahead a projection is reported at all. Past it,
+	// overtake_days is null rather than a number: a seven-day average extrapolated
+	// over decades is arithmetic, not information, and printing "412 years" would
+	// dress a rounding artefact up as a finding.
+	HorizonDays int `json:"horizon_days"`
+
+	Rivals []Rival `json:"rivals"`
+}
+
+// Rival is one entity near the subject, ordered best-first alongside it.
+//
+// Every figure here except the projection is measured. The projection is not: it
+// assumes both parties keep producing at exactly their current seven-day average
+// forever, which nobody does. It is reported because "how far away is that" is the
+// question people actually have, and a gap in points alone does not answer it.
+type Rival struct {
+	Rank int32  `json:"rank"`
+	Name string `json:"name"`
+	// TeamID is present on team rivals and absent on donors.
+	TeamID *int32 `json:"team_id,omitempty"`
+	// Self marks the subject's own row, which is included so the list reads as a
+	// neighbourhood rather than as two lists the client has to splice.
+	Self bool `json:"self,omitempty"`
+
+	PointsTotal       int64 `json:"points_total"`
+	PointsPerDay7dAvg int64 `json:"points_per_day_7d_avg"`
+
+	// PointsGap is the lifetime difference to the subject, always positive. Zero on
+	// the subject's own row, and for anyone exactly tied with it.
+	PointsGap int64 `json:"points_gap"`
+
+	// OvertakeDays is when the two would swap places, null when they never would at
+	// current rates — the one behind is not gaining, or is not gaining fast enough to
+	// arrive inside the horizon. Null is the common case and is not a failure.
+	OvertakeDays *float64   `json:"overtake_days"`
+	OvertakeAt   *time.Time `json:"overtake_at"`
+}
+
 // PageInfo describes a paginated collection.
 type PageInfo struct {
 	Page       int `json:"page"`

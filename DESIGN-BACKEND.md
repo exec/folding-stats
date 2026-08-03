@@ -668,6 +668,34 @@ body is precisely the wrong answer. Without it the page announces fresh data ove
 numbers — verified by tagging the payload per generation and watching the headline
 figure change.
 
+### Rivals: the one number here that is not a measurement
+
+`/v1/teams/{id}/rivals` and `/v1/donors/{name}/rivals` return the neighbourhood either
+side of an entity, with the point at which each order would swap. The retrieval was
+already built — `MemberWindow`/`TeamWindow` were written for "the neighbourhood a
+'who is near me' view needs" and had never been wired to anything.
+
+Everything in the response except one field is measured. `overtake_days` is not: it
+assumes both parties hold their current seven-day average forever, which nobody does.
+It is reported because "how far away is that" is the question people actually have,
+and a gap in points alone does not answer it — but it is named, documented and
+rendered as a projection everywhere it appears, and the frontend rounds it to the
+coarsest unit that still says something ("in 3 days", never "in 3.17 days").
+
+Three things keep it honest:
+
+- **Null is the ordinary answer.** Most neighbours are not converging at all. Null
+  means "not at current rates", not "error".
+- **A horizon.** Past ten years the answer is null rather than a number. A gap of a
+  trillion points closing at a hundred a day is arithmetic with no meaning attached;
+  printing "412 years" would dress a rounding artefact up as a finding.
+- **No projection against oneself.** The subject's own row rides in the list so the
+  neighbourhood renders as one ranking with the reader inside it, but its gap is zero
+  by definition and the tie branch would otherwise report "level now" on it.
+
+Rivals are built through the same view builders as every other team and donor
+response, so a rival's figures cannot drift from the ones on its own page.
+
 ### A cache validator has to identify the code, not just the snapshot
 
 The ETag was `snapshot.At.Unix()`. Every figure served here is *derived* — the feeds
