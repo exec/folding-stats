@@ -53,8 +53,11 @@ type SnapshotInfo struct {
 // WarmingUp qualifies figures that are still converging after a cold start.
 type WarmingUp struct {
 	// HistorySpanSec is how much history the rate windows actually cover, while that
-	// is less than the full seven days. During this period points_per_day_7d_avg is
-	// divided by 7 over a shorter window and therefore reads low.
+	// is less than the full seven days.
+	//
+	// points_per_day_7d_avg is not understated during this period — it divides by the
+	// span actually observed — but it is averaged over less, so a single busy day
+	// moves it much further than it will once a full week is in view.
 	HistorySpanSec int64 `json:"history_span_sec,omitempty"`
 	// IntervalEstimated is true while NextExpectedAt comes from the nominal hour
 	// rather than from observed publishes, before enough cycles exist to measure the
@@ -98,8 +101,14 @@ type Production struct {
 	PointsTodayUTC    int64 `json:"points_today_utc"`
 	PointsThisWeekUTC int64 `json:"points_this_week_utc"`
 
-	// PointsPerDay7dAvg is points_last_7d divided by 7, rounded to nearest. This is
-	// the figure EOC labels "24hr Avg".
+	// PointsPerDay7dAvg is production over the last seven days as a daily rate,
+	// rounded to nearest. This is the figure EOC labels "24hr Avg".
+	//
+	// The divisor is seven days once seven days of this entity have been watched, and
+	// the period actually observed before that — so a team first seen yesterday
+	// reports the rate it is really producing at, rather than a seventh of it
+	// climbing to the truth over its first week. Days it existed for and produced
+	// nothing on still divide; only days before it existed are excluded.
 	PointsPerDay7dAvg int64 `json:"points_per_day_7d_avg"`
 
 	// PointsThisMonthUTC is production since 00:00 UTC on the 1st. Unlike the other

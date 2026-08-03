@@ -668,6 +668,55 @@ body is precisely the wrong answer. Without it the page announces fresh data ove
 numbers — verified by tagging the payload per generation and watching the headline
 figure change.
 
+### The per-day average divides by what was observed, not by a flat seven
+
+`points_per_day_7d_avg` divided by 7 unconditionally. For anything younger than a
+week — the whole corpus for the first seven days, and every new donor and team
+forever after — that averages in days the entity did not exist for. A donor first
+seen yesterday surfaced at a seventh of their real rate and crept up to it over a
+week, so the figure was furthest from the truth exactly when someone new was most
+likely to be looking at their own page.
+
+The divisor is now the period that entity has actually been under observation. The
+distinction that matters: **a day it existed for and produced nothing on is a real
+zero and still divides.** Only days before we had ever seen it are excluded. Getting
+that backwards would turn the average into "points per active day", which is a
+different and much flatterer figure.
+
+Per-entity observation is free from machinery the rank-change work already needed:
+each cycle records the corpus size at the time, slots are dense and assigned in
+first-seen order, so the cycle an entity appeared at is a binary search over a
+non-decreasing sequence.
+
+Two boundaries are easy to get wrong by a whole interval, and both are load-bearing:
+
+1. Once cycles have aged out, the oldest retained one describes production over the
+   interval *before* it, which no retained cycle marks the start of — so one mean
+   interval is added, without which a full 168-cycle window measures 167 hours and
+   every average reads 0.6% high.
+2. While the oldest retained cycle is still the first ever observed, it contributed no
+   deltas at all — every entity in it was a first sighting — so observation genuinely
+   begins there and that adjustment must *not* apply. On a young window, applying it
+   anyway halves every figure.
+
+The full-window path keeps exact integer arithmetic, so the three EOC-published values
+it was verified against still reproduce bit for bit.
+
+### Replay reconstructs the corpus, not just the deltas
+
+`restoreWindows` grew straight to today's corpus size, which stamped today's count on
+every replayed cycle — so after a restart everything looked as though it had been
+present for the whole window. An entity created shortly before a deploy would be
+averaged over seven days it did not exist for, and stayed wrong until the window
+rolled past the restart. Restarts happen on every deploy, which is when someone is
+watching.
+
+Replay now grows the window cycle by cycle from `cycles.new_members` / `new_teams`,
+walking the totals backwards from the present because that is the direction the
+arithmetic is exact in: today's size is known, and each cycle says how many it added.
+`Grow` gained geometric capacity so 168 incremental calls do not reallocate five
+arrays apiece.
+
 ### Weeks start Sunday, and weekly is derived rather than stored
 
 Two decisions, both reversals of earlier ones.

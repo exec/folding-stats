@@ -2,23 +2,15 @@ package api
 
 import (
 	"sort"
+	"time"
 
+	"folding/internal/metrics"
 	"folding/internal/model"
 )
 
 // View builders translate internal state into the wire types. They are the only
 // place that knows both representations, which keeps the naming decisions in R7
 // enforced in exactly one location.
-
-// roundDiv7 divides by 7 rounding to nearest, matching the published figures on EOC
-// (truncation reproduces none of their three captured values, rounding reproduces
-// all three).
-func roundDiv7(v int64) int64 {
-	if v < 0 {
-		return (v - 3) / 7
-	}
-	return (v + 3) / 7
-}
 
 // rollup reads a per-slot total defensively: the month figures are sized when a cycle
 // is ingested, so a view built between a corpus growing and the next refresh would
@@ -110,18 +102,26 @@ func (s *Snapshot) donorView(idx int32, withTeams bool) Donor {
 			WUsTotal:    d.WUs,
 		},
 	}
+	// A donor has been observed since the first of their members was, so the longest
+	// member span is the donor's. Taking the shortest would restart the clock every
+	// time an existing donor joined another team, collapsing a long-standing donor's
+	// average onto whatever their newest membership has produced.
+	var observed time.Duration
 	for _, slot := range members {
 		out.PointsLastUpdate += s.Members.LastUpdate(slot)
 		out.PointsLast24h += s.Members.Last24h(slot)
 		out.PointsLast7d += s.Members.Last7d(slot)
 		out.PointsTodayUTC += s.Members.Today(slot)
 		out.PointsThisWeekUTC += s.Members.ThisWeek(slot)
+		if span := s.Members.ObservedSpan(slot); span > observed {
+			observed = span
+		}
 	}
 	// Already summed across this donor's members when the periods were built.
 	out.PointsThisMonthUTC = s.Ranks.DonorMonth(idx)
 	// Averaging the summed week, not summing per-member averages: rounding each
 	// member separately then adding would drift by up to half a point per team.
-	out.PointsPerDay7dAvg = roundDiv7(out.PointsLast7d)
+	out.PointsPerDay7dAvg = metrics.PerDay(out.PointsLast7d, observed)
 
 	if withTeams {
 		out.Teams, out.TeamsTruncated = s.breakdown(members, maxEmbeddedTeams)

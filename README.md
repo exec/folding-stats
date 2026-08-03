@@ -127,6 +127,11 @@ Every response carries a `snapshot` block describing freshness, then the data.
 - **Compare timestamps against `server_time`**, not your own clock. Unsynced client
   clocks are routinely minutes out, and every relative figure derived from one is wrong
   by exactly that much.
+- **`points_per_day_7d_avg` divides by the period actually observed.** Seven days once
+  seven days of that entity have been watched, and the span since it first appeared
+  before then. A team first seen yesterday reports the rate it is really producing at,
+  not a seventh of it climbing to the truth over its first week. Days it existed for
+  and produced nothing on still divide — only days before it existed are excluded.
 - **Calendar buckets are UTC, and weeks start Sunday.** `points_today_utc`,
   `points_this_week_utc` and `points_this_month_utc` reset on their UTC boundary, as do
   the `weekly` and `monthly` history buckets and the leaderboard `sort` orderings.

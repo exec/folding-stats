@@ -442,14 +442,39 @@ func TestErrorsAreStructured(t *testing.T) {
 	}
 }
 
-func TestPointsPerDayUsesRoundedSevenDayAverage(t *testing.T) {
-	// The field name is honest about what it is, and the arithmetic matches the
-	// figure EOC publishes so the two sites stay reconcilable.
+func TestPointsPerDayDividesByTheObservedPeriod(t *testing.T) {
+	// The fixture spans two hourly cycles, and the first is all first sightings, so
+	// one hour of production has actually been observed. Dividing by a flat seven
+	// days would report a 168th of the real rate — and then creep up to the truth
+	// over the following week, which is precisely when a new donor is looking.
 	srv := fixture(t)
 	_, env := get(t, srv, "/v1/donors/DH")
 	d := decode[Donor](t, env.Data)
-	if want := roundDiv7(d.PointsLast7d); d.PointsPerDay7dAvg != want {
-		t.Errorf("points_per_day_7d_avg = %d, want %d", d.PointsPerDay7dAvg, want)
+
+	if d.PointsLast7d != 500 {
+		t.Fatalf("fixture changed: points_last_7d = %d, want 500", d.PointsLast7d)
+	}
+	// 500 points in the one observed hour is 12,000 a day.
+	if d.PointsPerDay7dAvg != 12_000 {
+		t.Errorf("points_per_day_7d_avg = %d, want 12000 (500 over one observed hour)",
+			d.PointsPerDay7dAvg)
+	}
+	if flat := (d.PointsLast7d + 3) / 7; d.PointsPerDay7dAvg == flat {
+		t.Errorf("points_per_day_7d_avg = %d, which is last7d/7 — six days nobody was watching", flat)
+	}
+
+	// Teams and members travel separate paths to the same divisor and must agree.
+	_, env = get(t, srv, "/v1/teams/32")
+	team := decode[Team](t, env.Data)
+	if team.PointsPerDay7dAvg != team.PointsLast7d*24 {
+		t.Errorf("team per-day = %d, want %d", team.PointsPerDay7dAvg, team.PointsLast7d*24)
+	}
+
+	// And the project summary, which sums totals rather than reading a window.
+	_, env = get(t, srv, "/v1/summary")
+	sum := decode[Summary](t, env.Data)
+	if sum.PointsPerDay7dAvg != sum.PointsLast7d*24 {
+		t.Errorf("summary per-day = %d, want %d", sum.PointsPerDay7dAvg, sum.PointsLast7d*24)
 	}
 }
 

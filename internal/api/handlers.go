@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"folding/content"
+	"folding/internal/metrics"
 	"folding/internal/rank"
 	"folding/internal/store"
 )
@@ -38,7 +39,10 @@ func (s *Server) summary(snap *Snapshot, _ *http.Request) (any, *PageInfo, error
 			PointsLast7d:      t.PointsLast7d,
 			PointsTodayUTC:    t.PointsToday,
 			PointsThisWeekUTC: t.PointsThisWeek,
-			PointsPerDay7dAvg: roundDiv7(t.PointsLast7d),
+			// The project has existed for the whole window by definition, so its
+			// divisor is the period the retained deltas cover.
+			PointsPerDay7dAvg:  metrics.PerDay(t.PointsLast7d, snap.Teams.CoveredSpan()),
+			PointsThisMonthUTC: t.PointsThisMonth,
 		},
 	}, nil, nil
 }

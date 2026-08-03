@@ -416,3 +416,75 @@ func TestRoutineDriftIsNotStale(t *testing.T) {
 		})
 	}
 }
+
+func TestRestartPreservesWhenEachEntityWasFirstSeen(t *testing.T) {
+	// The windows record how many entities existed at each cycle, and everything that
+	// distinguishes a long-watched donor from a new one reads that: the divisor of
+	// their per-day average, and whether they have a comparable rank a day back.
+	//
+	// A replay that grew straight to today's corpus size would stamp today's count on
+	// every historical cycle, so an entity created just before a restart would look as
+	// though it had been present all along — averaged over days it did not exist for,
+	// and staying wrong until the window rolled past the restart. Restarts happen on
+	// every deploy, which is exactly when someone is watching.
+	dir := t.TempDir()
+	cycles := []world{
+		{cyc(18),
+			[]string{"32\tocuk\t1000\t10"},
+			[]string{"veteran\t1000\t10\t32"},
+		},
+		{cyc(19),
+			[]string{"32\tocuk\t2000\t20"},
+			[]string{"veteran\t2000\t20\t32"},
+		},
+		// A newcomer arrives in the last cycle before the restart.
+		{cyc(20),
+			[]string{"32\tocuk\t3500\t35"},
+			[]string{"veteran\t3000\t30\t32", "newcomer\t500\t5\t32"},
+		},
+	}
+	a := seed(t, dir, cycles)
+
+	svc, _, db := newService(t, dir, a)
+	if _, err := svc.Ingest(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	nameID, ok := svc.state.Names.Lookup("newcomer")
+	if !ok {
+		t.Fatal("newcomer was never interned")
+	}
+	slot, ok := svc.state.MemberSlot(nameID, 32)
+	if !ok {
+		t.Fatal("no member slot for newcomer")
+	}
+	liveSpan := svc.memberWin.ObservedSpan(slot)
+	vetSlot, _ := svc.state.MemberSlot(mustLookup(t, svc, "veteran"), 32)
+	liveVet := svc.memberWin.ObservedSpan(vetSlot)
+	db.Close()
+
+	// Same archive, same database, fresh process.
+	svc2, _, db2 := newService(t, dir, a)
+	defer db2.Close()
+
+	if got := svc2.memberWin.ObservedSpan(slot); got != liveSpan {
+		t.Errorf("newcomer observed span after restart = %v, want %v (as before the restart)", got, liveSpan)
+	}
+	if got := svc2.memberWin.ObservedSpan(vetSlot); got != liveVet {
+		t.Errorf("veteran observed span after restart = %v, want %v", got, liveVet)
+	}
+	// And the thing that actually matters: the newcomer must not be credited with
+	// the veteran's observation period.
+	if svc2.memberWin.ObservedSpan(slot) >= svc2.memberWin.ObservedSpan(vetSlot) {
+		t.Errorf("newcomer span %v >= veteran span %v; the newcomer arrived two cycles later",
+			svc2.memberWin.ObservedSpan(slot), svc2.memberWin.ObservedSpan(vetSlot))
+	}
+}
+
+func mustLookup(t *testing.T, svc *Service, name string) int32 {
+	t.Helper()
+	id, ok := svc.state.Names.Lookup(name)
+	if !ok {
+		t.Fatalf("name %q not interned", name)
+	}
+	return id
+}

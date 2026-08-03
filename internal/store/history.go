@@ -267,6 +267,13 @@ type CycleDeltas struct {
 	At      time.Time
 	Members []model.Delta
 	Teams   []model.Delta
+
+	// NewMembers and NewTeams are how many entities were seen for the first time in
+	// this cycle. Replay needs them to reconstruct how large the corpus was at each
+	// point, which is what separates an entity that has been watched all week from
+	// one that appeared an hour ago.
+	NewMembers int32
+	NewTeams   int32
 }
 
 // DeltasSince returns every stored cycle at or after since, oldest first.
@@ -310,6 +317,34 @@ func (s *Store) DeltasSince(ctx context.Context, since time.Time) ([]CycleDeltas
 		`SELECT slot, ts, d_score, d_wu FROM team_deltas WHERE ts >= ? ORDER BY ts`,
 		func(c *CycleDeltas, d model.Delta) { c.Teams = append(c.Teams, d) },
 	); err != nil {
+		return nil, err
+	}
+
+	// The audit log carries the first-sighting counts, and it has a row for every
+	// cycle — including ones where nothing produced and no delta was written. A
+	// cycle that added members but recorded no production still moved the corpus
+	// size, so it has to appear in the replay.
+	crows, err := s.r.QueryContext(ctx,
+		`SELECT ts, new_members, new_teams FROM cycles WHERE ts >= ? ORDER BY ts`,
+		since.UTC().Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer crows.Close()
+	for crows.Next() {
+		var ts int64
+		var newMembers, newTeams int32
+		if err := crows.Scan(&ts, &newMembers, &newTeams); err != nil {
+			return nil, err
+		}
+		c := byTS[ts]
+		if c == nil {
+			c = &CycleDeltas{At: time.Unix(ts, 0).UTC()}
+			byTS[ts] = c
+		}
+		c.NewMembers, c.NewTeams = newMembers, newTeams
+	}
+	if err := crows.Err(); err != nil {
 		return nil, err
 	}
 

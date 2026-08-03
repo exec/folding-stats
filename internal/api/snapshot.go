@@ -104,6 +104,9 @@ type Totals struct {
 	PointsThisWeek   int64
 	PointsLast24h    int64
 	PointsLast7d     int64
+	// PointsThisMonth is summed from the rollup rather than the windows, so unlike
+	// its neighbours it is filled in after Build, once the month totals are attached.
+	PointsThisMonth int64
 
 	Teams        int
 	Donors       int

@@ -139,12 +139,40 @@ func (s *Service) restoreWindows(ctx context.Context, latest time.Time) error {
 	if err != nil {
 		return err
 	}
-	s.memberWin.Grow(len(s.state.Members))
-	s.teamWin.Grow(len(s.state.Teams))
-	for _, c := range cycles {
+
+	// Replay the corpus growing, not just the deltas. The windows record how many
+	// entities existed at each cycle, and that is what tells a donor watched all week
+	// apart from one first seen an hour ago — which decides the divisor of their
+	// per-day average and whether they have a comparable rank a day back.
+	//
+	// Growing straight to today's size instead would stamp today's count on every
+	// replayed cycle, so every entity would look as though it had been present for
+	// the whole window. Everything created shortly before a restart would then be
+	// averaged over seven days it did not exist for, and would stay wrong until the
+	// window rolled past the restart.
+	//
+	// Counts come from walking the first-sighting totals backwards from the present,
+	// because that is the direction the arithmetic is exact in: today's size is known
+	// and each cycle says how many it added.
+	memberAt := make([]int, len(cycles))
+	teamAt := make([]int, len(cycles))
+	members, teams := len(s.state.Members), len(s.state.Teams)
+	for i := len(cycles) - 1; i >= 0; i-- {
+		memberAt[i], teamAt[i] = members, teams
+		members -= int(cycles[i].NewMembers)
+		teams -= int(cycles[i].NewTeams)
+	}
+
+	for i, c := range cycles {
+		s.memberWin.Grow(memberAt[i])
 		s.memberWin.Push(c.At, c.Members)
+		s.teamWin.Grow(teamAt[i])
 		s.teamWin.Push(c.At, c.Teams)
 	}
+	// Anything created after the newest replayed cycle — or before the window, if the
+	// audit log is short — still needs a slot.
+	s.memberWin.Grow(len(s.state.Members))
+	s.teamWin.Grow(len(s.state.Teams))
 	return nil
 }
 
@@ -307,6 +335,11 @@ func (s *Service) publish() {
 		s.state.At, next, etag)
 	snap.Guard = &s.guard
 	snap.TeamMonth, snap.MemberMonth = s.teamMonth, s.memberMonth
+	// Team totals are authoritative for the project, and summing 130k of them once a
+	// cycle beats doing it per request on a cached endpoint.
+	for _, v := range s.teamMonth {
+		snap.Totals.PointsThisMonth += v
+	}
 	snap.StaleAfter = next.Add(staleGrace)
 	snap.Interval = s.cadence.Interval()
 	snap.IntervalMeasured = s.cadence.Measured()

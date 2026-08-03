@@ -156,11 +156,34 @@ func TestThisWeekResetsOnSunday(t *testing.T) {
 	}
 }
 
-func TestPointsPerDayIsSevenDayAverage(t *testing.T) {
+// weekOld returns a window holding a full seven days of hourly cycles, so an entity
+// present from the first of them has been observed for the whole window. Entities
+// beyond `present` appear partway through, at the cycle given by newAt.
+func weekOld(t *testing.T, present int, newAt map[int]int) *Window {
+	t.Helper()
+	w := New(present)
+	base := mon(0).Add(-7 * 24 * time.Hour)
+	for i := 0; i <= 168; i++ {
+		n := present
+		for slot, cycle := range newAt {
+			if i >= cycle && slot >= n {
+				n = slot + 1
+			}
+		}
+		w.Grow(n)
+		w.Push(base.Add(time.Duration(i)*time.Hour), nil)
+	}
+	return w
+}
+
+func TestPerDayMatchesEOCPublishedAverages(t *testing.T) {
 	// The load-bearing formula: EOC's "24hr Avg" is Last7d/7, confirmed verbatim
 	// by their FAQ and by arithmetic on three separate captured pages.
 	// Every case is a real (Last7days, published average) pair captured from EOC.
 	// They pin down the rounding mode too: truncation reproduces none of them.
+	//
+	// Tested on PerDay directly: this is the arithmetic, independent of how long any
+	// particular entity has been watched.
 	for _, tc := range []struct {
 		name   string
 		last7d int64
@@ -170,15 +193,13 @@ func TestPointsPerDayIsSevenDayAverage(t *testing.T) {
 		{"DH user", 49_559_068, 7_079_867},
 		{"site aggregate", 123_079_584_757, 17_582_797_822},
 	} {
-		w := New(2)
-		w.Push(mon(1), deltas(d(0, tc.last7d)))
-		if got := w.PointsPerDay(0); got != tc.want {
-			t.Errorf("%s: PointsPerDay = %d, want %d (EOC published value)", tc.name, got, tc.want)
+		if got := PerDay(tc.last7d, weekSpan); got != tc.want {
+			t.Errorf("%s: PerDay = %d, want %d (EOC published value)", tc.name, got, tc.want)
 		}
 	}
 }
 
-func TestPointsPerDayRoundsToNearest(t *testing.T) {
+func TestPerDayRoundsToNearest(t *testing.T) {
 	for _, tc := range []struct{ last7d, want int64 }{
 		{7, 1},
 		{10, 1}, // 1.43 -> 1
@@ -187,11 +208,75 @@ func TestPointsPerDayRoundsToNearest(t *testing.T) {
 		{3, 0}, // 0.43 -> 0
 		{4, 1}, // 0.57 -> 1
 	} {
-		w := New(2)
-		w.Push(mon(1), deltas(d(0, tc.last7d)))
-		if got := w.PointsPerDay(0); got != tc.want {
-			t.Errorf("PointsPerDay(last7d=%d) = %d, want %d", tc.last7d, got, tc.want)
+		if got := PerDay(tc.last7d, weekSpan); got != tc.want {
+			t.Errorf("PerDay(last7d=%d) = %d, want %d", tc.last7d, got, tc.want)
 		}
+	}
+}
+
+func TestPerDayDividesByTheObservedPeriod(t *testing.T) {
+	// Half a week of observation halves the divisor, not the answer.
+	if got := PerDay(700, 7*24*time.Hour); got != 100 {
+		t.Errorf("full week: %d, want 100", got)
+	}
+	if got := PerDay(700, 24*time.Hour); got != 700 {
+		t.Errorf("one day: %d, want 700", got)
+	}
+	if got := PerDay(700, 12*time.Hour); got != 1400 {
+		t.Errorf("half a day: %d, want 1400", got)
+	}
+	// Nothing observed is not a rate of zero, but with no production recorded there
+	// is no honest figure other than zero.
+	if got := PerDay(0, 0); got != 0 {
+		t.Errorf("no observation: %d, want 0", got)
+	}
+}
+
+func TestPointsPerDayDoesNotAverageInDaysBeforeAnEntityExisted(t *testing.T) {
+	// The bug this pins: a donor first seen a day ago had their output divided by
+	// seven, averaging in six days they did not exist for. They surfaced at a
+	// seventh of their real rate and crept up to it over a week — so the figure was
+	// wrong exactly when someone new was most likely to be looking at it.
+	//
+	// Slot 0 has been present all week; slot 1 appears 24 cycles from the end.
+	w := weekOld(t, 1, map[int]int{1: 145})
+	w.Grow(2)
+	w.Push(mon(1), deltas(d(0, 700), d(1, 700)))
+
+	if got := w.PointsPerDay(0); got != 100 {
+		t.Errorf("week-old entity: PointsPerDay = %d, want 100 (700 over 7 days)", got)
+	}
+	// One day of observation, so 700 points is 700 a day — not 100.
+	if got := w.PointsPerDay(1); got != 700 {
+		t.Errorf("day-old entity: PointsPerDay = %d, want 700 (700 over 1 day)", got)
+	}
+}
+
+func TestPointsPerDayStillCountsRealIdleDays(t *testing.T) {
+	// The other half of the fix, and the easy thing to break while making it: a
+	// donor who has been watched all week and produced on one day of it averages
+	// over seven days, not over the one day they were active.
+	w := weekOld(t, 1, nil)
+	w.Push(mon(1), deltas(d(0, 700)))
+	if got := w.PointsPerDay(0); got != 100 {
+		t.Errorf("idle-most-of-week entity: PointsPerDay = %d, want 100 — real zero days must still divide", got)
+	}
+}
+
+func TestObservedSpanIsBoundedByTheWindow(t *testing.T) {
+	w := weekOld(t, 1, map[int]int{1: 145})
+	w.Grow(2)
+	w.Push(mon(1), deltas(d(0, 1), d(1, 1)))
+
+	if got := w.ObservedSpan(0); got != weekSpan {
+		t.Errorf("long-lived entity span = %v, want exactly the window %v", got, weekSpan)
+	}
+	if got := w.ObservedSpan(1); got != 24*time.Hour {
+		t.Errorf("new entity span = %v, want 24h", got)
+	}
+	// An id past the corpus was never present at any retained cycle.
+	if got := w.ObservedSpan(99); got != 0 {
+		t.Errorf("unknown entity span = %v, want 0", got)
 	}
 }
 
@@ -199,7 +284,7 @@ func TestPointsPerDayIsNotLast24h(t *testing.T) {
 	// A donor can be spiky: DH showed Last24h 34,539,445 against a 7-day average of
 	// 7,079,867 — nearly 5x. Anything treating the average as a 24-hour figure
 	// would be badly wrong.
-	w := New(2)
+	w := weekOld(t, 1, nil)
 	w.Push(mon(1), deltas(d(0, 34_539_445)))
 	if w.PointsPerDay(0) == w.Last24h(0) {
 		t.Error("PointsPerDay equals Last24h; the average must span 7 days")
