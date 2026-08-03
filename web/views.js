@@ -162,18 +162,54 @@ function rivalsTable(data, kind) {
     body));
 }
 
-/** A rivals card, with the caveat that makes the numbers honest. */
-function rivalsCard(data, kind, { href } = {}) {
-  const controls = href ? el('a.section-link', { href }, 'Open ↗') : null;
-  const body = el('div',
-    rivalsTable(data, kind),
-    el('div.chart-note',
-      'Projected from each side’s current per-day average, held constant. ',
-      'Nobody folds at a constant rate, so treat these as “about when”, not a date. ',
-      `Anything further out than ${Math.round(data.horizon_days / 365)} years is reported as not closing.`));
-  return controls
-    ? cardWith('Rivals', controls, body)
+/** How many neighbours a rivals view shows at once. */
+const RIVALS_PER_PAGE = 21;
+
+/**
+ * A rivals card that pages through the ranking.
+ *
+ * It opens on whichever page the subject is on rather than at rank 1 — the server
+ * picks that when no page is given — and from there it is an ordinary pager, so
+ * paging up walks toward the leaders and paging down toward the chasers. Every row
+ * keeps its projection against the subject however far away it lands, which is what
+ * makes walking the board worth doing: "could I ever catch them" has an answer.
+ *
+ * `load` takes params and returns the API response, so the same card serves teams,
+ * donors, the detail pages and the standalone view.
+ */
+function rivalsCard(load, kind, { href, onPage } = {}) {
+  const body = el('div');
+  const node = href
+    ? cardWith('Rivals', el('a.section-link', { href }, 'Open ↗'), body)
     : card('Rivals', body);
+
+  async function go(page) {
+    // The old rows stay while the next page loads, for the same reason the
+    // leaderboard tabs do: a skeleton here collapses the card and springs it back.
+    body.classList.add('swapping');
+    try {
+      const res = await load({ page, per_page: RIVALS_PER_PAGE });
+      const d = res.data;
+      clear(body).append(
+        rivalsTable(d, kind),
+        pager(res.page.page, res.page.total_pages, res.page.total_items, (p) => {
+          if (onPage) onPage(p);
+          go(p);
+        }),
+        el('div.chart-note',
+          'Projected from each side’s current per-day average, held constant. ',
+          'Nobody folds at a constant rate, so treat these as “about when”, not a date. ',
+          `Anything further out than ${Math.round(d.horizon_days / 365)} years is reported as not closing.`));
+    } catch (err) {
+      console.warn('rivals: could not load', err);
+      clear(body).append(el('div.card-body',
+        el('div.muted', `Couldn\u2019t load rivals \u2014 ${err?.message || err}`)));
+    } finally {
+      body.classList.remove('swapping');
+    }
+  }
+
+  return { node, go };
 }
 
 /**
@@ -187,15 +223,9 @@ function rivalsCard(data, kind, { href } = {}) {
  * thing that ever reported it.
  */
 async function rivalsSection(load, kind, href) {
-  try {
-    const res = await load();
-    return el('section.section', rivalsCard(res.data, kind, { href }));
-  } catch (err) {
-    console.warn('rivals: could not load', err);
-    return el('section.section', card('Rivals',
-      el('div.card-body',
-        el('div.muted', `Couldn\u2019t load rivals \u2014 ${err?.message || err}`))));
-  }
+  const c = rivalsCard(load, kind, { href });
+  await c.go();          // no page: the server opens on the subject's own
+  return el('section.section', c.node);
 }
 
 /** Empty chart state. Says what window was searched, so "nothing" is informative. */
@@ -584,7 +614,7 @@ export async function teamDetail(view, { id }, nav) {
     ])));
 
     view.append(await rivalsSection(
-      () => api.teamRivals(t.team_id), 'team', `/teams/${t.team_id}/rivals`));
+      (p) => api.teamRivals(t.team_id, p), 'team', `/teams/${t.team_id}/rivals`));
 
     const hist = historyCard('Production', (p) => api.teamHistory(t.team_id, p));
     cleanups.push(hist.destroy);
@@ -782,7 +812,7 @@ export async function donorDetail(view, { name }, nav) {
     ])));
 
     view.append(await rivalsSection(
-      () => api.donorRivals(d.name), 'donor', `/donors/${encodeURIComponent(d.name)}/rivals`));
+      (p) => api.donorRivals(d.name, p), 'donor', `/donors/${encodeURIComponent(d.name)}/rivals`));
 
     const teams = d.teams || [];
     if (teams.length > 1) {
@@ -1047,10 +1077,13 @@ function teamsCard(donor, teams) {
  * it from. "Four days off passing them" is a thing worth linking to, and a link into
  * the middle of somebody else's team page is not that.
  */
-export async function rivalsPage(view, { kind, id }, nav) {
+export async function rivalsPage(view, { kind, id, page }, nav) {
   loading(view);
+  const load = (p) => (kind === 'team' ? api.teamRivals(id, p) : api.donorRivals(id, p));
   try {
-    const res = kind === 'team' ? await api.teamRivals(id) : await api.donorRivals(id);
+    // One fetch up front so the heading can name the subject before the card
+    // renders; the card then owns paging from there.
+    const res = await load({ page, per_page: RIVALS_PER_PAGE });
     const d = res.data;
     clear(view);
 
@@ -1065,7 +1098,14 @@ export async function rivalsPage(view, { kind, id }, nav) {
       title,
       el('p.page-sub', `Ranked #${n(d.rank)}. Who is within reach, and who is within reach of them.`)));
 
-    view.append(el('section.section', rivalsCard(d, kind)));
+    // The page rides in the URL here so a link carries the view the sender was
+    // looking at — the whole reason this exists as a page and not only a card.
+    const base = `${back}/rivals`;
+    const c = rivalsCard(load, kind, {
+      onPage: (p) => history.replaceState(null, '', p > 1 ? `${base}?page=${p}` : base),
+    });
+    view.append(el('section.section', c.node));
+    await c.go(page);
   } catch (err) {
     errorView(view, err);
   }
@@ -1154,12 +1194,12 @@ export async function apiDocs(view) {
         endpoint('GET', '/v1/teams/{id}', 'One team'),
         endpoint('GET', '/v1/teams/{id}/members', 'Team roster, ?active_only=true'),
         endpoint('GET', '/v1/teams/{id}/history', '?granularity=hourly|daily|weekly|monthly'),
-        endpoint('GET', '/v1/teams/{id}/rivals', 'Neighbours either side, with projected overtakes. ?n='),
+        endpoint('GET', '/v1/teams/{id}/rivals', 'Ranking around this team with projected overtakes; opens on its own page'),
         endpoint('GET', '/v1/donors', 'Donor leaderboard, paginated. ?sort=lifetime|daily|weekly|monthly'),
         endpoint('GET', '/v1/donors/{name}', 'Per-team breakdown, ?sort=production'),
         endpoint('GET', '/v1/donors/{name}/teams', 'Full team list, paginated'),
         endpoint('GET', '/v1/donors/{name}/history', '?team_id= to scope to one team, same granularities'),
-        endpoint('GET', '/v1/donors/{name}/rivals', 'Neighbours either side, with projected overtakes. ?n='),
+        endpoint('GET', '/v1/donors/{name}/rivals', 'Ranking around this donor with projected overtakes; opens on its own page'),
         endpoint('GET', '/v1/search', '?q= name prefix, exact name, or team ID')
       ))))));
 

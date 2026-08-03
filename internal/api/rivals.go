@@ -8,11 +8,6 @@ import (
 )
 
 const (
-	// defaultRivals is how many neighbours either side are returned, so the default
-	// response is the subject plus five above and five below.
-	defaultRivals = 5
-	maxRivals     = 25
-
 	// overtakeHorizonDays bounds how far ahead a projection is reported.
 	//
 	// The input is a seven-day average. Extrapolating it across a decade is
@@ -66,21 +61,6 @@ func projectOvertake(now time.Time, selfScore, selfRate, rivalScore, rivalRate i
 	return gap, &days, &at
 }
 
-func rivalCount(r *http.Request) (int, error) {
-	raw := r.URL.Query().Get("n")
-	if raw == "" {
-		return defaultRivals, nil
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil {
-		return 0, badRequest("n must be an integer")
-	}
-	if v < 1 || v > maxRivals {
-		return 0, badRequest("n must be between 1 and %d", maxRivals)
-	}
-	return v, nil
-}
-
 func (s *Server) teamRivals(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 32)
 	if err != nil {
@@ -90,15 +70,16 @@ func (s *Server) teamRivals(snap *Snapshot, r *http.Request) (any, *PageInfo, er
 	if !ok {
 		return nil, nil, notFound("no team with id %d", id)
 	}
-	n, err := rivalCount(r)
+	self := snap.teamView(slot)
+	order := snap.Ranks.TeamOrder
+	lo, hi, page, err := paginateAround(r, len(order), int(self.Rank))
 	if err != nil {
 		return nil, nil, err
 	}
 
-	self := snap.teamView(slot)
 	now := time.Now().UTC()
 	out := Rivals{Rank: self.Rank, Name: self.Name, HorizonDays: overtakeHorizonDays}
-	for _, near := range snap.Ranks.TeamWindow(self.Rank, n) {
+	for _, near := range order[lo:hi] {
 		// Built through the same view builder as every other team response, so a
 		// rival's figures cannot drift from the ones on its own page.
 		v := snap.teamView(near)
@@ -116,7 +97,7 @@ func (s *Server) teamRivals(snap *Snapshot, r *http.Request) (any, *PageInfo, er
 			PointsGap: gap, OvertakeDays: days, OvertakeAt: at,
 		})
 	}
-	return out, nil, nil
+	return out, page, nil
 }
 
 func (s *Server) donorRivals(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
@@ -124,23 +105,14 @@ func (s *Server) donorRivals(snap *Snapshot, r *http.Request) (any, *PageInfo, e
 	if !ok {
 		return nil, nil, notFound("no donor named %q", r.PathValue("name"))
 	}
-	n, err := rivalCount(r)
+	// Donors are stored in rank order, so a page of the ranking is a slice — there is
+	// no separate order to look through as there is for teams.
+	self := snap.donorView(idx, false)
+	lo, hi, page, err := paginateAround(r, len(snap.Ranks.Donors), int(self.Rank))
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// Donors are stored in rank order, so the neighbourhood is a slice — there is no
-	// separate order to look through as there is for teams.
-	lo := int(idx) - n
-	if lo < 0 {
-		lo = 0
-	}
-	hi := int(idx) + n + 1
-	if hi > len(snap.Ranks.Donors) {
-		hi = len(snap.Ranks.Donors)
-	}
-
-	self := snap.donorView(idx, false)
 	now := time.Now().UTC()
 	out := Rivals{Rank: self.Rank, Name: self.Name, HorizonDays: overtakeHorizonDays}
 	for i := lo; i < hi; i++ {
@@ -156,5 +128,5 @@ func (s *Server) donorRivals(snap *Snapshot, r *http.Request) (any, *PageInfo, e
 			PointsGap: gap, OvertakeDays: days, OvertakeAt: at,
 		})
 	}
-	return out, nil, nil
+	return out, page, nil
 }

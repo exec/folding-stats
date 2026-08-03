@@ -403,6 +403,11 @@ main { max-width: var(--wide); margin: 0 auto; padding: var(--s6) var(--s5) var(
   vertical-align: 1px;
 }
 
+/* Paging a rivals card keeps its rows on screen while the next page loads, the same
+   trade the leaderboard tabs make: a skeleton inside a card collapses it and springs
+   it back, which is a flicker in exchange for nothing. */
+.card .swapping { transition: opacity 90ms ease-out; opacity: 0.55; }
+
 /* Direction of an overtake. Never colour alone: the arrow says which way it goes and
    the text says when, so this reads the same in greyscale. */
 .overtake { white-space: nowrap; font-variant-numeric: tabular-nums; }

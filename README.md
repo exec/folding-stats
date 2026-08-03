@@ -111,12 +111,12 @@ Every response carries a `snapshot` block describing freshness, then the data.
 | `GET` | `/v1/teams/{id}` | one team |
 | `GET` | `/v1/teams/{id}/members` | roster, `?active_only=true` |
 | `GET` | `/v1/teams/{id}/history` | `?granularity=hourly\|daily\|weekly\|monthly` |
-| `GET` | `/v1/teams/{id}/rivals` | neighbours either side, with projected overtakes. `?n=` |
+| `GET` | `/v1/teams/{id}/rivals` | ranking around this team, with projected overtakes. Paginated |
 | `GET` | `/v1/donors` | donor leaderboard, paginated. `?sort=lifetime\|daily\|weekly\|monthly` |
 | `GET` | `/v1/donors/{name}` | one donor, `?sort=production` |
 | `GET` | `/v1/donors/{name}/teams` | full team list, paginated |
 | `GET` | `/v1/donors/{name}/history` | `?team_id=` to scope to one team |
-| `GET` | `/v1/donors/{name}/rivals` | neighbours either side, with projected overtakes. `?n=` |
+| `GET` | `/v1/donors/{name}/rivals` | ranking around this donor, with projected overtakes. Paginated |
 | `GET` | `/v1/search` | `?q=` name prefix, exact name, or team ID |
 | `GET` | `/v1/posts`, `/v1/posts/{slug}` | site announcements |
 
@@ -152,6 +152,11 @@ Every response carries a `snapshot` block describing freshness, then the data.
   Nobody does. It is null when the one behind is not gaining, or would not arrive
   within `horizon_days` — the common case, and not an error. The subject's own row
   travels in the list marked `self`, so the neighbourhood reads as one ranking.
+- **`/rivals` opens on the page the subject is on.** It is an ordinary paginated
+  collection over the whole ranking, but omitting `page` gives you the page containing
+  that team or donor rather than page 1 — `page` in the envelope says which. Every row
+  is projected against the subject however far away it is, so paging up answers
+  "could I ever catch them" and paging down answers "who is coming".
 - **`rank_change_24h` is absent, not zero, when it is unknown.** Teams, donors and
   members carry places gained over the last 24 hours (negative for places lost). The
   field is omitted entirely when there is nothing to compare against — the entity is

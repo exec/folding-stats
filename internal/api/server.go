@@ -267,11 +267,26 @@ func writeAPIError(w http.ResponseWriter, err error) {
 
 // paginate resolves page/per_page and returns the slice bounds for n items.
 func paginate(r *http.Request, n int) (lo, hi int, info *PageInfo, err error) {
-	page, err := intParam(r, "page", 1)
+	return paginateAround(r, n, 0)
+}
+
+// paginateAround is paginate with the default page chosen to contain anchor, a 1-based
+// item position. Zero means no anchor, and the default is page 1 as usual.
+//
+// A collection anchored on one of its own members should open where that member is.
+// The rivals view is a slice of the leaderboard around one team, and opening it at
+// rank 1 would answer a question nobody asked — an explicit ?page= still means exactly
+// what it says, so the pager works from there like any other.
+func paginateAround(r *http.Request, n, anchor int) (lo, hi int, info *PageInfo, err error) {
+	perPage, err := intParam(r, "per_page", defaultPerPage)
 	if err != nil {
 		return 0, 0, nil, err
 	}
-	perPage, err := intParam(r, "per_page", defaultPerPage)
+	defaultPage := 1
+	if anchor > 0 && perPage > 0 {
+		defaultPage = (anchor-1)/perPage + 1
+	}
+	page, err := intParam(r, "page", defaultPage)
 	if err != nil {
 		return 0, 0, nil, err
 	}

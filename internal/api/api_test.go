@@ -1424,16 +1424,55 @@ func TestRivalsEndpoint(t *testing.T) {
 		}
 	}
 
-	// Window size is bounded, and a bad one is a 400 rather than a silent clamp.
-	if rec, _ := get(t, srv, "/v1/teams/32/rivals?n=1"); rec.Code != http.StatusOK {
-		t.Errorf("n=1: status %d, want 200", rec.Code)
-	}
-	for _, bad := range []string{"0", "26", "abc"} {
-		if rec, _ := get(t, srv, "/v1/teams/32/rivals?n="+bad); rec.Code != http.StatusBadRequest {
-			t.Errorf("n=%s: status %d, want 400", bad, rec.Code)
-		}
-	}
 	if rec, _ := get(t, srv, "/v1/teams/999999/rivals"); rec.Code != http.StatusNotFound {
 		t.Errorf("unknown team: status %d, want 404", rec.Code)
+	}
+}
+
+func TestRivalsOpenOnTheSubjectsOwnPage(t *testing.T) {
+	// A rivals view opened at rank 1 answers a question nobody asked. Without an
+	// explicit page it lands where the subject is; with one it means exactly what it
+	// says, so a pager works from there like any other collection's.
+	srv := periodFixture(t)
+
+	// per_page=1 makes the page number and the rank the same thing, so "did it open
+	// on the right page" is checkable rather than a matter of arithmetic luck.
+	_, env := get(t, srv, "/v1/donors/surging/rivals?per_page=1")
+	if env.Page == nil {
+		t.Fatal("no page info on a paginated rivals response")
+	}
+	got := decode[Rivals](t, env.Data)
+	if env.Page.Page != int(got.Rank) {
+		t.Errorf("opened on page %d for a subject ranked #%d, want its own page",
+			env.Page.Page, got.Rank)
+	}
+	if len(got.Rivals) != 1 || !got.Rivals[0].Self {
+		t.Errorf("subject's own page does not contain the subject: %+v", got.Rivals)
+	}
+
+	// An explicit page overrides the anchor rather than being ignored.
+	_, env = get(t, srv, "/v1/donors/surging/rivals?per_page=1&page=1")
+	if env.Page.Page != 1 {
+		t.Errorf("explicit page=1 landed on page %d", env.Page.Page)
+	}
+	first := decode[Rivals](t, env.Data)
+	if len(first.Rivals) != 1 {
+		t.Fatalf("page=1 returned %d rows, want 1", len(first.Rivals))
+	}
+	// The subject's identity travels even on a page it does not appear on, so a
+	// client always knows whose projections these are.
+	if first.Name != "surging" {
+		t.Errorf("subject name = %q on another page, want surging", first.Name)
+	}
+	// Projections are still measured against the subject, not against the page.
+	if first.Rivals[0].Self && int(got.Rank) != 1 {
+		t.Error("a row on another page is marked self")
+	}
+
+	// Pagination rejects nonsense the same way every other collection does.
+	for _, bad := range []string{"page=0", "per_page=0", "page=abc", "per_page=99999"} {
+		if rec, _ := get(t, srv, "/v1/teams/1/rivals?"+bad); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400", bad, rec.Code)
+		}
 	}
 }
