@@ -628,14 +628,18 @@ export async function teamDetail(view, { id }, nav) {
         'Rank by lifetime points, and places moved over the last 24 hours'),
     ])));
 
-    view.append(await rivalsSection(
-      (p) => api.teamRivals(t.team_id, p), 'team', `/teams/${t.team_id}/rivals`));
-
     const hist = historyCard('Production', (p) => api.teamHistory(t.team_id, p));
     cleanups.push(hist.destroy);
     view.append(el('section.section', hist.node));
 
     view.append(el('section.section', await teamMembersCard(t.team_id, nav)));
+
+    // Last, and deliberately. This is the only block on the page about somebody else,
+    // and above the fold it competed with the team's own figures — which are what the
+    // reader came for. Being last also keeps its fetch off the critical path: the
+    // stats, the chart and the roster all render before it is even requested.
+    view.append(await rivalsSection(
+      (p) => api.teamRivals(t.team_id, p), 'team', `/teams/${t.team_id}/rivals`));
   } catch (err) {
     errorView(view, err);
   }
@@ -821,9 +825,6 @@ export async function donorDetail(view, { name }, nav) {
         'Rank across all donors, and places moved over the last 24 hours'),
     ])));
 
-    view.append(await rivalsSection(
-      (p) => api.donorRivals(d.name, p), 'donor', `/donors/${encodeURIComponent(d.name)}/rivals`));
-
     const teams = d.teams || [];
     if (teams.length > 1) {
       const bd = breakdownCard(d, teams);
@@ -836,6 +837,11 @@ export async function donorDetail(view, { name }, nav) {
     }
 
     view.append(el('section.section', teamsCard(d, teams)));
+
+    // Last, as on a team page: the donor's own figures lead, and the comparison
+    // against everyone else follows them.
+    view.append(await rivalsSection(
+      (p) => api.donorRivals(d.name, p), 'donor', `/donors/${encodeURIComponent(d.name)}/rivals`));
   } catch (err) {
     errorView(view, err);
   }
