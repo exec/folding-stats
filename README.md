@@ -360,8 +360,12 @@ go vet ./...
 | `cmd/loadtest` | fixed-concurrency latency profile |
 | `cmd/loadramp` | open-loop ramp; finds where it breaks |
 
-`internal/gen` builds a few months of plausible history from a wordlist, which is how
+`cmd/gendata` builds a few months of plausible history from a wordlist, which is how
 the storage and query paths were exercised at full scale before any real data existed.
+It is a development tool, not part of the service: nothing under `internal/` or in the
+`foldingd` binary links against it, and no served figure has ever come from it. On
+first run it downloads a word list and caches it in the archive directory, so that one
+invocation needs network access.
 
 [`DESIGN-BACKEND.md`](DESIGN-BACKEND.md) is the long-form design record, including a
 table of every bug found during deep testing and what it took to surface each one. Most

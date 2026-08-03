@@ -4,6 +4,15 @@
 // compaction, or the rank tables at full corpus size — would otherwise mean waiting a
 // year. Generated snapshots use the real feed format and go into a real archive, so
 // everything downstream runs the production code path unmodified.
+//
+// Fidelity matters more than realism-for-its-own-sake. The distributions in corpus.go
+// are taken from the measured 2026-08-02 corpus, because the properties that stress
+// this system — a handful of names on thousands of teams, 99.96% of donors idle in any
+// hour, one team holding a third of all members — are exactly the ones a naive uniform
+// generator would smooth away.
+//
+// Nothing here is served or shipped: the generator lives in this command because this
+// command is its only consumer, and no part of foldingd links against it.
 package main
 
 import (
@@ -16,7 +25,6 @@ import (
 	"time"
 
 	"folding/internal/feed"
-	"folding/internal/gen"
 )
 
 func main() {
@@ -58,13 +66,13 @@ func main() {
 		cacheDir = *dir
 	}
 	log.Info("loading wordlist", "cache", cacheDir)
-	words, err := gen.Words(cacheDir)
+	words, err := Words(cacheDir)
 	if err != nil {
 		log.Error("wordlist", "err", err)
 		os.Exit(1)
 	}
 
-	cfg := gen.DefaultConfig().Scale(*members)
+	cfg := DefaultConfig().Scale(*members)
 	cfg.Seed = *seed
 	if *teams > 0 {
 		cfg.Teams = *teams
@@ -72,7 +80,7 @@ func main() {
 
 	log.Info("building corpus", "members", cfg.Members, "teams", cfg.Teams, "words", len(words))
 	start := time.Now()
-	corpus, err := gen.New(cfg, words)
+	corpus, err := New(cfg, words)
 	if err != nil {
 		log.Error("corpus", "err", err)
 		os.Exit(1)

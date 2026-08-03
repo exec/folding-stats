@@ -679,7 +679,7 @@ about 0.04% of each hour.
 
 ## 8b. Benchmarking on synthetic data
 
-The archive only accumulates in real time, so `internal/gen` + `cmd/gendata` produce
+The archive only accumulates in real time, so `cmd/gendata` produces
 feeds in the real format with the real corpus's *proportions* — active fraction,
 multi-team share, team-size skew, pseudo-identities, pathological names — and write
 them through the same archive the upstream fetcher uses. `cmd/loadtest` then drives
