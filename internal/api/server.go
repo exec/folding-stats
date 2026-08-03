@@ -84,13 +84,21 @@ func (s *Server) handle(fn handlerFunc) http.HandlerFunc {
 		// Data is immutable between cycles, so a conditional request can be
 		// answered without touching any of it.
 		//
-		// Posts are the exception: they change when the binary does, not when
-		// upstream publishes. Giving them the snapshot's identity meant an edited
-		// article stayed hidden behind a cache keyed to the next feed — up to an
-		// hour of serving text that had already been replaced.
-		etag := `"` + snap.ETag + `"`
+		// The validator identifies the response, which is a function of the snapshot
+		// *and* of the code that derived it — every figure here is computed, not
+		// stored. Keyed on the snapshot alone, a deploy that changed a derivation
+		// left every cached copy answering 304 against numbers that no longer
+		// existed: the client asks whether anything changed, is told no, and keeps
+		// the old answer until upstream happens to publish. That was observed —
+		// changing the per-day divisor took effect on the origin instantly and was
+		// invisible to anything holding a cached copy.
+		//
+		// Posts were already exempted for this reason, but the reasoning was never
+		// theirs alone; they only made it obvious first, because their content is
+		// visibly authored rather than derived.
+		etag := `"` + buildID() + "-" + snap.ETag + `"`
 		if isPosts(r.URL.Path) {
-			etag = `"posts-` + content.Fingerprint() + `"`
+			etag = `"` + buildID() + "-posts-" + content.Fingerprint() + `"`
 		} else {
 			w.Header().Set("Last-Modified", snap.At.UTC().Format(http.TimeFormat))
 		}

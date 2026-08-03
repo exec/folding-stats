@@ -123,7 +123,9 @@ Every response carries a `snapshot` block describing freshness, then the data.
 - **Cache against `next_expected_at`** rather than polling. It is derived from the
   measured interval, not from an assumed hour.
 - **Conditional requests are ~6× cheaper** and return no body. Send `If-None-Match`;
-  data only changes hourly, so most polls are a 304.
+  data only changes hourly, so most polls are a 304. The validator covers the build as
+  well as the snapshot, so a deploy that changes how a figure is derived invalidates
+  your cached copy rather than answering 304 against a number that no longer exists.
 - **Compare timestamps against `server_time`**, not your own clock. Unsynced client
   clocks are routinely minutes out, and every relative figure derived from one is wrong
   by exactly that much.

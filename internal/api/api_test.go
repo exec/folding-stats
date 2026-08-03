@@ -858,7 +858,7 @@ func TestPostsCacheOnTheirOwnIdentity(t *testing.T) {
 		t.Errorf("/v1/posts cache-control = %q, want no-cache", cc)
 	}
 	postETag := res.Header().Get("ETag")
-	if !strings.HasPrefix(postETag, `"posts-`) {
+	if !strings.Contains(postETag, "-posts-") {
 		t.Errorf("/v1/posts etag = %q, want a content fingerprint", postETag)
 	}
 
@@ -1271,5 +1271,49 @@ func TestPointsThisMonthIsReported(t *testing.T) {
 	_, env := get(t, fixture(t), "/v1/teams/32")
 	if _, ok := env.Data.(map[string]any)["points_this_month_utc"]; !ok {
 		t.Error("points_this_month_utc missing from a team response")
+	}
+}
+
+func TestValidatorsChangeWhenTheBinaryDoes(t *testing.T) {
+	// Every figure served here is derived, not stored, so a response is a function of
+	// the snapshot *and* of the code that computed it. Keyed on the snapshot alone, a
+	// deploy that changed a derivation left every cached copy answering 304 with
+	// numbers that no longer existed — the client asks whether anything changed, is
+	// told no, and keeps the stale answer until upstream happens to publish.
+	srv := fixture(t)
+
+	for _, path := range []string{"/v1/summary", "/v1/teams", "/v1/donors", "/v1/posts"} {
+		res, _ := get(t, srv, path)
+		etag := res.Header().Get("ETag")
+		if etag == "" {
+			t.Errorf("%s: no ETag", path)
+			continue
+		}
+		if !strings.Contains(etag, buildID()) {
+			t.Errorf("%s: etag %q does not identify the build (%s), so a deploy that "+
+				"changes a derivation cannot invalidate it", path, etag, buildID())
+		}
+	}
+
+	// It must still carry the snapshot's identity, or a new cycle would be missed
+	// instead — trading one stale-cache bug for its mirror image.
+	res, _ := get(t, srv, "/v1/summary")
+	if etag := res.Header().Get("ETag"); !strings.Contains(etag, "test-etag") {
+		t.Errorf("etag %q no longer carries the snapshot identity", etag)
+	}
+}
+
+func TestBuildIDIsStableWithinAProcess(t *testing.T) {
+	// It rides on every response, so recomputing or drifting would be both a cost and
+	// a correctness problem: a validator that changes without the build changing
+	// invalidates every cache for nothing.
+	first := buildID()
+	if first == "" {
+		t.Fatal("empty build id")
+	}
+	for i := 0; i < 3; i++ {
+		if got := buildID(); got != first {
+			t.Fatalf("build id changed within one process: %q then %q", first, got)
+		}
 	}
 }

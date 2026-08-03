@@ -668,6 +668,35 @@ body is precisely the wrong answer. Without it the page announces fresh data ove
 numbers — verified by tagging the payload per generation and watching the headline
 figure change.
 
+### A cache validator has to identify the code, not just the snapshot
+
+The ETag was `snapshot.At.Unix()`. Every figure served here is *derived* — the feeds
+carry only cumulative totals — so a response is a function of the snapshot **and** of
+the code that computed it. Keyed on the snapshot alone, a deploy that changes a
+derivation leaves every cached copy answering `304 Not Modified` against numbers that
+no longer exist. The client asks whether anything changed, is told no, and keeps the
+old answer until upstream happens to publish: up to an hour of confidently stale data,
+and worst for the conditional-request clients the README specifically recommends.
+
+Observed rather than theorised. Changing the per-day divisor took effect on the origin
+instantly and was invisible to anything holding a cached copy, because the ETag was
+byte-identical either side of the deploy.
+
+Posts had already been exempted for exactly this reason — "they change when the binary
+does, not when upstream publishes" — but the reasoning was never theirs alone. They
+only made it obvious first, because their content is visibly authored rather than
+derived. The validator now carries a build fingerprint on every route.
+
+The fingerprint is a hash of the running executable rather than a version stamped at
+link time, so the documented build command keeps working unchanged and nobody has to
+remember to bump anything — a wrong answer here is silent and lasts an hour. It is the
+same move the frontend already makes with its asset graph: one hash, stamped
+everywhere, so a deploy invalidates the whole set at once.
+
+This does not help a client sitting inside `max-age` that never revalidates; nothing
+server-side can. That window is bounded by the next expected publish, which is the
+same bound as "the data would have changed anyway".
+
 ### The per-day average divides by what was observed, not by a flat seven
 
 `points_per_day_7d_avg` divided by 7 unconditionally. For anything younger than a
