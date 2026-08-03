@@ -468,9 +468,17 @@ table.data tbody tr:last-child td { border-bottom: 0; }
    brightest and emphasis points the same way as magnitude. On light the ramp has to
    deepen instead, or the hot end would burn out against the page.
 
-   Ordinal, one hue family, monotone in lightness — never a rainbow. Validated:
-   every step >= 4.5:1 (dark worst 4.78, light worst 4.63), adjacent OKLCH ΔL >= 0.06
-   so neighbouring tiers are actually separable, hue spread 35°/33°.
+   The steps are sampled from inferno, the perceptually-uniform heat map, rather than
+   picked by eye. It spans hues on purpose — that is what makes it read as heat — and
+   it is not a rainbow: the thing that separates the two is that inferno is monotone
+   in lightness, so the order survives greyscale, print and colour-blindness, while a
+   rainbow's lightness wanders and the order does not. Lightness carries the ranking;
+   hue only makes neighbouring steps easier to tell apart.
+
+   Validated in both themes: every step >= 4.5:1, lightness monotone, adjacent OKLCH
+   ΔL >= 0.06 so neighbouring tiers are separable. Both ramps are trimmed at both
+   ends — the bright end short of white, the dark end well above black — because
+   inferno's extremes lose all chroma and stop looking like a colour at all.
 
    Colour is never the only encoding: points_per_day_7d_avg, the figure the tier is
    derived from, is a column in the same row. */
@@ -480,19 +488,19 @@ table.data tbody tr:last-child td { border-bottom: 0; }
    absence of any, so it takes the muted ink token and recedes. */
 .tier-0 { color: var(--ink-muted); }
 
-.tier-1 { color: #e15d00; }
-.tier-2 { color: #f37700; }
-.tier-3 { color: #ff952c; }
-.tier-4 { color: #ffb669; }
-.tier-5 { color: #ffd49d; }
-.tier-6 { color: #ffefd5; }
+.tier-1 { color: #de5437; }
+.tier-2 { color: #f0701f; }
+.tier-3 { color: #f99109; }
+.tier-4 { color: #fcb217; }
+.tier-5 { color: #f8d446; }
+.tier-6 { color: #fbef82; }
 
-:root[data-theme="light"] .tier-1 { color: #ad5f00; }
-:root[data-theme="light"] .tier-2 { color: #994a00; }
-:root[data-theme="light"] .tier-3 { color: #843500; }
-:root[data-theme="light"] .tier-4 { color: #702000; }
-:root[data-theme="light"] .tier-5 { color: #5b0600; }
-:root[data-theme="light"] .tier-6 { color: #410003; }
+:root[data-theme="light"] .tier-1 { color: #ce4447; }
+:root[data-theme="light"] .tier-2 { color: #b1325a; }
+:root[data-theme="light"] .tier-3 { color: #8f2468; }
+:root[data-theme="light"] .tier-4 { color: #6b1c6d; }
+:root[data-theme="light"] .tier-5 { color: #4c0d6a; }
+:root[data-theme="light"] .tier-6 { color: #2c0d56; }
 
 /* Forced-colours and print drop author colours entirely, taking the whole encoding
    with them. The per-day column still carries it, which is the reason that column
