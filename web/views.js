@@ -6,7 +6,7 @@
 
 import { api, snapshot } from '/api.js';
 import { el, clear, card, cardWith, statTile, pager, segmented, notice, loading, errorView, link } from '/ui.js';
-import { n, short, ago, dateTime, delta, tierMark, nameText, plural, span, tzName } from '/format.js';
+import { n, short, ago, dateTime, delta, tierName, nameText, plural, span, tzName } from '/format.js';
 import { productionChart, stackedChart, stack, legend, densify, MAX_STACK_SERIES } from '/charts.js';
 
 const PER_PAGE = 100;
@@ -402,7 +402,7 @@ function teamTable(teams, { compact = false, sort = 'lifetime', offset = 0 } = {
   teams.forEach((t, i) => {
     const idle = (t.points_per_day_7d_avg ?? 0) === 0;
     const nameLink = el('a', { href: `/teams/${t.team_id}` });
-    nameText(nameLink, t.name);
+    tierName(nameLink, t.name, t.points_per_day_7d_avg);
     body.append(
       el(
         'tr',
@@ -413,7 +413,7 @@ function teamTable(teams, { compact = false, sort = 'lifetime', offset = 0 } = {
         metric
           ? el('td.rank', { title: `Lifetime rank #${n(t.rank)}` }, n(offset + i + 1))
           : el('td.rank', n(t.rank)),
-        el('td.left.name-cell', tierMark(t.points_per_day_7d_avg), nameLink),
+        el('td.left.name-cell', nameLink),
         compact ? null : el('td.num', { title: `${n(t.members_active)} active of ${n(t.members_total)}` },
           `${short(t.members_active)} / ${short(t.members_total)}`),
         metric ? el('td.num.metric', { title: n(t[metric.key]) }, short(t[metric.key])) : null,
@@ -540,13 +540,13 @@ function memberTable(members) {
   for (const m of members) {
     const idle = (m.points_per_day_7d_avg ?? 0) === 0;
     const nameLink = el('a', { href: `/donors/${encodeURIComponent(m.name)}` });
-    nameText(nameLink, m.name);
+    tierName(nameLink, m.name, m.points_per_day_7d_avg);
     body.append(
       el(
         'tr',
         { class: idle ? 'dim' : null },
         el('td.rank', n(m.rank_in_team)),
-        el('td.left.name-cell', tierMark(m.points_per_day_7d_avg), nameLink),
+        el('td.left.name-cell', nameLink),
         el('td.num', { title: n(m.points_per_day_7d_avg) }, short(m.points_per_day_7d_avg)),
         el('td.num', { title: n(m.points_last_24h) }, short(m.points_last_24h)),
         el('td.num', { title: n(m.points_total) }, short(m.points_total))
@@ -573,8 +573,8 @@ function donorTable(donors, { compact = false, sort = 'lifetime', offset = 0 } =
   donors.forEach((d, i) => {
     const idle = (d.points_per_day_7d_avg ?? 0) === 0;
     const nameLink = el('a', { href: `/donors/${encodeURIComponent(d.name)}` });
-    nameText(nameLink, d.name);
-    const cell = el('td.left.name-cell', tierMark(d.points_per_day_7d_avg), nameLink);
+    tierName(nameLink, d.name, d.points_per_day_7d_avg);
+    const cell = el('td.left.name-cell', nameLink);
     // Shared placeholder names carry no badge in the table: the team count beside
     // them already tells the story, and a warning on every top row is noise. The
     // full explanation lives on the donor's own page, where it appears once.
@@ -897,11 +897,11 @@ function teamsCard(donor, teams) {
   const body = el('tbody');
   for (const t of teams) {
     const link = el('a', { href: `/teams/${t.team_id}` });
-    nameText(link, t.team_name || `Team ${t.team_id}`);
+    tierName(link, t.team_name || `Team ${t.team_id}`, t.points_per_day_7d_avg);
     body.append(
       el(
         'tr',
-        el('td.left.name-cell', tierMark(t.points_per_day_7d_avg), link),
+        el('td.left.name-cell', link),
         el('td.num', `#${n(t.rank_in_team)}`),
         el('td.num', { title: n(t.points_per_day_7d_avg) }, short(t.points_per_day_7d_avg)),
         el('td.num', { title: n(t.points_total) }, short(t.points_total))

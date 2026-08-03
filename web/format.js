@@ -108,12 +108,22 @@ const TIER_LABEL = [
   'Over 10M/day',
 ];
 
-/** A tier marker for a table row. Always accompanied by the number it encodes. */
-export function tierMark(pointsPerDay) {
+/**
+ * Write a name and colour it by the production tier it sits in.
+ *
+ * The colour is on the name rather than on a swatch beside it, which makes these
+ * text colours: they are held to WCAG 4.5:1 against the surface, not the 2:1 a
+ * decorative mark would need, and each theme has its own steps.
+ *
+ * Colour is never the only encoding here — the per-day figure the tier is derived
+ * from is a column in the same row, so the ranking is fully readable without seeing
+ * any of it.
+ */
+export function tierName(el, name, pointsPerDay) {
+  nameText(el, name);
   const t = tier(pointsPerDay);
-  const el = document.createElement('span');
-  el.className = `tier tier-${t}`;
-  el.title = TIER_LABEL[t];
+  el.classList.add('tier-name', `tier-${t}`);
+  if (!el.title) el.title = TIER_LABEL[t];
   return el;
 }
 

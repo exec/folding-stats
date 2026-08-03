@@ -456,16 +456,50 @@ table.data tbody tr:last-child td { border-bottom: 0; }
 .dim td { color: var(--ink-muted); }
 .dim .name-cell { font-weight: 400; }
 
-/* Production tier, from the aggregate bracket the API reports. Ordinal, one hue,
-   light→dark — never a rainbow. */
-.tier { display: inline-block; width: 3px; height: 16px; border-radius: 2px; vertical-align: -3px; margin-right: 10px; }
-.tier-0 { background: var(--line-strong); }
-.tier-1 { background: #184f95; }
-.tier-2 { background: #256abf; }
-.tier-3 { background: #2a78d6; }
-.tier-4 { background: #3987e5; }
-.tier-5 { background: #5598e7; }
-.tier-6 { background: #86b6ef; }
+/* Production heat, from the aggregate bracket the API reports.
+   ---------------------------------------------------------------------------
+   The name itself carries the tier, so these are TEXT colours and are held to the
+   WCAG text gate of 4.5:1 against their own surface — not the 2:1 that a decorative
+   swatch beside the name would have needed. That gate is what sets both ends of
+   each ramp, and it is why neither runs all the way to a pale or a near-black step.
+
+   Each theme gets its own steps rather than one set reused, because the anchor
+   flips. On dark, heat climbs toward light, so the hottest names are also the
+   brightest and emphasis points the same way as magnitude. On light the ramp has to
+   deepen instead, or the hot end would burn out against the page.
+
+   Ordinal, one hue family, monotone in lightness — never a rainbow. Validated:
+   every step >= 4.5:1 (dark worst 4.78, light worst 4.63), adjacent OKLCH ΔL >= 0.06
+   so neighbouring tiers are actually separable, hue spread 35°/33°.
+
+   Colour is never the only encoding: points_per_day_7d_avg, the figure the tier is
+   derived from, is a column in the same row. */
+.tier-name { font-weight: 500; }
+
+/* Idle. Not part of the ramp — no production is not the coldest heat, it is the
+   absence of any, so it takes the muted ink token and recedes. */
+.tier-0 { color: var(--ink-muted); }
+
+.tier-1 { color: #e15d00; }
+.tier-2 { color: #f37700; }
+.tier-3 { color: #ff952c; }
+.tier-4 { color: #ffb669; }
+.tier-5 { color: #ffd49d; }
+.tier-6 { color: #ffefd5; }
+
+:root[data-theme="light"] .tier-1 { color: #ad5f00; }
+:root[data-theme="light"] .tier-2 { color: #994a00; }
+:root[data-theme="light"] .tier-3 { color: #843500; }
+:root[data-theme="light"] .tier-4 { color: #702000; }
+:root[data-theme="light"] .tier-5 { color: #5b0600; }
+:root[data-theme="light"] .tier-6 { color: #410003; }
+
+/* Forced-colours and print drop author colours entirely, taking the whole encoding
+   with them. The per-day column still carries it, which is the reason that column
+   is not optional. */
+@media (forced-colors: active) {
+  .tier-name { forced-color-adjust: none; color: LinkText; }
+}
 
 .badge {
   display: inline-flex;
