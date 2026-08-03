@@ -74,6 +74,9 @@ func fixture(t *testing.T) *Server {
 	}
 
 	tbl := rank.Build(state, at(2), rank.DefaultConfig)
+	// Mirror the service: it builds the period orderings on every publish, so a
+	// fixture without them would let a sort bug pass unnoticed here.
+	tbl.BuildPeriods(state, memberWin, teamWin, nil, nil)
 	snap := Build(state, memberWin, teamWin, tbl, st, at(2), at(3), "test-etag")
 
 	srv := NewServer()
@@ -679,13 +682,13 @@ func TestGranularityAliasAndValidation(t *testing.T) {
 
 	// Every accepted granularity must have a configured range limit; a missing one
 	// would silently reject all ranges.
-	for _, g := range []string{"hourly", "daily", "monthly"} {
+	for _, g := range []string{"hourly", "daily", "weekly", "monthly"} {
 		rec, _ := get(t, srv, "/v1/teams/32/history?granularity="+g)
 		if rec.Code != http.StatusOK {
 			t.Errorf("granularity=%s with default range: status %d, want 200", g, rec.Code)
 		}
 	}
-	rec, _ := get(t, srv, "/v1/teams/32/history?granularity=weekly")
+	rec, _ := get(t, srv, "/v1/teams/32/history?granularity=fortnightly")
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("unknown granularity: status %d, want 400", rec.Code)
 	}
@@ -1128,5 +1131,120 @@ func TestRankChangeUnavailableIsAdvertisedWhileWarmingUp(t *testing.T) {
 	_, env = get(t, rankChangeFixture(t), "/v1/donors")
 	if env.Snapshot.WarmingUp != nil && env.Snapshot.WarmingUp.RankChange24hUnavailable {
 		t.Error("rank_change_24h_unavailable still set once a 24h baseline exists")
+	}
+}
+
+// periodFixture makes lifetime order and daily order disagree, which the shared
+// fixture cannot: there DH's 400+100 across two teams ties toTOW's 500, and a tie
+// resolves to lifetime order whether the sort works or not.
+func periodFixture(t *testing.T) *Server {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "p.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	state := model.NewState()
+	memberWin, teamWin := metrics.New(0), metrics.New(0)
+	ctx := context.Background()
+
+	cycles := []struct {
+		when  time.Time
+		teams []parse.TeamRow
+		users []parse.UserRow
+	}{
+		{at(1),
+			[]parse.TeamRow{tr(1, "steady", 1000), tr(2, "surging", 100)},
+			[]parse.UserRow{u("steady", 1000, 1), u("surging", 100, 2)},
+		},
+		// Same UTC day, so this cycle is the whole of today and of this week.
+		// steady keeps the lifetime lead; surging out-produces it eightfold.
+		{at(2),
+			[]parse.TeamRow{tr(1, "steady", 1100), tr(2, "surging", 900)},
+			[]parse.UserRow{u("steady", 1100, 1), u("surging", 900, 2)},
+		},
+	}
+	for _, c := range cycles {
+		cy := state.Apply(c.when, c.teams, c.users)
+		if err := st.WriteCycle(ctx, state, cy, store.CycleMeta{
+			TeamSnapshotAt: c.when, UserSnapshotAt: c.when}); err != nil {
+			t.Fatal(err)
+		}
+		memberWin.Grow(len(state.Members))
+		memberWin.Push(c.when, cy.MemberDeltas)
+		teamWin.Grow(len(state.Teams))
+		teamWin.Push(c.when, cy.TeamDeltas)
+	}
+
+	teamMonth, err := st.MonthTotals(ctx, "team", at(2), len(state.Teams))
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberMonth, err := st.MonthTotals(ctx, "member", at(2), len(state.Members))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tbl := rank.Build(state, at(2), rank.DefaultConfig)
+	tbl.BuildPeriods(state, memberWin, teamWin, teamMonth, memberMonth)
+	snap := Build(state, memberWin, teamWin, tbl, st, at(2), at(3), "period-etag")
+	snap.TeamMonth, snap.MemberMonth = teamMonth, memberMonth
+
+	srv := NewServer()
+	srv.Publish(snap)
+	return srv
+}
+
+func TestLeaderboardSortByPeriod(t *testing.T) {
+	srv := periodFixture(t)
+
+	order := func(path string) []string {
+		t.Helper()
+		_, env := get(t, srv, path)
+		var names []string
+		for _, row := range env.Data.([]any) {
+			names = append(names, row.(map[string]any)["name"].(string))
+		}
+		return names
+	}
+
+	for _, ep := range []string{"/v1/donors", "/v1/teams"} {
+		lifetime := order(ep)
+		if len(lifetime) != 2 {
+			t.Fatalf("%s: got %d rows, want 2", ep, len(lifetime))
+		}
+		if lifetime[0] != "steady" {
+			t.Errorf("%s: lifetime leader = %s, want steady", ep, lifetime[0])
+		}
+		// An omitted sort must keep meaning what it always meant.
+		if got := order(ep + "?sort=lifetime"); got[0] != lifetime[0] {
+			t.Errorf("%s: explicit lifetime %v differs from default %v", ep, got, lifetime)
+		}
+		// Both cycles fall on one UTC day, so daily, weekly and monthly all cover
+		// exactly the second cycle — and all three must reorder the board.
+		for _, period := range []string{"daily", "weekly", "monthly"} {
+			got := order(ep + "?sort=" + period)
+			if len(got) != len(lifetime) {
+				t.Errorf("%s sort=%s: %d rows, want %d — an ordering must not drop anyone",
+					ep, period, len(got), len(lifetime))
+			}
+			if got[0] != "surging" {
+				t.Errorf("%s sort=%s: leader = %s, want surging (800 this period vs 100)",
+					ep, period, got[0])
+			}
+		}
+	}
+
+	rec, _ := get(t, srv, "/v1/donors?sort=yearly")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("unknown sort: status %d, want 400", rec.Code)
+	}
+}
+
+func TestPointsThisMonthIsReported(t *testing.T) {
+	_, env := get(t, fixture(t), "/v1/teams/32")
+	if _, ok := env.Data.(map[string]any)["points_this_month_utc"]; !ok {
+		t.Error("points_this_month_utc missing from a team response")
 	}
 }

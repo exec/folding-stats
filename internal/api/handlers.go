@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"folding/content"
+	"folding/internal/rank"
 	"folding/internal/store"
 )
 
@@ -81,8 +82,25 @@ func (s *Server) projectHistory(snap *Snapshot, r *http.Request) (any, *PageInfo
 	return historyView(q, pts), nil, nil
 }
 
+// parsePeriod resolves the ?sort= leaderboard ordering, defaulting to lifetime.
+func parsePeriod(r *http.Request) (rank.Period, error) {
+	v := r.URL.Query().Get("sort")
+	if v == "" {
+		return rank.Lifetime, nil
+	}
+	p := rank.Period(v)
+	if !rank.ValidPeriod(p) {
+		return "", badRequest("sort must be lifetime, daily, weekly or monthly")
+	}
+	return p, nil
+}
+
 func (s *Server) teams(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
-	order := snap.Ranks.TeamOrder
+	period, err := parsePeriod(r)
+	if err != nil {
+		return nil, nil, err
+	}
+	order := snap.Ranks.TeamOrderFor(period)
 	lo, hi, page, err := paginate(r, len(order))
 	if err != nil {
 		return nil, nil, err
@@ -147,13 +165,18 @@ func (s *Server) teamMembers(snap *Snapshot, r *http.Request) (any, *PageInfo, e
 }
 
 func (s *Server) donors(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
-	lo, hi, page, err := paginate(r, len(snap.Ranks.Donors))
+	period, err := parsePeriod(r)
+	if err != nil {
+		return nil, nil, err
+	}
+	order := snap.Ranks.DonorOrderFor(period)
+	lo, hi, page, err := paginate(r, len(order))
 	if err != nil {
 		return nil, nil, err
 	}
 	out := make([]Donor, 0, hi-lo)
-	for i := lo; i < hi; i++ {
-		out = append(out, snap.donorView(int32(i), false))
+	for _, idx := range order[lo:hi] {
+		out = append(out, snap.donorView(idx, false))
 	}
 	return out, page, nil
 }
@@ -381,10 +404,10 @@ func parseHistoryQuery(r *http.Request, now time.Time) (historyQuery, error) {
 	case "":
 	// "cycle" was the original name for "hourly" and still works, so existing
 	// callers keep functioning.
-	case "hourly", "cycle", "daily", "monthly":
+	case "hourly", "cycle", "daily", "weekly", "monthly":
 		q.gran = store.Granularity(g).Normalize()
 	default:
-		return q, badRequest("granularity must be hourly, daily or monthly")
+		return q, badRequest("granularity must be hourly, daily, weekly or monthly")
 	}
 
 	var err error
@@ -424,16 +447,22 @@ func parseHistoryQuery(r *http.Request, now time.Time) (historyQuery, error) {
 
 // defaultWindow is how far back an unparameterised history request reaches.
 var defaultWindow = map[store.Granularity]time.Duration{
-	store.Hourly:  7 * 24 * time.Hour,
-	store.Daily:   90 * 24 * time.Hour,
+	store.Hourly: 7 * 24 * time.Hour,
+	store.Daily:  90 * 24 * time.Hour,
+	// A year of weeks is 52 points — dense enough to read a seasonal trend, which is
+	// the thing weekly buckets are for and that daily buries in noise.
+	store.Weekly:  365 * 24 * time.Hour,
 	store.Monthly: 3 * 365 * 24 * time.Hour,
 }
 
 // maxRange bounds a history query per granularity. Coarser buckets return far fewer
 // rows per unit time, so they can span proportionally more.
 var maxRange = map[store.Granularity]time.Duration{
-	store.Hourly:  90 * 24 * time.Hour, // matches raw delta retention
-	store.Daily:   5 * 365 * 24 * time.Hour,
+	store.Hourly: 90 * 24 * time.Hour, // matches raw delta retention
+	store.Daily:  5 * 365 * 24 * time.Hour,
+	// Weekly sums the daily rollup on read, so its ceiling is daily's: past that
+	// there are no day buckets left to sum.
+	store.Weekly:  5 * 365 * 24 * time.Hour,
 	store.Monthly: 50 * 365 * 24 * time.Hour,
 }
 

@@ -101,6 +101,11 @@ type Production struct {
 	// PointsPerDay7dAvg is points_last_7d divided by 7, rounded to nearest. This is
 	// the figure EOC labels "24hr Avg".
 	PointsPerDay7dAvg int64 `json:"points_per_day_7d_avg"`
+
+	// PointsThisMonthUTC is production since 00:00 UTC on the 1st. Unlike the other
+	// figures here it is read from the monthly rollup rather than from the rolling
+	// windows, which only span seven days.
+	PointsThisMonthUTC int64 `json:"points_this_month_utc"`
 }
 
 // Team is one team at collection or detail scope.

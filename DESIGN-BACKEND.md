@@ -668,6 +668,59 @@ body is precisely the wrong answer. Without it the page announces fresh data ove
 numbers — verified by tagging the payload per generation and watching the headline
 figure change.
 
+### Weeks start Sunday, and weekly is derived rather than stored
+
+Two decisions, both reversals of earlier ones.
+
+**The week boundary moved off ISO.** `startOfWeek` returned Monday on the reasoning
+that we are not obliged to reproduce EOC's calendar. That was wrong for a reason the
+original note missed: donors reconcile these figures *against* EOC, which buckets on
+Sunday, and a weekly total silently covering a different seven days than the site being
+compared against is worse than an opinion about which weekday is right. The boundary is
+still UTC (R14) — only the weekday moved. `points_this_week_utc` changed meaning with
+it, which is a real break for anyone who had already integrated; carrying two
+definitions of "week" so one response could disagree with itself about a period it
+names would have been worse.
+
+**Weekly has no table.** A week is exactly seven day buckets, so a `*_weekly` table
+would hold nothing `*_daily` does not — it would be a second copy to keep correct
+through replay and compaction, in exchange for no new information. Weekly sums the
+daily rollup on read, filtered on the raw day bucket so the clustered `(entity, bucket)`
+key still drives the scan. Monthly *is* materialised, for the one reason weekly is not:
+it has to outlive daily once retention prunes it.
+
+The epoch offset is the part worth guarding. Day bucket 0 is a **Thursday**, so weeks
+fall on `(day - 3) / 7`, not on a multiple of seven. Getting it wrong shifts every
+bucket by part of a week and produces plausible-looking numbers rather than an obvious
+fault, which is why `TestWeekBucketsAlignToSunday` checks 900 consecutive days against
+the calendar and cross-checks the two independent routes to the same boundary.
+
+### Leaderboards can be ordered by period
+
+`?sort=lifetime|daily|weekly|monthly` on the two leaderboards. Lifetime, daily and
+weekly come straight from memory — the rate windows already maintain calendar buckets —
+so they cost one radix sort each per publish. Monthly is the exception: the windows span
+seven days, so a month is beyond them by design, and it comes from one read of the
+current bucket of the rollup table, refreshed on ingest rather than on publish.
+
+`rank` stays the lifetime rank under every ordering. A period board's position is the
+row's index in the returned page, which is exactly correct for the metric it is sorted
+by and avoids four more rank arrays over 2.7M members to carry a number the page
+already knows.
+
+### Publish rebuilds only when the corpus has moved
+
+The ranked table is a pure function of state, and state only moves on ingest — but
+`Refresh` calls `publish` every five minutes so staleness tracks real time. That was
+rebuilding the whole table twelve times an hour to produce a byte-identical answer:
+a full sort of 2.7M members, plus the search index, for nothing. Caching it against
+`state.At` makes a refresh that ingested nothing almost free, which is what makes the
+period orderings affordable to add on top.
+
+Publishes now take their own mutex. `guard` is held for *reading* while the table is
+built, and an RWMutex admits concurrent readers — so the ingest goroutine and the
+refresh goroutine could both have entered the cache-fill path.
+
 ### Rank history is derived, not stored
 
 Rank movement over 24 hours is reconstructed each cycle rather than recorded. A

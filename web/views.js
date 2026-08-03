@@ -29,11 +29,64 @@ function snapshotMs() {
   return s ? Date.parse(s.at) : Date.now();
 }
 
+/** The granularities every history chart offers, in coarsening order. */
+const GRANULARITIES = [
+  { value: 'hourly', label: 'Hourly', title: 'One point per upstream publish' },
+  { value: 'daily', label: 'Daily', title: 'UTC days' },
+  { value: 'weekly', label: 'Weekly', title: 'UTC weeks starting Sunday' },
+  { value: 'monthly', label: 'Monthly', title: 'UTC calendar months' },
+];
+
+/**
+ * Leaderboard orderings. These are calendar buckets in UTC, not rolling windows, so
+ * Daily reads low just after 00:00 UTC — it answers "produced today", which is what a
+ * daily board means, rather than "produced in the last 24 hours".
+ */
+const SORTS = [
+  { value: 'lifetime', label: 'Lifetime', title: 'Cumulative points, all time' },
+  { value: 'daily', label: 'Daily', title: 'Points since 00:00 UTC today' },
+  { value: 'weekly', label: 'Weekly', title: 'Points since Sunday 00:00 UTC' },
+  { value: 'monthly', label: 'Monthly', title: 'Points since the 1st, 00:00 UTC' },
+];
+
+/** The column a period-sorted board is actually ordered by, so the sort is visible. */
+const SORT_FIELD = {
+  daily: { key: 'points_today_utc', label: 'Today' },
+  weekly: { key: 'points_this_week_utc', label: 'This week' },
+  monthly: { key: 'points_this_month_utc', label: 'This month' },
+};
+
+const SORT_BLURB = {
+  lifetime: 'lifetime points',
+  daily: 'points since 00:00 UTC today',
+  weekly: 'points since Sunday 00:00 UTC',
+  monthly: 'points since the 1st of the month, UTC',
+};
+
+/** A list URL that carries only the parameters that differ from the defaults. */
+function listHref(base, { page = 1, sort = 'lifetime' } = {}) {
+  const q = new URLSearchParams();
+  if (page > 1) q.set('page', page);
+  if (sort !== 'lifetime') q.set('sort', sort);
+  const s = q.toString();
+  return s ? `${base}?${s}` : base;
+}
+
+/**
+ * Tabs for a leaderboard. Switching ordering returns to page 1: holding position
+ * would land the reader on page 40 of a board they have not seen the top of.
+ */
+function sortTabs(base, sort, nav) {
+  return el('div.board-tabs',
+    segmented(SORTS, sort, (v) => nav(listHref(base, { sort: v }))));
+}
+
 /** Empty chart state. Says what window was searched, so "nothing" is informative. */
 function emptyChart(granularity) {
   const window_ = {
     hourly: 'the last 30 days',
     daily: 'the last 5 years',
+    weekly: 'the last 5 years',
     monthly: 'any month on record',
   }[granularity] || 'this window';
   return el('div.chart-empty',
@@ -180,6 +233,8 @@ function productionStats(d, extra = []) {
  */
 function chartNote(granularity) {
   if (granularity === 'monthly') return `Months are UTC. Gaps are months with no production.`;
+  if (granularity === 'weekly')
+    return `Weeks start Sunday 00:00 UTC. Gaps are weeks with no production.`;
   if (granularity === 'daily') return `Days are UTC. Gaps are days with no production.`;
   return `Times are ${tzName()}. Gaps are hours with no production.`;
 }
@@ -223,11 +278,7 @@ function historyCard(title, fetcher) {
 
   controls.append(
     segmented(
-      [
-        { value: 'hourly', label: 'Hourly', title: 'One point per upstream publish' },
-        { value: 'daily', label: 'Daily' },
-        { value: 'monthly', label: 'Monthly' },
-      ],
+      GRANULARITIES,
       granularity,
       (v) => {
         granularity = v;
@@ -239,11 +290,7 @@ function historyCard(title, fetcher) {
   );
   function rebuildControls() {
     return segmented(
-      [
-        { value: 'hourly', label: 'Hourly', title: 'One point per upstream publish' },
-        { value: 'daily', label: 'Daily' },
-        { value: 'monthly', label: 'Monthly' },
-      ],
+      GRANULARITIES,
       granularity,
       (v) => {
         granularity = v;
@@ -331,18 +378,20 @@ export async function overview(view) {
 
 /* ---------------------------------------------------------------- teams --- */
 
-function teamTable(teams, { compact = false } = {}) {
+function teamTable(teams, { compact = false, sort = 'lifetime', offset = 0 } = {}) {
+  const metric = SORT_FIELD[sort];
   const head = el(
     'tr',
     el('th.left', 'Rank'),
     el('th.left', 'Team'),
     compact ? null : el('th', 'Members'),
+    metric ? el('th', metric.label) : null,
     el('th', 'Per day'),
     compact ? null : el('th', 'Last 24h'),
     el('th', 'Points')
   );
   const body = el('tbody');
-  for (const t of teams) {
+  teams.forEach((t, i) => {
     const idle = (t.points_per_day_7d_avg ?? 0) === 0;
     const nameLink = el('a', { href: `/teams/${t.team_id}` });
     nameText(nameLink, t.name);
@@ -350,34 +399,41 @@ function teamTable(teams, { compact = false } = {}) {
       el(
         'tr',
         { class: idle ? 'dim' : null },
-        el('td.rank', n(t.rank)),
+        // On a period board the position is the position in that board. The
+        // lifetime rank is a different number and showing it here would look like
+        // the ordering was simply broken.
+        metric
+          ? el('td.rank', { title: `Lifetime rank #${n(t.rank)}` }, n(offset + i + 1))
+          : el('td.rank', n(t.rank)),
         el('td.left.name-cell', tierMark(t.points_per_day_7d_avg), nameLink),
         compact ? null : el('td.num', { title: `${n(t.members_active)} active of ${n(t.members_total)}` },
           `${short(t.members_active)} / ${short(t.members_total)}`),
+        metric ? el('td.num.metric', { title: n(t[metric.key]) }, short(t[metric.key])) : null,
         el('td.num', { title: n(t.points_per_day_7d_avg) }, short(t.points_per_day_7d_avg)),
         compact ? null : el('td.num', { title: n(t.points_last_24h) }, short(t.points_last_24h)),
         el('td.num', { title: n(t.points_total) }, short(t.points_total))
       )
     );
-  }
+  });
   return el('div.table-wrap', el('table.data', el('thead', head), body));
 }
 
-export async function teamsList(view, { page = 1 }, nav) {
+export async function teamsList(view, { page = 1, sort = 'lifetime' }, nav) {
   loading(view);
   try {
-    const res = await api.teams({ page, per_page: PER_PAGE });
+    const res = await api.teams({ page, per_page: PER_PAGE, sort });
     clear(view);
     view.append(
       el('div.page-head',
         el('h1.page-title', 'Teams'),
-        el('p.page-sub', `${n(res.page.total_items)} teams, ranked by lifetime points.`))
+        el('p.page-sub', `${n(res.page.total_items)} teams, ranked by ${SORT_BLURB[sort]}.`),
+        sortTabs('/teams', sort, nav))
     );
     view.append(
       card(null,
-        teamTable(res.data),
+        teamTable(res.data, { sort, offset: (res.page.page - 1) * res.page.per_page }),
         pager(res.page.page, res.page.total_pages, res.page.total_items,
-          (p) => nav(`/teams?page=${p}`)))
+          (p) => nav(listHref('/teams', { page: p, sort }))))
     );
   } catch (err) {
     errorView(view, err);
@@ -503,9 +559,10 @@ function memberTable(members) {
 
 /* --------------------------------------------------------------- donors --- */
 
-function donorTable(donors, { compact = false } = {}) {
+function donorTable(donors, { compact = false, sort = 'lifetime', offset = 0 } = {}) {
+  const metric = SORT_FIELD[sort];
   const body = el('tbody');
-  for (const d of donors) {
+  donors.forEach((d, i) => {
     const idle = (d.points_per_day_7d_avg ?? 0) === 0;
     const nameLink = el('a', { href: `/donors/${encodeURIComponent(d.name)}` });
     nameText(nameLink, d.name);
@@ -520,15 +577,18 @@ function donorTable(donors, { compact = false } = {}) {
       el(
         'tr',
         { class: idle ? 'dim' : null },
-        el('td.rank', n(d.rank)),
+        metric
+          ? el('td.rank', { title: `Lifetime rank #${n(d.rank)}` }, n(offset + i + 1))
+          : el('td.rank', n(d.rank)),
         cell,
         compact ? null : el('td.num', n(d.team_count)),
+        metric ? el('td.num.metric', { title: n(d[metric.key]) }, short(d[metric.key])) : null,
         el('td.num', { title: n(d.points_per_day_7d_avg) }, short(d.points_per_day_7d_avg)),
         compact ? null : el('td.num', { title: n(d.points_last_24h) }, short(d.points_last_24h)),
         el('td.num', { title: n(d.points_total) }, short(d.points_total))
       )
     );
-  }
+  });
   return el(
     'div.table-wrap',
     el(
@@ -536,6 +596,7 @@ function donorTable(donors, { compact = false } = {}) {
       el('thead', el('tr',
         el('th.left', 'Rank'), el('th.left', 'Donor'),
         compact ? null : el('th', 'Teams'),
+        metric ? el('th', metric.label) : null,
         el('th', 'Per day'),
         compact ? null : el('th', 'Last 24h'),
         el('th', 'Points'))),
@@ -544,22 +605,23 @@ function donorTable(donors, { compact = false } = {}) {
   );
 }
 
-export async function donorsList(view, { page = 1 }, nav) {
+export async function donorsList(view, { page = 1, sort = 'lifetime' }, nav) {
   loading(view);
   try {
-    const res = await api.donors({ page, per_page: PER_PAGE });
+    const res = await api.donors({ page, per_page: PER_PAGE, sort });
     clear(view);
     view.append(
       el('div.page-head',
         el('h1.page-title', 'Donors'),
         el('p.page-sub',
-          `${n(res.page.total_items)} donors, ranked by lifetime points across every team they fold for.`))
+          `${n(res.page.total_items)} donors, ranked by ${SORT_BLURB[sort]} across every team they fold for.`),
+        sortTabs('/donors', sort, nav))
     );
     view.append(
       card(null,
-        donorTable(res.data),
+        donorTable(res.data, { sort, offset: (res.page.page - 1) * res.page.per_page }),
         pager(res.page.page, res.page.total_pages, res.page.total_items,
-          (p) => nav(`/donors?page=${p}`)))
+          (p) => nav(listHref('/donors', { page: p, sort }))))
     );
   } catch (err) {
     errorView(view, err);
@@ -679,11 +741,7 @@ function breakdownCard(donor, teams) {
   function renderControls() {
     clear(controls).append(
       segmented(
-        [
-          { value: 'hourly', label: 'Hourly' },
-          { value: 'daily', label: 'Daily' },
-          { value: 'monthly', label: 'Monthly' },
-        ],
+        GRANULARITIES,
         granularity,
         (v) => { granularity = v; load(); }
       )
@@ -938,11 +996,11 @@ export async function apiDocs(view) {
         endpoint('GET', '/v1/summary', 'Project-wide totals'),
         endpoint('GET', '/v1/status', 'Snapshot and corpus size'),
         endpoint('GET', '/v1/summary/history', 'Project-wide production over time'),
-        endpoint('GET', '/v1/teams', 'Team leaderboard, paginated'),
+        endpoint('GET', '/v1/teams', 'Team leaderboard, paginated. ?sort=lifetime|daily|weekly|monthly'),
         endpoint('GET', '/v1/teams/{id}', 'One team'),
         endpoint('GET', '/v1/teams/{id}/members', 'Team roster, ?active_only=true'),
-        endpoint('GET', '/v1/teams/{id}/history', '?granularity=hourly|daily|monthly'),
-        endpoint('GET', '/v1/donors', 'Donor leaderboard, paginated'),
+        endpoint('GET', '/v1/teams/{id}/history', '?granularity=hourly|daily|weekly|monthly'),
+        endpoint('GET', '/v1/donors', 'Donor leaderboard, paginated. ?sort=lifetime|daily|weekly|monthly'),
         endpoint('GET', '/v1/donors/{name}', 'Per-team breakdown, ?sort=production'),
         endpoint('GET', '/v1/donors/{name}/teams', 'Full team list, paginated'),
         endpoint('GET', '/v1/donors/{name}/history', '?team_id= to scope to one team, same granularities'),
@@ -963,6 +1021,23 @@ export async function apiDocs(view) {
         el('strong', 'Field names say what they mean. '),
         el('code', 'points_per_day_7d_avg'),
         ' is the last 7 days divided by 7 — the figure other sites label “24hr avg”, which it is not.'),
+      el('p',
+        el('strong', 'Calendar buckets are UTC, and weeks start Sunday. '),
+        el('code', 'points_today_utc'), ', ', el('code', 'points_this_week_utc'), ' and ',
+        el('code', 'points_this_month_utc'),
+        ' reset on their UTC boundary, as do the ', el('code', 'weekly'), ' and ',
+        el('code', 'monthly'), ' history buckets and the leaderboard ',
+        el('code', 'sort'), ' orderings. They are calendar periods, not rolling windows: ',
+        el('code', 'points_today_utc'), ' reads low just after midnight, while ',
+        el('code', 'points_last_24h'), ' is the rolling figure.'),
+      el('p',
+        el('strong', 'Rank movement is absent, not zero, when unknown. '),
+        el('code', 'rank_change_24h'),
+        ' is places gained over the last 24 hours, negative for places lost. It is omitted ' +
+        'entirely when there is nothing to compare against — the entity is newer than a day, ' +
+        'or the service has not yet watched for one. Zero means the rank genuinely held; ',
+        el('code', 'warming_up.rank_change_24h_unavailable'),
+        ' says when nobody can be compared yet.'),
       el('p',
         el('strong', 'Upstream does not publish on the hour. '),
         'The measured interval is about ', el('code', '3610s'), ' and drifts later every ' +

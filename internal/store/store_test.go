@@ -730,3 +730,133 @@ func TestCompactStillPrunesWithoutLosingRollups(t *testing.T) {
 		t.Errorf("daily total after compaction = %d, want 200", total)
 	}
 }
+
+func TestWeekBucketsAlignToSunday(t *testing.T) {
+	// Day 0 of the epoch is a Thursday, so the week index carries a three-day offset.
+	// Getting it wrong shifts every weekly bucket by part of a week, which reads as
+	// plausible data rather than as a fault — so this checks the boundary directly
+	// against the calendar over a span that crosses a year and a leap day.
+	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 900; i++ {
+		day := start.AddDate(0, 0, i)
+		at := weekBucketTime(WeekBucket(day))
+		if at.Weekday() != time.Sunday {
+			t.Fatalf("%s: week starts %s, want Sunday", day.Format("2006-01-02"), at.Weekday())
+		}
+		if at.After(day) || day.Sub(at) >= 7*24*time.Hour {
+			t.Fatalf("%s: mapped to week of %s, which does not contain it",
+				day.Format("2006-01-02"), at.Format("2006-01-02"))
+		}
+		// The two independent routes to the boundary — epoch arithmetic here, the
+		// weekday elsewhere — must not drift apart.
+		if got := startOfWeekUTC(day); !got.Equal(at) {
+			t.Fatalf("%s: startOfWeekUTC=%s but weekBucketTime=%s",
+				day.Format("2006-01-02"), got, at)
+		}
+	}
+}
+
+func TestWeeklyHistorySumsTheDailyRollup(t *testing.T) {
+	// Weekly is derived on read rather than stored, so the sum of a week's daily
+	// buckets is the assertion that matters: a bucket-boundary error would still
+	// return seven-ish days of data and look right.
+	st, err := Open(filepath.Join(t.TempDir(), "w.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	state := model.NewState()
+	ctx := context.Background()
+	// Sunday 2026-08-02 through the following Saturday, one cycle a day.
+	base := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	var want int64
+	score := int64(1000)
+	for i := 0; i < 7; i++ {
+		score += int64((i + 1) * 100)
+		if i > 0 {
+			want += int64((i + 1) * 100)
+		}
+		at := base.AddDate(0, 0, i)
+		cy := state.Apply(at,
+			[]parse.TeamRow{{ID: 7, Name: "t", Score: score, WUs: score / 10}},
+			[]parse.UserRow{{Name: "a", Score: score, WUs: score / 10, TeamID: 7}})
+		if err := st.WriteCycle(ctx, state, cy, CycleMeta{
+			TeamSnapshotAt: at, UserSnapshotAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pts, err := st.TeamHistory(ctx, 0, base.AddDate(0, 0, -1), base.AddDate(0, 0, 8), Weekly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pts) != 1 {
+		t.Fatalf("weekly points = %d, want 1 (all seven days fall in one week): %+v", len(pts), pts)
+	}
+	if pts[0].At.Weekday() != time.Sunday {
+		t.Errorf("bucket labelled %s, want a Sunday", pts[0].At.Format("2006-01-02 Mon"))
+	}
+	if pts[0].Points != want {
+		t.Errorf("weekly total = %d, want %d", pts[0].Points, want)
+	}
+
+	// The same range at daily granularity must sum to the same figure — the weekly
+	// bucket is a regrouping, never a different number.
+	daily, err := st.TeamHistory(ctx, 0, base.AddDate(0, 0, -1), base.AddDate(0, 0, 8), Daily)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sum int64
+	for _, p := range daily {
+		sum += p.Points
+	}
+	if sum != pts[0].Points {
+		t.Errorf("daily sums to %d but weekly reports %d", sum, pts[0].Points)
+	}
+}
+
+func TestMonthTotalsIndexBySlot(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "m.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	state := model.NewState()
+	ctx := context.Background()
+	at1 := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	at2 := at1.AddDate(0, 0, 3)
+	for i, at := range []time.Time{at1, at2} {
+		score := int64(500 * (i + 1))
+		cy := state.Apply(at,
+			[]parse.TeamRow{{ID: 7, Name: "t", Score: score, WUs: 1}},
+			[]parse.UserRow{{Name: "a", Score: score, WUs: 1, TeamID: 7}})
+		if err := st.WriteCycle(ctx, state, cy, CycleMeta{
+			TeamSnapshotAt: at, UserSnapshotAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	totals, err := st.MonthTotals(ctx, "team", at2, len(state.Teams))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(totals) != 1 {
+		t.Fatalf("totals sized %d, want 1 per team slot", len(totals))
+	}
+	// First sighting is not production, so only the second cycle's 500 counts.
+	if totals[0] != 500 {
+		t.Errorf("team month-to-date = %d, want 500", totals[0])
+	}
+
+	// A month with no rows must come back as zeros sized to the corpus, not short —
+	// the leaderboard indexes it by slot.
+	empty, err := st.MonthTotals(ctx, "team", at2.AddDate(0, 2, 0), len(state.Teams))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty) != 1 || empty[0] != 0 {
+		t.Errorf("empty month = %v, want [0]", empty)
+	}
+}

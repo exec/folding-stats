@@ -397,7 +397,8 @@ export function legend(container, labels) {
 export function densify(points, granularity, { limit = 5000, until } = {}) {
   if (points.length < 2) return padLone(points, granularity, limit, until);
 
-  const step = granularity === 'daily' ? 86400e3 : 3600e3;
+  const step =
+    granularity === 'weekly' ? 7 * 86400e3 : granularity === 'daily' ? 86400e3 : 3600e3;
   const next = (t) => {
     if (granularity === 'monthly') {
       const d = new Date(t);

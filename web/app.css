@@ -373,6 +373,15 @@ main { max-width: var(--wide); margin: 0 auto; padding: var(--s6) var(--s5) var(
 .stat-move { color: var(--ink-muted); }
 .stat-move .delta { font-weight: 600; }
 
+/* Leaderboard period tabs. They sit under the page subtitle and wrap on narrow
+   viewports rather than shrinking the hit target. */
+.board-tabs { margin-top: var(--s4); }
+.board-tabs .seg { flex-wrap: wrap; }
+
+/* The column a period board is sorted by, emphasised so the ordering is legible as
+   an ordering rather than looking arbitrary next to the lifetime total. */
+.data td.metric { color: var(--ink); font-weight: 600; }
+
 /* --------------------------------------------------------------- tables --- */
 
 /* Deliberately NOT a scroll container on wide screens.

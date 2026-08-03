@@ -73,7 +73,8 @@ CREATE INDEX IF NOT EXISTS member_deltas_ts ON member_deltas(ts);
 CREATE INDEX IF NOT EXISTS team_deltas_ts ON team_deltas(ts);
 
 -- Rollups. bucket is a UTC day number (unix/86400) for daily, the day number of
--- the week's Monday for weekly, and year*12+month for monthly.
+-- the week's Sunday for weekly, and year*12+month for monthly. Weekly has no table:
+-- it is summed from daily on read, since a week is exactly seven day buckets.
 CREATE TABLE IF NOT EXISTS member_daily (
     member_id INTEGER NOT NULL, bucket INTEGER NOT NULL,
     points INTEGER NOT NULL, wus INTEGER NOT NULL,

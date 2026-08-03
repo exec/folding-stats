@@ -275,11 +275,19 @@ func startOfDay(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
 }
 
-// startOfWeek returns 00:00 UTC on the Monday of t's week. ISO weeks start Monday;
-// EOC buckets on Sunday, but we are not reproducing their calendar (see R14 on
-// serving UTC rather than their hard-coded Central time).
+// startOfWeek returns 00:00 UTC on the Sunday of t's week.
+//
+// This was ISO (Monday) on the reasoning that we are not obliged to reproduce EOC's
+// calendar. That was the wrong call for one reason: donors reconcile these figures
+// against EOC, which buckets on Sunday, and a weekly total that silently covers a
+// different seven days than the site being compared against is worse than an opinion
+// about which weekday is correct. The boundary is still UTC (R14) — only the weekday
+// moved.
+//
+// One definition of "week" serves the whole system: points_this_week_utc, the weekly
+// history buckets and the Weekly leaderboard all start here. Two definitions would let
+// the same response disagree with itself about a period it names.
 func startOfWeek(t time.Time) time.Time {
 	d := startOfDay(t)
-	offset := (int(d.Weekday()) + 6) % 7 // Monday == 0
-	return d.AddDate(0, 0, -offset)
+	return d.AddDate(0, 0, -int(d.Weekday())) // time.Sunday == 0
 }

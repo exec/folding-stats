@@ -96,13 +96,24 @@ trackHeaderHeight();
 
 /* --------------------------------------------------------------- router --- */
 
+// Leaderboard orderings, validated here rather than passed through: a hand-typed
+// ?sort= would otherwise reach the API, come back 400, and render as an error page
+// where the honest answer is the default board.
+const SORT_VALUES = ['lifetime', 'daily', 'weekly', 'monthly'];
+const sortParam = (q) => {
+  const v = q.get('sort');
+  return SORT_VALUES.includes(v) ? v : 'lifetime';
+};
+
 const routes = [
   [/^\/$/, () => views.home(view)],
   [/^\/overview\/?$/, () => views.overview(view)],
   [/^\/blog\/([^/]+)\/?$/, (m) => views.postPage(view, { slug: decodeURIComponent(m[1]) })],
-  [/^\/teams\/?$/, (m, q) => views.teamsList(view, { page: +(q.get('page') || 1) }, navigate)],
+  [/^\/teams\/?$/, (m, q) =>
+    views.teamsList(view, { page: +(q.get('page') || 1), sort: sortParam(q) }, navigate)],
   [/^\/teams\/([^/]+)\/?$/, (m) => views.teamDetail(view, { id: decodeURIComponent(m[1]) }, navigate)],
-  [/^\/donors\/?$/, (m, q) => views.donorsList(view, { page: +(q.get('page') || 1) }, navigate)],
+  [/^\/donors\/?$/, (m, q) =>
+    views.donorsList(view, { page: +(q.get('page') || 1), sort: sortParam(q) }, navigate)],
   [/^\/donors\/(.+?)\/?$/, (m) => views.donorDetail(view, { name: decodeURIComponent(m[1]) }, navigate)],
   [/^\/search\/?$/, (m, q) => views.searchPage(view, { q: q.get('q') || '' }, navigate)],
   [/^\/api\/?$/, () => views.apiDocs(view)],

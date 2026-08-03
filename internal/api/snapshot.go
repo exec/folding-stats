@@ -44,6 +44,12 @@ type Snapshot struct {
 	Members *metrics.Window
 	Teams   *metrics.Window
 
+	// TeamMonth and MemberMonth are month-to-date production, indexed by slot. The
+	// rolling windows cover seven days, so the calendar month is the one period
+	// figure that has to come from the rollup tables rather than from memory.
+	TeamMonth   []int64
+	MemberMonth []int64
+
 	// At is the upstream publish time this snapshot reflects, and NextExpected is
 	// when the following one should arrive. Serving both lets clients cache
 	// precisely rather than polling blindly.

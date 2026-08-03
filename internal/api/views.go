@@ -20,6 +20,16 @@ func roundDiv7(v int64) int64 {
 	return (v + 3) / 7
 }
 
+// rollup reads a per-slot total defensively: the month figures are sized when a cycle
+// is ingested, so a view built between a corpus growing and the next refresh would
+// otherwise index past the end.
+func rollup(s []int64, slot int32) int64 {
+	if slot < 0 || int(slot) >= len(s) {
+		return 0
+	}
+	return s[slot]
+}
+
 // change turns the table's (value, known) pair into a field that marshals to null-by-
 // omission when there is nothing to report.
 func change(v int32, ok bool) *int32 {
@@ -40,14 +50,15 @@ func (s *Snapshot) teamView(slot int32) Team {
 		MembersTotal:  total,
 		MembersActive: active,
 		Production: Production{
-			PointsTotal:       t.Score,
-			WUsTotal:          t.WUs,
-			PointsLastUpdate:  s.Teams.LastUpdate(slot),
-			PointsLast24h:     s.Teams.Last24h(slot),
-			PointsLast7d:      s.Teams.Last7d(slot),
-			PointsTodayUTC:    s.Teams.Today(slot),
-			PointsThisWeekUTC: s.Teams.ThisWeek(slot),
-			PointsPerDay7dAvg: s.Teams.PointsPerDay(slot),
+			PointsTotal:        t.Score,
+			WUsTotal:           t.WUs,
+			PointsLastUpdate:   s.Teams.LastUpdate(slot),
+			PointsLast24h:      s.Teams.Last24h(slot),
+			PointsLast7d:       s.Teams.Last7d(slot),
+			PointsTodayUTC:     s.Teams.Today(slot),
+			PointsThisWeekUTC:  s.Teams.ThisWeek(slot),
+			PointsThisMonthUTC: rollup(s.TeamMonth, slot),
+			PointsPerDay7dAvg:  s.Teams.PointsPerDay(slot),
 		},
 	}
 }
@@ -61,14 +72,15 @@ func (s *Snapshot) memberView(slot int32, withTeamName bool) Member {
 		RankInTeam:    s.Ranks.InTeamRank[slot],
 		RankChange24h: change(s.Ranks.MemberChange24h(slot)),
 		Production: Production{
-			PointsTotal:       m.Score,
-			WUsTotal:          m.WUs,
-			PointsLastUpdate:  s.Members.LastUpdate(slot),
-			PointsLast24h:     s.Members.Last24h(slot),
-			PointsLast7d:      s.Members.Last7d(slot),
-			PointsTodayUTC:    s.Members.Today(slot),
-			PointsThisWeekUTC: s.Members.ThisWeek(slot),
-			PointsPerDay7dAvg: s.Members.PointsPerDay(slot),
+			PointsTotal:        m.Score,
+			WUsTotal:           m.WUs,
+			PointsLastUpdate:   s.Members.LastUpdate(slot),
+			PointsLast24h:      s.Members.Last24h(slot),
+			PointsLast7d:       s.Members.Last7d(slot),
+			PointsTodayUTC:     s.Members.Today(slot),
+			PointsThisWeekUTC:  s.Members.ThisWeek(slot),
+			PointsThisMonthUTC: rollup(s.MemberMonth, slot),
+			PointsPerDay7dAvg:  s.Members.PointsPerDay(slot),
 		},
 	}
 	// On a donor's breakdown the team name is what identifies each row, but on a
@@ -105,6 +117,8 @@ func (s *Snapshot) donorView(idx int32, withTeams bool) Donor {
 		out.PointsTodayUTC += s.Members.Today(slot)
 		out.PointsThisWeekUTC += s.Members.ThisWeek(slot)
 	}
+	// Already summed across this donor's members when the periods were built.
+	out.PointsThisMonthUTC = s.Ranks.DonorMonth(idx)
 	// Averaging the summed week, not summing per-member averages: rounding each
 	// member separately then adding would drift by up to half a point per team.
 	out.PointsPerDay7dAvg = roundDiv7(out.PointsLast7d)

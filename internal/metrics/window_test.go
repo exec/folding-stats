@@ -125,22 +125,34 @@ func TestTodayResetsAtUTCMidnight(t *testing.T) {
 	}
 }
 
-func TestThisWeekResetsOnMonday(t *testing.T) {
+// sun is 2026-08-02, the Sunday before mon's Monday.
+func sun(h int) time.Time {
+	return time.Date(2026, 8, 2, h, 0, 0, 0, time.UTC)
+}
+
+func TestThisWeekResetsOnSunday(t *testing.T) {
 	w := New(2)
-	// Sunday, the day before our Monday reference.
-	sun := mon(0).Add(-6 * time.Hour)
-	w.Push(sun, deltas(d(0, 900)))
+	// Saturday: the last day of the preceding week.
+	sat := sun(0).Add(-6 * time.Hour)
+	w.Push(sat, deltas(d(0, 900)))
 	if got := w.ThisWeek(0); got != 900 {
-		t.Fatalf("ThisWeek on Sunday = %d, want 900", got)
+		t.Fatalf("ThisWeek on Saturday = %d, want 900", got)
 	}
 
-	w.Push(mon(1), deltas(d(0, 40)))
+	w.Push(sun(1), deltas(d(0, 40)))
 	if got := w.ThisWeek(0); got != 40 {
-		t.Errorf("ThisWeek after Monday rollover = %d, want 40", got)
+		t.Errorf("ThisWeek after Sunday rollover = %d, want 40", got)
 	}
-	// On Monday, Today and ThisWeek necessarily agree.
+	// On the first day of the week, Today and ThisWeek necessarily agree.
 	if w.Today(0) != w.ThisWeek(0) {
-		t.Errorf("Today=%d ThisWeek=%d, want equal on Monday", w.Today(0), w.ThisWeek(0))
+		t.Errorf("Today=%d ThisWeek=%d, want equal on Sunday", w.Today(0), w.ThisWeek(0))
+	}
+
+	// Monday now continues the week that Sunday opened. This is the boundary that
+	// moved off ISO, and it is the assertion that fails if it ever moves back.
+	w.Push(mon(1), deltas(d(0, 5)))
+	if got := w.ThisWeek(0); got != 45 {
+		t.Errorf("ThisWeek on the Monday after = %d, want 45 (same week as Sunday)", got)
 	}
 }
 

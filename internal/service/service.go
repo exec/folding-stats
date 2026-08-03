@@ -57,9 +57,28 @@ type Service struct {
 	// the poll schedule and the next_expected_at the API advertises.
 	cadence *cadence
 
+	// Month-to-date production, indexed by team slot and member slot. Refreshed on
+	// ingest because that is the only thing that changes it: the rollup tables are
+	// updated inside the cycle's own transaction.
+	teamMonth   []int64
+	memberMonth []int64
+
+	// tbl is the published ranking, kept so a Refresh that ingested nothing does not
+	// rebuild it. The table is a pure function of state, and state only moves on
+	// ingest — but Refresh runs every five minutes, so rebuilding unconditionally
+	// spent a full sort of 2.7M members twelve times an hour to produce the identical
+	// answer. tblAt is the state it was built from.
+	tbl   *rank.Table
+	tblAt time.Time
+
 	// guard serialises mutation of state and the windows against API reads, which
 	// serve directly from those structures rather than from a copy.
 	guard sync.RWMutex
+	// publishMu serialises publishes against each other. Ingest and the periodic
+	// refresh both call publish from their own goroutines, and guard is held for
+	// reading there — which admits concurrent holders and so cannot protect the
+	// table cache from being written twice.
+	publishMu sync.Mutex
 }
 
 // New returns a Service with identity restored from the store.
@@ -94,6 +113,7 @@ func New(archive *feed.Archive, st *store.Store, srv *api.Server, log *slog.Logg
 		return nil, fmt.Errorf("service: restoring windows: %w", err)
 	}
 	s.observeCadence(ctx)
+	s.refreshMonthTotals(ctx)
 
 	s.Log.Info("state restored",
 		"members", len(s.state.Members), "teams", len(s.state.Teams),
@@ -206,6 +226,7 @@ func (s *Service) Ingest(ctx context.Context) (int, error) {
 		// Each new cycle is another interval observed, so the prediction sharpens as
 		// the drift moves rather than being fixed at startup.
 		s.observeCadence(ctx)
+		s.refreshMonthTotals(ctx)
 	}
 	if n > 0 || s.Server.Current() == nil {
 		s.publish()
@@ -257,9 +278,12 @@ func (s *Service) applyCycle(ctx context.Context, p snapshotPair) error {
 	return nil
 }
 
-// publish rebuilds the ranked view and swaps it in.
+// publish rebuilds the ranked view when the corpus has moved, and swaps it in.
 func (s *Service) publish() {
 	start := time.Now()
+
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
 
 	// Read lock: building the ranked view only reads state, but it must not run
 	// while a cycle is mutating it. Refresh calls this from a different goroutine
@@ -267,8 +291,13 @@ func (s *Service) publish() {
 	s.guard.RLock()
 	defer s.guard.RUnlock()
 
-	tbl := rank.Build(s.state, s.state.At, rank.DefaultConfig)
-	tbl.BuildChange24h(s.state, s.memberWin, s.teamWin)
+	if s.tbl == nil || !s.tblAt.Equal(s.state.At) {
+		tbl := rank.Build(s.state, s.state.At, rank.DefaultConfig)
+		tbl.BuildChange24h(s.state, s.memberWin, s.teamWin)
+		tbl.BuildPeriods(s.state, s.memberWin, s.teamWin, s.teamMonth, s.memberMonth)
+		s.tbl, s.tblAt = tbl, s.state.At
+	}
+	tbl := s.tbl
 
 	next := s.cadence.NextAfter(s.state.At)
 	// The ETag identifies the snapshot; the cycle time is exactly that identity.
@@ -277,6 +306,7 @@ func (s *Service) publish() {
 	snap := api.Build(s.state, s.memberWin, s.teamWin, tbl, s.Store,
 		s.state.At, next, etag)
 	snap.Guard = &s.guard
+	snap.TeamMonth, snap.MemberMonth = s.teamMonth, s.memberMonth
 	snap.StaleAfter = next.Add(staleGrace)
 	snap.Interval = s.cadence.Interval()
 	snap.IntervalMeasured = s.cadence.Measured()
@@ -323,6 +353,31 @@ func readUsers(s feed.Snapshot) ([]parse.UserRow, parse.Stats, error) {
 		rows = append(rows, sc.Row())
 	}
 	return rows, sc.Stats(), sc.Err()
+}
+
+// refreshMonthTotals reloads month-to-date production for the leaderboards.
+//
+// Like the cadence estimate, this is an enrichment over a working fallback: a failed
+// read leaves the previous month totals in place and logs, rather than failing an
+// ingest that has already been written. The Monthly tab then lags by a cycle, which
+// is a far better outcome than a cycle that did not land.
+func (s *Service) refreshMonthTotals(ctx context.Context) {
+	if s.state.At.IsZero() {
+		return
+	}
+	teamMonth, err := s.Store.MonthTotals(ctx, "team", s.state.At, len(s.state.Teams))
+	if err != nil {
+		s.Log.Warn("month totals: teams", "err", err)
+		return
+	}
+	memberMonth, err := s.Store.MonthTotals(ctx, "member", s.state.At, len(s.state.Members))
+	if err != nil {
+		s.Log.Warn("month totals: members", "err", err)
+		return
+	}
+	s.guard.Lock()
+	s.teamMonth, s.memberMonth = teamMonth, memberMonth
+	s.guard.Unlock()
 }
 
 // observeCadence refreshes the publish-interval estimate from the stored cycles.

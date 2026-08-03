@@ -28,6 +28,13 @@ const (
 	// deltas are pruned.
 	Daily   Granularity = "daily"
 	Monthly Granularity = "monthly"
+	// Weekly is summed from the daily rollup on read rather than materialised.
+	//
+	// A week is exactly seven day buckets, so there is nothing a weekly table would
+	// hold that daily does not already — it would be a second copy to keep correct
+	// through replay and compaction for no new information. Monthly is materialised
+	// only because it has to outlive daily once the retention window prunes it.
+	Weekly Granularity = "weekly"
 )
 
 // Point is one bucket of production.
@@ -47,6 +54,44 @@ func MonthBucket(t time.Time) int64 {
 	t = t.UTC()
 	return int64(t.Year())*12 + int64(t.Month()) - 1
 }
+
+// firstSundayDay is the day bucket of 1970-01-04, the first Sunday of the epoch.
+//
+// Day 0 is a Thursday, so week boundaries are offset by three days rather than
+// falling on a multiple of seven. Getting this wrong shifts every weekly bucket by
+// half a week, which looks like plausible data rather than like a bug.
+const firstSundayDay = 3
+
+// WeekBucket returns a dense index for the Sunday-start UTC week containing t.
+func WeekBucket(t time.Time) int64 { return weekOfDay(DayBucket(t)) }
+
+func weekOfDay(day int64) int64 {
+	d := day - firstSundayDay
+	// Go truncates integer division toward zero, so a plain d/7 would map the days
+	// before the epoch's first Sunday onto week 0 alongside the days after it.
+	if d < 0 {
+		return -((-d + 6) / 7)
+	}
+	return d / 7
+}
+
+func weekBucketTime(b int64) time.Time {
+	return time.Unix((b*7+firstSundayDay)*secondsPerDay, 0).UTC()
+}
+
+// startOfWeekUTC returns 00:00 UTC on the Sunday of t's week, matching
+// metrics.startOfWeek. Derived from the weekday rather than from firstSundayDay so
+// the two independent routes to the same boundary have to agree — which
+// TestWeekBucketsAlignToSunday checks.
+func startOfWeekUTC(t time.Time) time.Time {
+	t = t.UTC()
+	d := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+	return d.AddDate(0, 0, -int(d.Weekday())) // time.Sunday == 0
+}
+
+// endOfWeekUTC returns the last day of t's week, so DayBucket of it is the inclusive
+// upper day bucket for that week.
+func endOfWeekUTC(t time.Time) time.Time { return startOfWeekUTC(t).AddDate(0, 0, 6) }
 
 func monthBucketTime(b int64) time.Time {
 	return time.Date(int(b/12), time.Month(b%12+1), 1, 0, 0, 0, 0, time.UTC)
@@ -100,6 +145,20 @@ func (s *Store) history(ctx context.Context, kind string, id int64, from, to tim
 			`SELECT bucket, points, wus FROM %s_monthly WHERE %s = ? AND bucket >= ? AND bucket <= ? ORDER BY bucket`,
 			kind, idCol)
 		lo, hi = MonthBucket(from), MonthBucket(to)
+	case Weekly:
+		// Summed from daily on read. The filter stays on the raw day bucket so the
+		// clustered (entity, bucket) key still drives the scan — grouping on the
+		// derived week expression alone would force a full per-entity scan.
+		query = fmt.Sprintf(
+			`SELECT (bucket - %d) / 7 AS wk, SUM(points), SUM(wus)
+			   FROM %s_daily
+			  WHERE %s = ? AND bucket >= ? AND bucket <= ?
+			  GROUP BY wk ORDER BY wk`,
+			firstSundayDay, kind, idCol)
+		// Widened to whole weeks: a range starting mid-week still belongs to that
+		// week's bucket, and reporting a partial sum under a full week's label would
+		// be a quietly wrong number rather than a missing one.
+		lo, hi = DayBucket(startOfWeekUTC(from)), DayBucket(endOfWeekUTC(to))
 	default:
 		return nil, fmt.Errorf("store: unknown granularity %q", g)
 	}
@@ -122,6 +181,8 @@ func (s *Store) history(ctx context.Context, kind string, id int64, from, to tim
 			at = time.Unix(bucket, 0).UTC()
 		case Daily:
 			at = time.Unix(bucket*secondsPerDay, 0).UTC()
+		case Weekly:
+			at = weekBucketTime(bucket)
 		case Monthly:
 			at = monthBucketTime(bucket)
 		}
@@ -341,11 +402,55 @@ func bucketTime(b int64, g Granularity) time.Time {
 	switch g {
 	case Daily:
 		return time.Unix(b*secondsPerDay, 0).UTC()
+	case Weekly:
+		return weekBucketTime(b)
 	case Monthly:
 		return monthBucketTime(b)
 	default:
 		return time.Unix(b, 0).UTC()
 	}
+}
+
+// MonthTotals returns production so far in the UTC calendar month containing at,
+// indexed by member id or team slot, sized to n.
+//
+// This is what the Monthly leaderboard ranks by, and the only period figure that
+// cannot come from memory: the rolling windows span seven days, so a month is beyond
+// them by design. The rollup table already holds it — rollupCycle refreshes the
+// current month's bucket on every cycle — so this is a read of one bucket rather
+// than an aggregation.
+//
+// Only entities that produced this month have a row, which is the point: the result
+// is dense for indexing but the scan is proportional to who was active, not to the
+// 2.7M members who were not.
+func (s *Store) MonthTotals(ctx context.Context, kind string, at time.Time, n int) ([]int64, error) {
+	idCol := "member_id"
+	if kind == "team" {
+		idCol = "slot"
+	}
+	out := make([]int64, n)
+	if n == 0 {
+		return out, nil
+	}
+	rows, err := s.query(ctx, fmt.Sprintf(
+		`SELECT %s, points FROM %s_monthly WHERE bucket = ?`, idCol, kind), MonthBucket(at))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var pts int64
+		if err := rows.Scan(&id, &pts); err != nil {
+			return nil, err
+		}
+		// A compaction or replay could in principle name an id beyond the corpus the
+		// caller sized for; skip rather than panic on a bounds check.
+		if id >= 0 && int(id) < n {
+			out[id] = pts
+		}
+	}
+	return out, rows.Err()
 }
 
 // rollupCycle refreshes the daily and monthly buckets touched by a cycle.
@@ -413,7 +518,7 @@ func rollupCycle(ctx context.Context, tx *sql.Tx, at time.Time) error {
 func (s *Store) ProjectHistory(ctx context.Context, from, to time.Time, g Granularity) ([]Point, error) {
 	g = g.Normalize()
 
-	var table, bucketCol, pointsCol, wusCol string
+	var table, bucketCol, groupCol, pointsCol, wusCol string
 	var lo, hi int64
 	upper := "<="
 	switch g {
@@ -424,18 +529,27 @@ func (s *Store) ProjectHistory(ctx context.Context, from, to time.Time, g Granul
 	case Daily:
 		table, bucketCol, pointsCol, wusCol = "team_daily", "bucket", "points", "wus"
 		lo, hi = DayBucket(from), DayBucket(to)
+	case Weekly:
+		// Filtered on the day bucket, grouped by the week it falls in — see the
+		// matching note in history().
+		table, bucketCol, pointsCol, wusCol = "team_daily", "bucket", "points", "wus"
+		groupCol = fmt.Sprintf("(bucket - %d) / 7", firstSundayDay)
+		lo, hi = DayBucket(startOfWeekUTC(from)), DayBucket(endOfWeekUTC(to))
 	case Monthly:
 		table, bucketCol, pointsCol, wusCol = "team_monthly", "bucket", "points", "wus"
 		lo, hi = MonthBucket(from), MonthBucket(to)
 	default:
 		return nil, fmt.Errorf("store: unknown granularity %q", g)
 	}
+	if groupCol == "" {
+		groupCol = bucketCol
+	}
 
 	rows, err := s.query(ctx, fmt.Sprintf(
-		`SELECT %[1]s, SUM(%[2]s), SUM(%[3]s) FROM %[4]s
-		  WHERE %[1]s >= ? AND %[1]s %[5]s ?
-		  GROUP BY %[1]s ORDER BY %[1]s`,
-		bucketCol, pointsCol, wusCol, table, upper), lo, hi)
+		`SELECT %[1]s AS b, SUM(%[2]s), SUM(%[3]s) FROM %[4]s
+		  WHERE %[6]s >= ? AND %[6]s %[5]s ?
+		  GROUP BY b ORDER BY b`,
+		groupCol, pointsCol, wusCol, table, upper, bucketCol), lo, hi)
 	if err != nil {
 		return nil, err
 	}

@@ -101,7 +101,153 @@ type Table struct {
 	teamBaseline   int32
 	donorKnown     []bool
 
+	// Period orders for the leaderboard tabs, best-first, parallel to TeamOrder and
+	// to Donors. Nil until BuildPeriods runs.
+	//
+	// Only the ordering is kept, not a rank per entity: a leaderboard page is a slice
+	// of the order, and a position is its index. Storing a rank array per period as
+	// well would triple this for a number the page already knows.
+	teamPeriod  map[Period][]int32
+	donorPeriod map[Period][]int32
+
+	// donorMonth is each donor's month-to-date total, summed from its members. Kept
+	// because it is the sort key the API also has to report — recomputing it per
+	// response would mean re-walking every member of the donor.
+	donorMonth []int64
+
 	buf sortBuf
+}
+
+// Period selects which production window a leaderboard is ordered by.
+type Period string
+
+const (
+	// Lifetime is cumulative score, the default and the only ordering that is not a
+	// rate.
+	Lifetime Period = "lifetime"
+	// Daily, Weekly and Monthly are calendar buckets in UTC, not rolling windows —
+	// the same buckets points_today_utc, points_this_week_utc and
+	// points_this_month_utc report. So Daily resets at 00:00 UTC and reads low just
+	// after midnight, which is correct: it answers "produced today", not "produced
+	// in the last 24 hours". Last24h remains the rolling figure.
+	Daily   Period = "daily"
+	Weekly  Period = "weekly"
+	Monthly Period = "monthly"
+)
+
+// ValidPeriod reports whether p names a leaderboard ordering.
+func ValidPeriod(p Period) bool {
+	switch p {
+	case Lifetime, Daily, Weekly, Monthly:
+		return true
+	}
+	return false
+}
+
+// BuildPeriods computes the leaderboard orderings for the non-lifetime tabs.
+//
+// teamMonth and memberMonth are month-to-date totals indexed by team slot and member
+// slot; the daily and weekly figures come from the rolling windows, which already
+// maintain calendar buckets. A nil or short month slice yields an empty Monthly
+// ordering rather than a wrong one.
+func (t *Table) BuildPeriods(st *model.State, members, teams *metrics.Window,
+	teamMonth, memberMonth []int64) {
+
+	t.teamPeriod = map[Period][]int32{}
+	t.donorPeriod = map[Period][]int32{}
+
+	teamScore := func(get func(int32) int64) []int64 {
+		out := make([]int64, len(st.Teams))
+		for i := range st.Teams {
+			out[i] = get(int32(i))
+		}
+		return out
+	}
+	t.teamPeriod[Daily] = t.orderBy(teamScore(teams.Today))
+	t.teamPeriod[Weekly] = t.orderBy(teamScore(teams.ThisWeek))
+	t.teamPeriod[Monthly] = t.orderBy(indexed(teamMonth, len(st.Teams)))
+
+	// Donor figures aggregate across the donor's members, the same read-time view
+	// buildDonors takes for lifetime totals.
+	donorDay := make([]int64, len(t.Donors))
+	donorWeek := make([]int64, len(t.Donors))
+	donorMonth := make([]int64, len(t.Donors))
+	month := indexed(memberMonth, len(st.Members))
+	for slot := range st.Members {
+		d := t.DonorIndex[st.Members[slot].NameID]
+		if d < 0 {
+			continue
+		}
+		donorDay[d] += members.Today(int32(slot))
+		donorWeek[d] += members.ThisWeek(int32(slot))
+		donorMonth[d] += month[slot]
+	}
+	t.teamPeriod[Lifetime] = t.TeamOrder
+	t.donorPeriod[Lifetime] = identity(len(t.Donors)) // Donors is already rank-ordered
+	t.donorPeriod[Daily] = t.orderBy(donorDay)
+	t.donorPeriod[Weekly] = t.orderBy(donorWeek)
+	t.donorPeriod[Monthly] = t.orderBy(donorMonth)
+	t.donorMonth = donorMonth
+
+	t.buf = sortBuf{}
+}
+
+// orderBy sorts ids best-first by score. The radix scratch aliases across calls, so
+// the result is copied out.
+func (t *Table) orderBy(scores []int64) []int32 {
+	if len(scores) == 0 {
+		return nil
+	}
+	return append([]int32(nil), sortDescByScore(scores, &t.buf)...)
+}
+
+// indexed returns s sized to exactly n, so a short or absent rollup degrades to zeros
+// rather than to an out-of-range read.
+func indexed(s []int64, n int) []int64 {
+	if len(s) == n {
+		return s
+	}
+	out := make([]int64, n)
+	copy(out, s)
+	return out
+}
+
+func identity(n int) []int32 {
+	out := make([]int32, n)
+	for i := range out {
+		out[i] = int32(i)
+	}
+	return out
+}
+
+// TeamOrderFor returns team slots ordered best-first for the period.
+func (t *Table) TeamOrderFor(p Period) []int32 {
+	if p == Lifetime || t.teamPeriod == nil {
+		return t.TeamOrder
+	}
+	if o, ok := t.teamPeriod[p]; ok {
+		return o
+	}
+	return t.TeamOrder
+}
+
+// DonorOrderFor returns donor indices ordered best-first for the period. For Lifetime
+// this is the identity, because Donors is stored in lifetime order.
+func (t *Table) DonorOrderFor(p Period) []int32 {
+	if p != Lifetime && t.donorPeriod != nil {
+		if o, ok := t.donorPeriod[p]; ok {
+			return o
+		}
+	}
+	return identity(len(t.Donors))
+}
+
+// DonorMonth is a donor's month-to-date production.
+func (t *Table) DonorMonth(i int32) int64 {
+	if i < 0 || int(i) >= len(t.donorMonth) {
+		return 0
+	}
+	return t.donorMonth[i]
 }
 
 // Build computes every ranked view from the current state.

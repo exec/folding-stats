@@ -107,11 +107,11 @@ Every response carries a `snapshot` block describing freshness, then the data.
 | `GET` | `/v1/status` | snapshot and corpus size. `no-store` — never cached |
 | `GET` | `/v1/summary` | project-wide totals |
 | `GET` | `/v1/summary/history` | project production over time |
-| `GET` | `/v1/teams` | team leaderboard, paginated |
+| `GET` | `/v1/teams` | team leaderboard, paginated. `?sort=lifetime\|daily\|weekly\|monthly` |
 | `GET` | `/v1/teams/{id}` | one team |
 | `GET` | `/v1/teams/{id}/members` | roster, `?active_only=true` |
-| `GET` | `/v1/teams/{id}/history` | `?granularity=hourly\|daily\|monthly` |
-| `GET` | `/v1/donors` | donor leaderboard, paginated |
+| `GET` | `/v1/teams/{id}/history` | `?granularity=hourly\|daily\|weekly\|monthly` |
+| `GET` | `/v1/donors` | donor leaderboard, paginated. `?sort=lifetime\|daily\|weekly\|monthly` |
 | `GET` | `/v1/donors/{name}` | one donor, `?sort=production` |
 | `GET` | `/v1/donors/{name}/teams` | full team list, paginated |
 | `GET` | `/v1/donors/{name}/history` | `?team_id=` to scope to one team |
@@ -127,6 +127,17 @@ Every response carries a `snapshot` block describing freshness, then the data.
 - **Compare timestamps against `server_time`**, not your own clock. Unsynced client
   clocks are routinely minutes out, and every relative figure derived from one is wrong
   by exactly that much.
+- **Calendar buckets are UTC, and weeks start Sunday.** `points_today_utc`,
+  `points_this_week_utc` and `points_this_month_utc` reset on their UTC boundary, as do
+  the `weekly` and `monthly` history buckets and the leaderboard `sort` orderings.
+  These are calendar periods, not rolling windows: `points_today_utc` reads low just
+  after midnight, while `points_last_24h` is the rolling figure. Weeks were ISO
+  (Monday) before 2026-08-03; they start Sunday now, matching the site most donors
+  reconcile against.
+- **Leaderboards can be ordered by period.** `?sort=` on `/v1/teams` and `/v1/donors`
+  takes `lifetime` (default), `daily`, `weekly` or `monthly`. The `rank` field is
+  always the lifetime rank, so under a period sort a row's position in the returned
+  list is its rank for that period — position is `(page - 1) * per_page + index + 1`.
 - **`rank_change_24h` is absent, not zero, when it is unknown.** Teams, donors and
   members carry places gained over the last 24 hours (negative for places lost). The
   field is omitted entirely when there is nothing to compare against — the entity is
