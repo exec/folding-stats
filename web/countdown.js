@@ -56,7 +56,7 @@ onSnapshot((s) => {
     remainingAtReceipt: nextExpected - serverTime,
     // ...against which we measure only elapsed time on ours.
     receivedAt: Date.now(),
-    measured: s.interval_measured !== false,
+    measured: !s.warming_up?.interval_estimated,
   };
 
   if (isNew) checkDelay = CHECK_INTERVAL_MS;

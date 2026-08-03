@@ -133,8 +133,8 @@ func TestEveryResponseCarriesSnapshotMetadata(t *testing.T) {
 		}
 		// Two cycles an hour apart is nowhere near a week, so the average is over a
 		// partial window and the API must say so.
-		if env.Snapshot.AvgWindowComplete {
-			t.Errorf("%s: avg_window_complete = true after 1 hour of history", path)
+		if env.Snapshot.WarmingUp == nil || env.Snapshot.WarmingUp.HistorySpanSec == 0 {
+			t.Errorf("%s: no warming_up block after 1 hour of history", path)
 		}
 	}
 }
@@ -952,5 +952,57 @@ func TestAcceptsGzipTokenParsing(t *testing.T) {
 		if got := acceptsGzip(r); got != want {
 			t.Errorf("acceptsGzip(%q) = %v, want %v", header, got, want)
 		}
+	}
+}
+
+// TestEnvelopeCarriesNoDerivableFields keeps the block small.
+//
+// It rides on every response and most responses are under a kilobyte, so a field that
+// duplicates another is not a rounding error — interval_sec was 42% of a team lookup's
+// snapshot block and exactly next_expected_at minus at.
+func TestEnvelopeCarriesNoDerivableFields(t *testing.T) {
+	srv := fixture(t)
+	res, _ := get(t, srv, "/v1/summary")
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(res.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	var snap map[string]any
+	if err := json.Unmarshal(raw["snapshot"], &snap); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, gone := range []string{"interval_sec", "interval_measured", "avg_window_complete", "history_span_sec"} {
+		if _, present := snap[gone]; present {
+			t.Errorf("snapshot still carries %q at the top level", gone)
+		}
+	}
+	for _, required := range []string{"at", "next_expected_at", "stale", "server_time"} {
+		if _, present := snap[required]; !present {
+			t.Errorf("snapshot is missing %q", required)
+		}
+	}
+}
+
+// TestWarmingUpDisappearsWhenWarm is the property that makes omitting it safe.
+//
+// The block is a *presence* signal deliberately: a client testing
+// `if (!snapshot.avg_window_complete)` against an omitted boolean would read absent as
+// incomplete and invert the meaning. Testing for an object has no such trap.
+func TestWarmingUpDisappearsWhenWarm(t *testing.T) {
+	srv := fixture(t)
+	snap := srv.Current()
+
+	// The fixture has an hour of history, so it must be present.
+	if warmingUp(snap) == nil {
+		t.Fatal("warming_up absent with one hour of history")
+	}
+
+	// With a full window and a measured cadence there is nothing left to qualify.
+	warm := *snap
+	warm.IntervalMeasured = true
+	if w := warmingUp(&warm); w != nil && w.HistorySpanSec == 0 && !w.IntervalEstimated {
+		t.Error("warming_up returned an empty object; it should be nil")
 	}
 }

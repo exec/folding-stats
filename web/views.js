@@ -15,12 +15,13 @@ const PER_PAGE = 100;
 /** How much history the "active" counts actually cover. */
 function activeWindow() {
   const s = snapshot();
-  return !s || s.avg_window_complete ? '7 days' : span(s.history_span_sec);
+  const w = s?.warming_up;
+  return !w?.history_span_sec ? '7 days' : span(w.history_span_sec);
 }
 
 const complete = () => {
   const s = snapshot();
-  return !s || s.avg_window_complete;
+  return !s?.warming_up?.history_span_sec;
 };
 
 function snapshotMs() {
@@ -948,8 +949,9 @@ export async function apiDocs(view) {
         el('strong', 'Upstream does not publish on the hour. '),
         'The measured interval is about ', el('code', '3610s'), ' and drifts later every ' +
         'cycle, so a day usually has 24 hourly buckets and occasionally 23. Use ',
-        el('code', 'interval_sec'), ' and ', el('code', 'next_expected_at'),
-        ' rather than assuming a fixed schedule.'),
+        el('code', 'next_expected_at'),
+        ' rather than assuming a fixed schedule — it comes from the measured cadence, ' +
+        'and subtracting ', el('code', 'at'), ' gives the interval.'),
       el('p',
         el('strong', 'Clocks disagree. '), 'Every response includes ', el('code', 'server_time'),
         '. Compare timestamps against that rather than your own clock, and a countdown ' +

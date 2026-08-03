@@ -93,11 +93,8 @@ Every response carries a `snapshot` block describing freshness, then the data.
     "at": "2026-08-03T06:31:11Z",          // upstream publish time this reflects
     "next_expected_at": "2026-08-03T07:31:20Z",
     "stale": false,
-    "server_time": "2026-08-03T06:42:07Z", // compare against this, not your own clock
-    "interval_sec": 3609,                  // measured, not assumed
-    "interval_measured": true,
-    "avg_window_complete": true,
-    "history_span_sec": 604800
+    "server_time": "2026-08-03T06:42:07Z"  // compare against this, not your own clock
+    // "warming_up": { ... }               // present only while a figure is converging
   },
   "data": { }
 }

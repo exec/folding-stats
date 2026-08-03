@@ -14,39 +14,52 @@ type Envelope struct {
 	Page     *PageInfo    `json:"page,omitempty"`
 }
 
-// SnapshotInfo describes the data's freshness. Carried on every response so a client
-// can cache correctly without a second request.
+// SnapshotInfo describes the data's freshness. Carried on every response, not exposed
+// as a separate endpoint, because it describes *this response's* data: a client that
+// fetched data and then fetched freshness separately could straddle a publish and
+// believe its data an hour newer than it is. That is a correctness property a side
+// request cannot reconstruct.
+//
+// It is deliberately small, because it rides on every response and most responses are
+// under a kilobyte. Anything derivable from another field is omitted rather than
+// duplicated, and the warm-up qualifiers disappear once they would be permanently
+// constant.
 type SnapshotInfo struct {
 	// At is the upstream publish time this data reflects — not when we fetched it.
 	At time.Time `json:"at"`
-	// NextExpectedAt is when the next upstream publish is due. Upstream publishes
-	// hourly, so polling faster than this only costs both sides bandwidth.
+	// NextExpectedAt is when the next upstream publish is due, from the measured
+	// cadence rather than an assumed hour. Subtract At for the interval.
 	NextExpectedAt time.Time `json:"next_expected_at"`
-	// Stale means the expected update did not arrive and this data is older than
-	// it should be. Upstream outages are routine; the flag makes them visible.
+	// Stale means the expected update did not arrive and this data is older than it
+	// should be. Not derivable from the timestamps: it allows a grace period for
+	// routine upstream drift that only the server knows about.
 	Stale bool `json:"stale"`
-	// AvgWindowComplete is false while less than 7 days of history has been
-	// collected, during which points_per_day_7d_avg is averaged over a short window
-	// and reads low.
-	AvgWindowComplete bool `json:"avg_window_complete"`
 	// ServerTime is this server's clock at the moment the response was built.
 	//
-	// A countdown computed as next_expected_at minus the browser's own clock is wrong
-	// by however far that clock is off, and unsynced clocks are minutes out routinely.
-	// Comparing both endpoints against this one instead makes the countdown depend on
-	// elapsed time rather than on absolute agreement.
+	// Comparing timestamps against this rather than the client's own clock makes any
+	// derived figure depend on elapsed time instead of on two machines agreeing.
+	// Unsynced clients are routinely minutes out.
 	ServerTime time.Time `json:"server_time"`
-	// IntervalSec is the measured upstream publish cadence in seconds. Nominally an
-	// hour; actually 3606-3613s and drifting later each cycle.
-	IntervalSec int64 `json:"interval_sec"`
-	// IntervalMeasured is false while IntervalSec is still the nominal fallback,
-	// before enough cycles have been observed to measure it.
-	IntervalMeasured bool `json:"interval_measured"`
-	// HistorySpanSec is how much history the rate windows actually cover, capped at
-	// the 7-day window. A caller that only reads AvgWindowComplete knows the average
-	// is short but not by how much; this says. Zero on the very first snapshot, when
-	// no interval has been observed yet.
-	HistorySpanSec int64 `json:"history_span_sec"`
+	// WarmingUp is present only while some figure is not yet at full fidelity, and
+	// absent otherwise.
+	//
+	// Its presence is the signal, which is why it is an object rather than a pair of
+	// booleans: a client testing `if (!snapshot.avg_window_complete)` on an omitted
+	// boolean would read "absent" as "incomplete" and get the opposite of the truth.
+	// There is no such trap in testing whether an object exists.
+	WarmingUp *WarmingUp `json:"warming_up,omitempty"`
+}
+
+// WarmingUp qualifies figures that are still converging after a cold start.
+type WarmingUp struct {
+	// HistorySpanSec is how much history the rate windows actually cover, while that
+	// is less than the full seven days. During this period points_per_day_7d_avg is
+	// divided by 7 over a shorter window and therefore reads low.
+	HistorySpanSec int64 `json:"history_span_sec,omitempty"`
+	// IntervalEstimated is true while NextExpectedAt comes from the nominal hour
+	// rather than from observed publishes, before enough cycles exist to measure the
+	// real cadence.
+	IntervalEstimated bool `json:"interval_estimated,omitempty"`
 }
 
 // PageInfo describes a paginated collection.

@@ -41,13 +41,14 @@ onSnapshot((s) => {
   freshText.textContent = `Updated ${ago(s.at)}`;
   freshEl.querySelector('.dot').classList.toggle('stale', !!s.stale);
 
-  const mins = Math.round((s.interval_sec || 3600) / 60);
+  // The interval is next_expected_at - at; the API no longer duplicates it as a field.
+  const intervalSec = Math.round((Date.parse(s.next_expected_at) - Date.parse(s.at)) / 1000);
   const parts = [
     `Snapshot: ${dateTime(s.at)}`,
     `Next expected: ${dateTime(s.next_expected_at)}`,
-    s.interval_measured
-      ? `Measured upstream interval: ${mins} min (${s.interval_sec}s)`
-      : 'Upstream interval not measured yet — assuming one hour.',
+    s.warming_up?.interval_estimated
+      ? 'Upstream interval not measured yet — assuming one hour.'
+      : `Measured upstream interval: ${Math.round(intervalSec / 60)} min (${intervalSec}s)`,
   ];
   if (s.stale) parts.push('The expected update has not arrived yet.');
   // A device clock minutes out is common and makes every relative time on the page
@@ -58,7 +59,7 @@ onSnapshot((s) => {
     parts.push(`This device's clock is ${Math.abs(skew)} min ${skew > 0 ? 'ahead of' : 'behind'} ` +
       `the server. Times shown here follow the server.`);
   }
-  if (!s.avg_window_complete) {
+  if (s.warming_up?.history_span_sec) {
     parts.push('Less than 7 days of history collected — the per-day average spans a shorter window.');
   }
   freshEl.title = parts.join('\n');

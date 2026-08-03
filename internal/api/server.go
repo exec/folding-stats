@@ -133,14 +133,11 @@ func (s *Server) handle(fn handlerFunc) http.HandlerFunc {
 
 		writeJSON(w, r, http.StatusOK, Envelope{
 			Snapshot: SnapshotInfo{
-				At:                snap.At.UTC(),
-				NextExpectedAt:    snap.NextExpected.UTC(),
-				Stale:             !snap.StaleAfter.IsZero() && now.After(snap.StaleAfter),
-				AvgWindowComplete: snap.AvgWindowComplete(),
-				HistorySpanSec:    int64(snap.Members.Span().Seconds()),
-				ServerTime:        now,
-				IntervalSec:       int64(snap.Interval.Seconds()),
-				IntervalMeasured:  snap.IntervalMeasured,
+				At:             snap.At.UTC(),
+				NextExpectedAt: snap.NextExpected.UTC(),
+				Stale:          !snap.StaleAfter.IsZero() && now.After(snap.StaleAfter),
+				ServerTime:     now,
+				WarmingUp:      warmingUp(snap),
 			},
 			Data: data,
 			Page: page,
@@ -156,6 +153,22 @@ func (s *Server) handle(fn handlerFunc) http.HandlerFunc {
 // answer is not a cheap answer but a wrong one: a client polling it would be served
 // its own last result and never see the publish it is waiting for. It is also the
 // cheapest route we have, served from memory, so there is nothing to save.
+// warmingUp returns the qualifier block, or nil once nothing needs qualifying.
+//
+// Both figures converge and then stay converged forever, so shipping them on every
+// response for the life of the site would be ~50 bytes of permanent constant on
+// payloads that are frequently under a kilobyte.
+func warmingUp(snap *Snapshot) *WarmingUp {
+	w := WarmingUp{IntervalEstimated: !snap.IntervalMeasured}
+	if !snap.AvgWindowComplete() {
+		w.HistorySpanSec = int64(snap.Members.Span().Seconds())
+	}
+	if w.HistorySpanSec == 0 && !w.IntervalEstimated {
+		return nil
+	}
+	return &w
+}
+
 func isPosts(path string) bool {
 	return path == "/v1/posts" || strings.HasPrefix(path, "/v1/posts/")
 }

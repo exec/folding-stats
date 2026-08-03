@@ -241,6 +241,9 @@ a:hover { color: var(--accent); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); flex: none; }
 .dot.stale { background: var(--warning); }
 
+a.icon-btn { color: var(--ink-secondary); text-decoration: none; }
+a.icon-btn:hover { color: var(--ink); }
+
 /* The countdown is a secondary, always-moving figure. Tabular digits stop the
    whole header shifting sideways every second as the glyph widths change. */
 .countdown {
@@ -263,6 +266,7 @@ main.refreshed { animation: data-refreshed 900ms ease-out; }
 
 .icon-btn {
   display: grid;
+  flex: none;
   place-items: center;
   width: 34px; height: 34px;
   background: none;
