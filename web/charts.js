@@ -394,11 +394,29 @@ export function legend(container, labels) {
  * Filling only between the first and last observation avoids claiming coverage for
  * periods before collection began.
  */
+/**
+ * Bucket width in ms, for every function that has to walk from one bucket to the
+ * next. Monthly is not a fixed width, so it returns 0 and callers step by date.
+ *
+ * One definition on purpose. This was inlined separately in densify and in padLone,
+ * and adding weekly to the first and missing the second gave a lone weekly bucket
+ * zero-padding an hour either side — three points an hour apart on a chart whose
+ * footnote said the buckets were weeks. Anything gappy enough to need densifying is
+ * gappy enough that the padded path is the one real data hits first.
+ */
+function bucketStep(granularity) {
+  switch (granularity) {
+    case 'monthly': return 0; // variable; stepped by date instead
+    case 'weekly': return 7 * 86400e3;
+    case 'daily': return 86400e3;
+    default: return 3600e3;
+  }
+}
+
 export function densify(points, granularity, { limit = 5000, until } = {}) {
   if (points.length < 2) return padLone(points, granularity, limit, until);
 
-  const step =
-    granularity === 'weekly' ? 7 * 86400e3 : granularity === 'daily' ? 86400e3 : 3600e3;
+  const step = bucketStep(granularity);
   const next = (t) => {
     if (granularity === 'monthly') {
       const d = new Date(t);
@@ -437,7 +455,7 @@ const zeroAt = (t) => ({ at: new Date(t).toISOString(), points: 0, wus: 0 });
  */
 function padLone(points, granularity, limit, until) {
   if (points.length !== 1) return points;
-  const step = granularity === 'daily' ? 86400e3 : granularity === 'monthly' ? 0 : 3600e3;
+  const step = bucketStep(granularity);
   const t = Date.parse(points[0].at);
   const shift = (dir) => {
     if (granularity === 'monthly') {
