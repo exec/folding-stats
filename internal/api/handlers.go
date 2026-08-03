@@ -1,0 +1,449 @@
+package api
+
+import (
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"folding/content"
+	"folding/internal/store"
+)
+
+func (s *Server) status(snap *Snapshot, _ *http.Request) (any, *PageInfo, error) {
+	return map[string]any{
+		"cycles_retained":  snap.Members.Cycles(),
+		"history_span_sec": int64(snap.Members.Span().Seconds()),
+		"teams":            len(snap.State.Teams),
+		"donors":           len(snap.Ranks.Donors),
+		"members":          len(snap.State.Members),
+	}, nil, nil
+}
+
+func (s *Server) summary(snap *Snapshot, _ *http.Request) (any, *PageInfo, error) {
+	t := snap.Totals
+	return Summary{
+		TeamsTotal:   t.Teams,
+		TeamsActive:  t.TeamsActive,
+		DonorsTotal:  t.Donors,
+		DonorsActive: t.DonorsActive,
+		MembersTotal: t.Members,
+		Production: Production{
+			PointsTotal:       t.PointsTotal,
+			WUsTotal:          t.WUsTotal,
+			PointsLastUpdate:  t.PointsLastUpdate,
+			PointsLast24h:     t.PointsLast24h,
+			PointsLast7d:      t.PointsLast7d,
+			PointsTodayUTC:    t.PointsToday,
+			PointsThisWeekUTC: t.PointsThisWeek,
+			PointsPerDay7dAvg: roundDiv7(t.PointsLast7d),
+		},
+	}, nil, nil
+}
+
+// posts lists published articles, newest first.
+//
+// The blog is served through the same API as everything else rather than as
+// server-rendered pages: it keeps one rendering path in the frontend, and it means a
+// reader who wants the announcements programmatically has them.
+func (s *Server) posts(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
+	all := content.Published()
+	out := make([]PostSummary, 0, len(all))
+	for _, p := range all {
+		out = append(out, PostSummary{
+			Slug: p.Slug, Title: p.Title, Date: p.Date, Summary: p.Summary,
+		})
+	}
+	return map[string]any{"posts": out}, nil, nil
+}
+
+// post returns one article with its rendered body.
+func (s *Server) post(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
+	slug := r.PathValue("slug")
+	p, ok := content.Lookup(slug)
+	if !ok {
+		return nil, nil, notFound("no post %q", slug)
+	}
+	return p, nil, nil
+}
+
+// projectHistory is the whole project's production over time.
+func (s *Server) projectHistory(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
+	q, err := parseHistoryQuery(r, snap.At)
+	if err != nil {
+		return nil, nil, err
+	}
+	pts, err := snap.Store.ProjectHistory(r.Context(), q.from, q.to, q.gran)
+	if err != nil {
+		return nil, nil, err
+	}
+	return historyView(q, pts), nil, nil
+}
+
+func (s *Server) teams(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
+	order := snap.Ranks.TeamOrder
+	lo, hi, page, err := paginate(r, len(order))
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make([]Team, 0, hi-lo)
+	for _, slot := range order[lo:hi] {
+		out = append(out, snap.teamView(slot))
+	}
+	return out, page, nil
+}
+
+func (s *Server) team(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 32)
+	if err != nil {
+		return nil, nil, badRequest("team id must be an integer")
+	}
+	slot, ok := snap.State.TeamSlot(int32(id))
+	if !ok {
+		return nil, nil, notFound("no team with id %d", id)
+	}
+	return snap.teamView(slot), nil, nil
+}
+
+func (s *Server) teamMembers(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 32)
+	if err != nil {
+		return nil, nil, badRequest("team id must be an integer")
+	}
+	teamID := int32(id)
+	if _, ok := snap.State.TeamSlot(teamID); !ok {
+		return nil, nil, notFound("no team with id %d", id)
+	}
+
+	// EOC offers an all/active-only filter on its member lists; most teams are
+	// overwhelmingly dormant, so the filtered view is usually the one people want.
+	activeOnly := r.URL.Query().Get("active_only") == "true"
+
+	// The roster is precomputed per team in rank order, so this is proportional to
+	// the team rather than to the corpus. Scanning the global 2.7M-entry order on
+	// every request would work, but it would cost the same for a two-person team as
+	// for the largest one.
+	slots := snap.Ranks.TeamMembers(teamID)
+	if activeOnly {
+		filtered := make([]int32, 0, len(slots))
+		for _, slot := range slots {
+			if snap.Members.Last7d(slot) > 0 {
+				filtered = append(filtered, slot)
+			}
+		}
+		slots = filtered
+	}
+
+	lo, hi, page, err := paginate(r, len(slots))
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make([]Member, 0, hi-lo)
+	for _, slot := range slots[lo:hi] {
+		out = append(out, snap.memberView(slot, false))
+	}
+	return out, page, nil
+}
+
+func (s *Server) donors(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
+	lo, hi, page, err := paginate(r, len(snap.Ranks.Donors))
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make([]Donor, 0, hi-lo)
+	for i := lo; i < hi; i++ {
+		out = append(out, snap.donorView(int32(i), false))
+	}
+	return out, page, nil
+}
+
+func (s *Server) donor(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
+	name := r.PathValue("name")
+	idx, ok := snap.donorIndexByName(name)
+	if !ok {
+		return nil, nil, notFound("no donor named %q", name)
+	}
+	// The per-team breakdown ships with the donor: a client must never have to
+	// issue one request per team to assemble a donor's page (R10).
+	return snap.donorView(idx, true), nil, nil
+}
+
+// donorTeams is the paginated form of the breakdown, for donors whose inline list
+// was capped.
+//
+// `sort=production` orders by recent output rather than lifetime total. The two
+// answer different questions and a donor's biggest lifetime teams are frequently
+// dormant: one shared name here holds 55 trillion points on a team that has
+// produced nothing in a week, while 87% of its current output comes from a team
+// far down the lifetime ranking.
+func (s *Server) donorTeams(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
+	name := r.PathValue("name")
+	idx, ok := snap.donorIndexByName(name)
+	if !ok {
+		return nil, nil, notFound("no donor named %q", name)
+	}
+
+	byProduction := false
+	switch v := r.URL.Query().Get("sort"); v {
+	case "", "points":
+	case "production":
+		byProduction = true
+	default:
+		return nil, nil, badRequest("sort must be points or production")
+	}
+
+	all, _ := snap.breakdownSorted(snap.Ranks.DonorMembers(idx), 0, byProduction)
+	lo, hi, page, err := paginate(r, len(all))
+	if err != nil {
+		return nil, nil, err
+	}
+	return all[lo:hi], page, nil
+}
+
+func (s *Server) teamHistory(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 32)
+	if err != nil {
+		return nil, nil, badRequest("team id must be an integer")
+	}
+	slot, ok := snap.State.TeamSlot(int32(id))
+	if !ok {
+		return nil, nil, notFound("no team with id %d", id)
+	}
+	q, err := parseHistoryQuery(r, snap.At)
+	if err != nil {
+		return nil, nil, err
+	}
+	pts, err := snap.Store.TeamHistory(r.Context(), slot, q.from, q.to, q.gran)
+	if err != nil {
+		return nil, nil, err
+	}
+	return historyView(q, pts), nil, nil
+}
+
+func (s *Server) donorHistory(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
+	name := r.PathValue("name")
+	idx, ok := snap.donorIndexByName(name)
+	if !ok {
+		return nil, nil, notFound("no donor named %q", name)
+	}
+	q, err := parseHistoryQuery(r, snap.At)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// A donor's series is the sum of their members'. Restricting to one team is
+	// what makes the per-team tabs on a donor page possible.
+	members := snap.Ranks.DonorMembers(idx)
+	if raw := r.URL.Query().Get("team_id"); raw != "" {
+		tid, err := strconv.ParseInt(raw, 10, 32)
+		if err != nil {
+			return nil, nil, badRequest("team_id must be an integer")
+		}
+		var filtered []int32
+		for _, slot := range members {
+			if snap.State.Members[slot].TeamID == int32(tid) {
+				filtered = append(filtered, slot)
+			}
+		}
+		if len(filtered) == 0 {
+			return nil, nil, notFound("donor %q has no record on team %d", name, tid)
+		}
+		members = filtered
+	}
+
+	// Bound the query as well as the round trips. Summing across every member of a
+	// name that spans thousands of teams means an IN list that large, and the cost
+	// shows up directly in the tail: it was the only endpoint left above 1 ms at
+	// p99. The teams are ordered by points, so a capped result is the aggregate of
+	// the ones that actually matter — and it says so.
+	truncated := false
+	if len(members) > maxHistoryTeams {
+		ordered, _ := snap.breakdown(members, maxHistoryTeams)
+		capped := make([]int32, 0, len(ordered))
+		for _, m := range ordered {
+			if slot, ok := snap.memberSlot(m.Name, m.TeamID); ok {
+				capped = append(capped, slot)
+			}
+		}
+		members, truncated = capped, true
+	}
+
+	pts, err := snap.Store.MembersHistory(r.Context(), members, q.from, q.to, q.gran)
+	if err != nil {
+		return nil, nil, err
+	}
+	h := historyView(q, pts)
+	h.TeamsTruncated = truncated
+	h.TeamsIncluded = len(members)
+	return h, nil, nil
+}
+
+// maxHistoryTeams bounds how many of a donor's teams contribute to a merged series.
+const maxHistoryTeams = 100
+
+func (s *Server) search(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
+	q := r.URL.Query().Get("q")
+	if q == "" {
+		return nil, nil, badRequest("q is required")
+	}
+	kind := r.URL.Query().Get("type")
+
+	limit, err := intParam(r, "limit", defaultSearchLimit)
+	if err != nil {
+		return nil, nil, err
+	}
+	if limit < 1 || limit > maxSearchLimit {
+		return nil, nil, badRequest("limit must be between 1 and %d", maxSearchLimit)
+	}
+
+	res := SearchResults{Query: q, Teams: []Team{}, Donors: []Donor{}}
+
+	// An exact, case-sensitive hit always leads, then case-insensitive prefix
+	// matches. There is no minimum length: EOC's three-character floor makes short
+	// real names such as "DH" permanently unfindable, which is the whole reason
+	// this endpoint exists.
+	if kind == "" || kind == "donor" {
+		seen := map[int32]bool{}
+		if idx, ok := snap.donorIndexByName(q); ok {
+			res.Donors = append(res.Donors, snap.donorView(idx, false))
+			res.ExactDonor = true
+			seen[idx] = true
+		}
+		for _, idx := range snap.Ranks.DonorPrefix(snap.State, q, limit) {
+			if seen[idx] || len(res.Donors) >= limit {
+				continue
+			}
+			res.Donors = append(res.Donors, snap.donorView(idx, false))
+		}
+	}
+
+	if kind == "" || kind == "team" {
+		seen := map[int32]bool{}
+		add := func(slot int32) {
+			if seen[slot] || len(res.Teams) >= limit {
+				return
+			}
+			seen[slot] = true
+			res.Teams = append(res.Teams, snap.teamView(slot))
+		}
+		if id, err := strconv.ParseInt(q, 10, 32); err == nil {
+			if slot, ok := snap.State.TeamSlot(int32(id)); ok {
+				add(slot)
+				res.ExactTeam = true
+			}
+		}
+		if nameID, ok := snap.State.Names.Lookup(q); ok {
+			for slot, tm := range snap.State.Teams {
+				if tm.NameID == nameID {
+					add(int32(slot))
+					res.ExactTeam = true
+				}
+			}
+		}
+		// Teams number ~130k, small enough that a scan in rank order beats
+		// maintaining a second index — and rank order means the best match leads.
+		lower := strings.ToLower(q)
+		for _, slot := range snap.Ranks.TeamOrder {
+			if len(res.Teams) >= limit {
+				break
+			}
+			name := snap.State.Names.Name(snap.State.Teams[slot].NameID)
+			if strings.HasPrefix(strings.ToLower(name), lower) {
+				add(slot)
+			}
+		}
+	}
+	return res, nil, nil
+}
+
+const (
+	defaultSearchLimit = 8
+	maxSearchLimit     = 50
+)
+
+type historyQuery struct {
+	metric   string
+	gran     store.Granularity
+	from, to time.Time
+}
+
+func parseHistoryQuery(r *http.Request, now time.Time) (historyQuery, error) {
+	q := historyQuery{metric: "points", gran: store.Hourly}
+
+	if m := r.URL.Query().Get("metric"); m != "" {
+		if m != "points" && m != "wus" {
+			return q, badRequest("metric must be points or wus")
+		}
+		q.metric = m
+	}
+	switch g := r.URL.Query().Get("granularity"); g {
+	case "":
+	// "cycle" was the original name for "hourly" and still works, so existing
+	// callers keep functioning.
+	case "hourly", "cycle", "daily", "monthly":
+		q.gran = store.Granularity(g).Normalize()
+	default:
+		return q, badRequest("granularity must be hourly, daily or monthly")
+	}
+
+	var err error
+	// Default windows are per-granularity: an unparameterised hourly request over
+	// 30 days is 720 points of noise, while a month of daily buckets is too little
+	// to see a trend. Asking for more is deliberate.
+	q.to = now.Add(time.Hour)
+	q.from = now.Add(-defaultWindow[q.gran])
+	if v := r.URL.Query().Get("from"); v != "" {
+		if q.from, err = time.Parse(time.RFC3339, v); err != nil {
+			return q, badRequest("from must be an RFC3339 timestamp")
+		}
+	}
+	if v := r.URL.Query().Get("to"); v != "" {
+		if q.to, err = time.Parse(time.RFC3339, v); err != nil {
+			return q, badRequest("to must be an RFC3339 timestamp")
+		}
+	}
+	if !q.to.After(q.from) {
+		return q, badRequest("to must be after from")
+	}
+	// Cap the span. At cycle granularity an unbounded range would scan every delta
+	// a donor ever produced, and for a name spanning thousands of teams that is a
+	// cheap way to make one request expensive for everyone.
+	max, ok := maxRange[q.gran]
+	if !ok {
+		// A missing entry would otherwise read as a zero limit and reject every
+		// range, which looks like "no data" rather than a configuration mistake.
+		return q, fmt.Errorf("no range limit configured for granularity %q", q.gran)
+	}
+	if q.to.Sub(q.from) > max {
+		return q, badRequest("range of %s exceeds the %s maximum for granularity %q",
+			q.to.Sub(q.from).Round(time.Hour), max, q.gran)
+	}
+	return q, nil
+}
+
+// defaultWindow is how far back an unparameterised history request reaches.
+var defaultWindow = map[store.Granularity]time.Duration{
+	store.Hourly:  7 * 24 * time.Hour,
+	store.Daily:   90 * 24 * time.Hour,
+	store.Monthly: 3 * 365 * 24 * time.Hour,
+}
+
+// maxRange bounds a history query per granularity. Coarser buckets return far fewer
+// rows per unit time, so they can span proportionally more.
+var maxRange = map[store.Granularity]time.Duration{
+	store.Hourly:  90 * 24 * time.Hour, // matches raw delta retention
+	store.Daily:   5 * 365 * 24 * time.Hour,
+	store.Monthly: 50 * 365 * 24 * time.Hour,
+}
+
+func historyView(q historyQuery, pts []store.Point) History {
+	out := make([]HistoryPoint, len(pts))
+	for i, p := range pts {
+		out[i] = HistoryPoint{At: p.At, Points: p.Points, WUs: p.WUs}
+	}
+	return History{
+		Metric: q.metric, Granularity: string(q.gran),
+		From: q.from, To: q.to, Points: out,
+	}
+}

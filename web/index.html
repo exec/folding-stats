@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Folding@home Stats</title>
+<meta name="description" content="Folding@home donor and team statistics, with a free public API. No sign-up, no rate limits, no challenge pages.">
+<meta name="color-scheme" content="dark light">
+<link rel="stylesheet" href="/vendor/uPlot.min.css">
+<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🧬</text></svg>">
+</head>
+<body>
+
+<header class="header">
+  <a class="brand" href="/">
+    <span class="brand-mark">◈</span>
+    <span>Folding Stats</span>
+    <span class="brand-sub">Folding@home</span>
+  </a>
+
+  <nav class="nav">
+    <a href="/" data-route="/">Home</a>
+    <a href="/overview" data-route="/overview">Overview</a>
+    <a href="/teams" data-route="/teams">Teams</a>
+    <a href="/donors" data-route="/donors">Donors</a>
+    <a href="/api" data-route="/api">API</a>
+  </nav>
+
+  <div class="search" id="search">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path>
+    </svg>
+    <input id="q" type="search" placeholder="Search donors and teams"
+           autocomplete="off" spellcheck="false" aria-label="Search donors and teams">
+    <div class="search-results" id="search-results" role="listbox"></div>
+  </div>
+
+  <div class="freshness" id="freshness">
+    <span class="dot"></span><span id="freshness-text">…</span>
+    <span class="countdown" id="countdown"></span>
+  </div>
+
+  <button class="icon-btn" id="theme-toggle" aria-label="Toggle colour theme" title="Toggle theme">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"></path>
+    </svg>
+  </button>
+</header>
+
+<main id="view" aria-live="polite"></main>
+
+<footer>
+  <span>Data from <a href="https://foldingathome.org" rel="noopener">Folding@home</a>, refreshed hourly.</span>
+  <span>Not affiliated with Folding@home or Stanford.</span>
+  <a href="/api">Free API — no key required</a>
+</footer>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,453 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"folding/internal/model"
+)
+
+// Granularity selects which table a history query reads from.
+type Granularity string
+
+const (
+	// Hourly is raw per-publish production, retained only for the recent window.
+	//
+	// A bucket is one upstream publish rather than a clock hour. Upstream has
+	// published hourly for as long as anyone has watched it, so "hourly" is what
+	// the API says; if a publish is ever missed, the gap is visible in the data
+	// rather than papered over.
+	Hourly Granularity = "hourly"
+	// Cycle is the original name for Hourly, still accepted on input.
+	Cycle Granularity = "cycle"
+	// Daily and Monthly read pre-aggregated rollups, which survive after raw
+	// deltas are pruned.
+	Daily   Granularity = "daily"
+	Monthly Granularity = "monthly"
+)
+
+// Point is one bucket of production.
+type Point struct {
+	At     time.Time `json:"at"`
+	Points int64     `json:"points"`
+	WUs    int64     `json:"wus"`
+}
+
+const secondsPerDay = 86400
+
+// DayBucket returns the UTC day number for t.
+func DayBucket(t time.Time) int64 { return t.UTC().Unix() / secondsPerDay }
+
+// MonthBucket returns year*12+month, a dense monotonic month index.
+func MonthBucket(t time.Time) int64 {
+	t = t.UTC()
+	return int64(t.Year())*12 + int64(t.Month()) - 1
+}
+
+func monthBucketTime(b int64) time.Time {
+	return time.Date(int(b/12), time.Month(b%12+1), 1, 0, 0, 0, 0, time.UTC)
+}
+
+// MemberHistory returns production for one member over [from, to).
+func (s *Store) MemberHistory(ctx context.Context, memberID int32, from, to time.Time, g Granularity) ([]Point, error) {
+	return s.history(ctx, "member", int64(memberID), from, to, g)
+}
+
+// TeamHistory returns production for one team slot over [from, to).
+func (s *Store) TeamHistory(ctx context.Context, slot int32, from, to time.Time, g Granularity) ([]Point, error) {
+	return s.history(ctx, "team", int64(slot), from, to, g)
+}
+
+// Normalize resolves input aliases to the canonical granularity.
+func (g Granularity) Normalize() Granularity {
+	if g == Cycle {
+		return Hourly
+	}
+	return g
+}
+
+func (s *Store) history(ctx context.Context, kind string, id int64, from, to time.Time, g Granularity) ([]Point, error) {
+	g = g.Normalize()
+	var query string
+	var lo, hi int64
+
+	idCol := "member_id"
+	if kind == "team" {
+		idCol = "slot"
+	}
+
+	switch g {
+	case Hourly:
+		query = fmt.Sprintf(
+			`SELECT ts, d_score, d_wu FROM %s_deltas WHERE %s = ? AND ts >= ? AND ts < ? ORDER BY ts`,
+			kind, idCol)
+		lo, hi = from.UTC().Unix(), to.UTC().Unix()
+	// Bucketed granularities use an inclusive upper bound: a bucket is a period, and
+	// it belongs in the result if it overlaps the requested range at all. Excluding
+	// the bucket containing `to` would make a request for a single month — or any
+	// range narrower than one bucket — return nothing.
+	case Daily:
+		query = fmt.Sprintf(
+			`SELECT bucket, points, wus FROM %s_daily WHERE %s = ? AND bucket >= ? AND bucket <= ? ORDER BY bucket`,
+			kind, idCol)
+		lo, hi = DayBucket(from), DayBucket(to)
+	case Monthly:
+		query = fmt.Sprintf(
+			`SELECT bucket, points, wus FROM %s_monthly WHERE %s = ? AND bucket >= ? AND bucket <= ? ORDER BY bucket`,
+			kind, idCol)
+		lo, hi = MonthBucket(from), MonthBucket(to)
+	default:
+		return nil, fmt.Errorf("store: unknown granularity %q", g)
+	}
+
+	rows, err := s.query(ctx, query, id, lo, hi)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Point
+	for rows.Next() {
+		var bucket, pts, wus int64
+		if err := rows.Scan(&bucket, &pts, &wus); err != nil {
+			return nil, err
+		}
+		var at time.Time
+		switch g {
+		case Hourly:
+			at = time.Unix(bucket, 0).UTC()
+		case Daily:
+			at = time.Unix(bucket*secondsPerDay, 0).UTC()
+		case Monthly:
+			at = monthBucketTime(bucket)
+		}
+		out = append(out, Point{At: at, Points: pts, WUs: wus})
+	}
+	return out, rows.Err()
+}
+
+// CompactPolicy bounds a compaction pass.
+type CompactPolicy struct {
+	// RawBefore: per-cycle deltas older than this are rolled up into daily and
+	// monthly buckets, then deleted.
+	RawBefore time.Time
+	// DailyBefore: daily buckets older than this are deleted once their months are
+	// recorded. Zero keeps daily data forever.
+	DailyBefore time.Time
+}
+
+// RollupResult reports what a compaction pass did.
+type RollupResult struct {
+	DailyRows   int64
+	MonthlyRows int64
+	PrunedRaw   int64
+	PrunedDaily int64
+}
+
+// Compact removes raw deltas and daily buckets that have aged past retention.
+//
+// It no longer builds rollups: those are maintained on every cycle by rollupCycle,
+// because deriving them here meant the daily and monthly views stayed empty until
+// data was old enough to compact — 90 days of a site showing "no production
+// recorded" for every entity while the raw data sat right there.
+//
+// The cutoff is floored to a UTC day boundary so a partial day is never pruned out
+// from under the bucket that summarises it.
+func (s *Store) Compact(ctx context.Context, p CompactPolicy) (RollupResult, error) {
+	var res RollupResult
+
+	cutoff := DayBucket(p.RawBefore) * secondsPerDay
+
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return res, err
+	}
+	defer tx.Rollback()
+
+	for _, e := range []struct{ table, idCol string }{
+		{"member", "member_id"},
+		{"team", "slot"},
+	} {
+
+		// Raw deltas go first. Their daily buckets were written when the cycle was
+		// ingested, so nothing is lost by removing them.
+		r, err := tx.ExecContext(ctx,
+			fmt.Sprintf(`DELETE FROM %s_deltas WHERE ts < ?`, e.table), cutoff)
+		if err != nil {
+			return res, fmt.Errorf("store: pruning %s_deltas: %w", e.table, err)
+		}
+		n, _ := r.RowsAffected()
+		res.PrunedRaw += n
+
+		// Daily buckets go last, and only after their months are recorded — the
+		// same ordering hazard as raw deltas, one level up. Months already written
+		// keep their values because the recompute above never revisits them.
+		if !p.DailyBefore.IsZero() {
+			r, err = tx.ExecContext(ctx,
+				fmt.Sprintf(`DELETE FROM %s_daily WHERE bucket < ?`, e.table),
+				DayBucket(p.DailyBefore))
+			if err != nil {
+				return res, fmt.Errorf("store: pruning %s_daily: %w", e.table, err)
+			}
+			n, _ = r.RowsAffected()
+			res.PrunedDaily += n
+		}
+	}
+
+	return res, tx.Commit()
+}
+
+// CycleDeltas is one cycle's production, as replayed from storage.
+type CycleDeltas struct {
+	At      time.Time
+	Members []model.Delta
+	Teams   []model.Delta
+}
+
+// DeltasSince returns every stored cycle at or after since, oldest first.
+//
+// This is what rebuilds the rolling windows after a restart. Without it the service
+// comes back with correct cumulative totals but every rate at zero, and would take a
+// full week to look right again — which is worse than an obvious failure, because
+// nothing errors.
+func (s *Store) DeltasSince(ctx context.Context, since time.Time) ([]CycleDeltas, error) {
+	byTS := map[int64]*CycleDeltas{}
+
+	load := func(query string, assign func(*CycleDeltas, model.Delta)) error {
+		rows, err := s.r.QueryContext(ctx, query, since.UTC().Unix())
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id int32
+			var ts, dScore, dWU int64
+			if err := rows.Scan(&id, &ts, &dScore, &dWU); err != nil {
+				return err
+			}
+			c := byTS[ts]
+			if c == nil {
+				c = &CycleDeltas{At: time.Unix(ts, 0).UTC()}
+				byTS[ts] = c
+			}
+			assign(c, model.Delta{ID: id, DScore: dScore, DWUs: dWU})
+		}
+		return rows.Err()
+	}
+
+	if err := load(
+		`SELECT member_id, ts, d_score, d_wu FROM member_deltas WHERE ts >= ? ORDER BY ts`,
+		func(c *CycleDeltas, d model.Delta) { c.Members = append(c.Members, d) },
+	); err != nil {
+		return nil, err
+	}
+	if err := load(
+		`SELECT slot, ts, d_score, d_wu FROM team_deltas WHERE ts >= ? ORDER BY ts`,
+		func(c *CycleDeltas, d model.Delta) { c.Teams = append(c.Teams, d) },
+	); err != nil {
+		return nil, err
+	}
+
+	out := make([]CycleDeltas, 0, len(byTS))
+	for _, c := range byTS {
+		out = append(out, *c)
+	}
+	// The windows reject out-of-order cycles outright, so ordering here is required
+	// rather than cosmetic.
+	sort.Slice(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
+	return out, nil
+}
+
+// MembersHistory returns the combined production of several members, aggregated by
+// bucket in one query.
+//
+// A donor's series is the sum of their members', and issuing one query per member
+// does not scale: the shared placeholder name "PS3" spans 10,426 teams, so the naive
+// loop is 10,426 round trips for a single API request. Summing in SQL turns that into
+// one.
+func (s *Store) MembersHistory(ctx context.Context, ids []int32, from, to time.Time, g Granularity) ([]Point, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	g = g.Normalize()
+
+	var table, bucketCol, pointsCol, wusCol string
+	var lo, hi int64
+	switch g {
+	case Hourly:
+		table, bucketCol, pointsCol, wusCol = "member_deltas", "ts", "d_score", "d_wu"
+		lo, hi = from.UTC().Unix(), to.UTC().Unix()
+	case Daily:
+		table, bucketCol, pointsCol, wusCol = "member_daily", "bucket", "points", "wus"
+		lo, hi = DayBucket(from), DayBucket(to)
+	case Monthly:
+		table, bucketCol, pointsCol, wusCol = "member_monthly", "bucket", "points", "wus"
+		lo, hi = MonthBucket(from), MonthBucket(to)
+	default:
+		return nil, fmt.Errorf("store: unknown granularity %q", g)
+	}
+
+	// Cycle timestamps are instants so the upper bound is exclusive; bucketed
+	// granularities are periods and include the bucket containing `to`.
+	upper := "<="
+	if g == Hourly {
+		upper = "<"
+	}
+	// Pad the id list to a power of two so the statement cache sees a handful of
+	// distinct query texts rather than one per distinct donor width. The padding id
+	// is negative and therefore matches nothing.
+	n := 1
+	for n < len(ids) {
+		n *= 2
+	}
+	placeholders := strings.Repeat("?,", n-1) + "?"
+	query := fmt.Sprintf(
+		`SELECT %[1]s, SUM(%[2]s), SUM(%[3]s) FROM %[4]s
+		  WHERE member_id IN (%[5]s) AND %[1]s >= ? AND %[1]s %[6]s ?
+		  GROUP BY %[1]s ORDER BY %[1]s`,
+		bucketCol, pointsCol, wusCol, table, placeholders, upper)
+
+	args := make([]any, 0, n+2)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	for i := len(ids); i < n; i++ {
+		args = append(args, -1)
+	}
+	args = append(args, lo, hi)
+
+	rows, err := s.query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Point
+	for rows.Next() {
+		var bucket, pts, wus int64
+		if err := rows.Scan(&bucket, &pts, &wus); err != nil {
+			return nil, err
+		}
+		out = append(out, Point{At: bucketTime(bucket, g), Points: pts, WUs: wus})
+	}
+	return out, rows.Err()
+}
+
+func bucketTime(b int64, g Granularity) time.Time {
+	switch g {
+	case Daily:
+		return time.Unix(b*secondsPerDay, 0).UTC()
+	case Monthly:
+		return monthBucketTime(b)
+	default:
+		return time.Unix(b, 0).UTC()
+	}
+}
+
+// rollupCycle refreshes the daily and monthly buckets touched by a cycle.
+//
+// Rollups are maintained as cycles arrive rather than at compaction time. Deriving
+// them only during compaction meant they did not exist until data aged past the
+// 90-day retention window, so the daily and monthly views were empty for every
+// entity on a new deployment — with the raw data sitting right there, unaggregated.
+//
+// Each affected bucket is recomputed from scratch rather than incremented, so
+// re-applying a cycle (which replay does routinely) converges instead of
+// double-counting.
+func rollupCycle(ctx context.Context, tx *sql.Tx, at time.Time) error {
+	day := DayBucket(at)
+	dayStart := day * secondsPerDay
+	dayEnd := dayStart + secondsPerDay
+
+	month := MonthBucket(at)
+	monthStart := time.Date(at.UTC().Year(), at.UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
+	monthFirstDay := DayBucket(monthStart)
+	monthLastDay := DayBucket(monthStart.AddDate(0, 1, 0))
+
+	for _, e := range []struct{ table, idCol string }{
+		{"member", "member_id"},
+		{"team", "slot"},
+	} {
+		// Only this cycle's day can have changed, so the range scan is bounded by
+		// the ts index rather than walking all history.
+		daily := fmt.Sprintf(`
+            INSERT INTO %[1]s_daily(%[2]s, bucket, points, wus)
+            SELECT %[2]s, ?, SUM(d_score), SUM(d_wu)
+              FROM %[1]s_deltas
+             WHERE ts >= ? AND ts < ?
+             GROUP BY %[2]s
+            ON CONFLICT(%[2]s, bucket) DO UPDATE SET
+                points = excluded.points,
+                wus    = excluded.wus`, e.table, e.idCol)
+		if _, err := tx.ExecContext(ctx, daily, day, dayStart, dayEnd); err != nil {
+			return fmt.Errorf("store: daily rollup for %s: %w", e.table, err)
+		}
+
+		// Monthly derives from daily, so it stays correct after raw deltas are
+		// pruned — and only the current month is in play.
+		monthly := fmt.Sprintf(`
+            INSERT INTO %[1]s_monthly(%[2]s, bucket, points, wus)
+            SELECT %[2]s, ?, SUM(points), SUM(wus)
+              FROM %[1]s_daily
+             WHERE bucket >= ? AND bucket < ?
+             GROUP BY %[2]s
+            ON CONFLICT(%[2]s, bucket) DO UPDATE SET
+                points = excluded.points,
+                wus    = excluded.wus`, e.table, e.idCol)
+		if _, err := tx.ExecContext(ctx, monthly, month, monthFirstDay, monthLastDay); err != nil {
+			return fmt.Errorf("store: monthly rollup for %s: %w", e.table, err)
+		}
+	}
+	return nil
+}
+
+// ProjectHistory returns production summed across every team.
+//
+// The overview needs the project's own series, which is not any single team's. The
+// obvious stand-in — team 0, the "no team specified" bucket — is a seventh of the
+// project and would understate it by that much while claiming to be the whole.
+func (s *Store) ProjectHistory(ctx context.Context, from, to time.Time, g Granularity) ([]Point, error) {
+	g = g.Normalize()
+
+	var table, bucketCol, pointsCol, wusCol string
+	var lo, hi int64
+	upper := "<="
+	switch g {
+	case Hourly:
+		table, bucketCol, pointsCol, wusCol = "team_deltas", "ts", "d_score", "d_wu"
+		lo, hi = from.UTC().Unix(), to.UTC().Unix()
+		upper = "<"
+	case Daily:
+		table, bucketCol, pointsCol, wusCol = "team_daily", "bucket", "points", "wus"
+		lo, hi = DayBucket(from), DayBucket(to)
+	case Monthly:
+		table, bucketCol, pointsCol, wusCol = "team_monthly", "bucket", "points", "wus"
+		lo, hi = MonthBucket(from), MonthBucket(to)
+	default:
+		return nil, fmt.Errorf("store: unknown granularity %q", g)
+	}
+
+	rows, err := s.query(ctx, fmt.Sprintf(
+		`SELECT %[1]s, SUM(%[2]s), SUM(%[3]s) FROM %[4]s
+		  WHERE %[1]s >= ? AND %[1]s %[5]s ?
+		  GROUP BY %[1]s ORDER BY %[1]s`,
+		bucketCol, pointsCol, wusCol, table, upper), lo, hi)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Point
+	for rows.Next() {
+		var bucket, pts, wus int64
+		if err := rows.Scan(&bucket, &pts, &wus); err != nil {
+			return nil, err
+		}
+		out = append(out, Point{At: bucketTime(bucket, g), Points: pts, WUs: wus})
+	}
+	return out, rows.Err()
+}

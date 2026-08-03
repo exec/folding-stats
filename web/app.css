@@ -1,0 +1,787 @@
+/* ==========================================================================
+   Folding stats — design system
+
+   Dark by default. This is a site people leave open on a second monitor and
+   scan columns of numbers on, so the surface stays dark and quiet and the data
+   carries the only saturation on the page.
+
+   Colours are the validated reference data-viz palette, unmodified: chart
+   surface #1a1a19, page plane #0d0d0d, series slots in fixed order. Chart hues
+   are never used for UI chrome and UI chrome never borrows a series hue, so a
+   colour on this page always means the same thing.
+   ========================================================================== */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces, layered rather than outlined. Depth comes from the step between
+     planes; borders are hairlines that only separate, never decorate. */
+  --plane: #0d0d0d;
+  --surface: #1a1a19;
+  --surface-raised: #232322;
+  --surface-hover: #272725;
+
+  --ink: #ffffff;
+  --ink-secondary: #c3c2b7;
+  --ink-muted: #898781;
+
+  --line: rgba(255, 255, 255, 0.09);
+  --line-strong: #383835;
+  --grid: #2c2c2a;
+
+  /* Series slots, fixed order, never cycled. */
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+
+  --accent: var(--series-1);
+  --accent-quiet: rgba(57, 135, 229, 0.14);
+
+  /* Status is reserved: never a series, always paired with a glyph or label. */
+  --good: #0ca30c;
+  --warning: #fab219;
+  --critical: #d03b3b;
+
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+
+  /* One spacing scale. Every gap on the page is a step on it. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+
+  --header-h: 56px;
+  --wide: 1320px;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --plane: #f9f9f7;
+  --surface: #fcfcfb;
+  --surface-raised: #ffffff;
+  --surface-hover: #f2f1ee;
+  --ink: #0b0b0b;
+  --ink-secondary: #52514e;
+  --ink-muted: #898781;
+  --line: rgba(11, 11, 11, 0.10);
+  --line-strong: #c3c2b7;
+  --grid: #e1e0d9;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+  --accent-quiet: rgba(42, 120, 214, 0.12);
+  --good: #006300;
+}
+
+* { box-sizing: border-box; }
+
+/* body must be free to grow past the viewport. With height:100% its box is capped
+   at one screen, and a sticky element cannot hold position outside its containing
+   block — so the header scrolled away while the sticky table heading went on
+   reserving space for it, leaving an empty band the height of a header that was no
+   longer there. min-height keeps whatever the 100% was for without the cap. */
+html { height: 100%; }
+body { min-height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--plane);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a { color: inherit; text-decoration: none; }
+a:hover { color: var(--accent); }
+
+/* Every number on this page belongs to a column that should line up. */
+.num, td.num, th.num { font-variant-numeric: tabular-nums; }
+
+/* --------------------------------------------------------------- header --- */
+
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  height: var(--header-h);
+  display: flex;
+  align-items: center;
+  gap: var(--s5);
+  padding: 0 var(--s5);
+  background: color-mix(in srgb, var(--plane) 82%, transparent);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.brand-mark { color: var(--accent); font-size: 16px; }
+.brand-sub { color: var(--ink-muted); font-weight: 400; font-size: 12px; }
+
+.nav { display: flex; gap: var(--s1); }
+.nav a {
+  padding: 6px var(--s3);
+  border-radius: var(--radius-sm);
+  color: var(--ink-secondary);
+  font-weight: 500;
+  transition: background 120ms ease, color 120ms ease;
+}
+.nav a:hover { background: var(--surface-hover); color: var(--ink); }
+.nav a[aria-current="page"] { background: var(--accent-quiet); color: var(--accent); }
+
+/* Search lives in the header, not a sidebar: it is the primary way people find
+   themselves, and burying it below navigation is the main thing wrong with the
+   site this replaces. */
+.search {
+  position: relative;
+  flex: 1 1 auto;
+  max-width: 460px;
+  margin-left: auto;
+}
+.search input {
+  width: 100%;
+  height: 34px;
+  padding: 0 var(--s3) 0 34px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  outline: none;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.search input::placeholder { color: var(--ink-muted); }
+.search input:focus { border-color: var(--accent); background: var(--surface-raised); }
+.search svg {
+  position: absolute;
+  left: 10px; top: 9px;
+  width: 16px; height: 16px;
+  color: var(--ink-muted);
+  pointer-events: none;
+}
+
+.search-results {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0; right: 0;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.search-results:empty { display: none; }
+.search-result {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+.search-result:last-child { border-bottom: 0; }
+.search-result:hover, .search-result.active { background: var(--surface-hover); }
+.search-result .kind {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+  min-width: 44px;
+}
+.search-result .val { margin-left: auto; color: var(--ink-secondary); font-variant-numeric: tabular-nums; }
+.search-result .exact {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  background: var(--accent-quiet);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+.search-empty { padding: var(--s4); color: var(--ink-muted); }
+
+/* Freshness is part of the data, not decoration: the numbers are a snapshot and
+   the page says how old it is and when the next one lands. */
+.freshness {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: 12px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); flex: none; }
+.dot.stale { background: var(--warning); }
+
+/* The countdown is a secondary, always-moving figure. Tabular digits stop the
+   whole header shifting sideways every second as the glyph widths change. */
+.countdown {
+  padding-left: var(--s2);
+  border-left: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+.countdown:empty { display: none; }
+.countdown.checking { color: var(--ink-secondary); }
+.countdown.overdue { color: var(--warning); }
+
+/* A refreshed page should be noticeable without being disruptive: one short wash
+   over the content, not a skeleton flash. */
+@keyframes data-refreshed {
+  from { background: var(--accent-quiet); }
+  to   { background: transparent; }
+}
+main.refreshed { animation: data-refreshed 900ms ease-out; }
+
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 34px; height: 34px;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--ink-secondary);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.icon-btn:hover { background: var(--surface-hover); color: var(--ink); }
+
+/* ----------------------------------------------------------------- page --- */
+
+main { max-width: var(--wide); margin: 0 auto; padding: var(--s6) var(--s5) var(--s7); }
+
+.page-head { margin-bottom: var(--s5); }
+.page-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 640;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.page-sub { margin: var(--s2) 0 0; color: var(--ink-muted); }
+.eyebrow {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+  margin-bottom: var(--s2);
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s4) var(--s5);
+  border-bottom: 1px solid var(--line);
+}
+.card-title { font-weight: 600; font-size: 14px; }
+.card-body { padding: var(--s5); }
+
+.section { margin-bottom: var(--s6); }
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  margin-bottom: var(--s4);
+}
+.section-title { font-size: 16px; font-weight: 620; letter-spacing: -0.01em; }
+.section-link { margin-left: auto; color: var(--ink-muted); font-size: 13px; }
+.section-link:hover { color: var(--accent); }
+
+/* ----------------------------------------------------------- stat tiles --- */
+
+/* A single number is a stat tile, not a chart. */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.stat { background: var(--surface); padding: var(--s4) var(--s5); }
+.stat-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.stat-value {
+  margin-top: var(--s2);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+.stat-sub { margin-top: 2px; font-size: 12px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+
+.hero-value {
+  font-size: 40px;
+  font-weight: 660;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+}
+
+.delta { font-variant-numeric: tabular-nums; }
+.delta.up { color: var(--good); }
+.delta.down { color: var(--critical); }
+.delta.flat { color: var(--ink-muted); }
+
+/* --------------------------------------------------------------- tables --- */
+
+/* Deliberately NOT a scroll container on wide screens.
+   `overflow-x: auto` makes this the nearest scrolling ancestor, which re-anchors
+   the sticky header to the wrapper instead of the page — parking it 56px down
+   inside the card and covering the first row completely. Horizontal scrolling is
+   only needed on narrow viewports, so it is scoped there and the header goes
+   static in exchange. */
+.table-wrap { overflow-x: visible; }
+
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+table.data th {
+  position: sticky;
+  /* The header wraps to two or three rows on narrow windows, so its height is not a
+     constant. --header-now is measured from the element itself; a fixed offset here
+     tucks the sticky row underneath the header, which is invisible until someone
+     scrolls a long table on a laptop. */
+  top: var(--header-now, var(--header-h));
+  z-index: 1;
+  background: var(--surface);
+  text-align: right;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+table.data th:first-child, table.data th.left { text-align: left; }
+table.data td {
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+}
+table.data td:first-child, table.data td.left { text-align: left; }
+table.data tbody tr { transition: background 90ms ease; }
+table.data tbody tr:hover { background: var(--surface-hover); }
+table.data tbody tr:last-child td { border-bottom: 0; }
+
+.rank { color: var(--ink-muted); font-size: 13px; width: 1%; }
+.name-cell {
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+/* Donor names are unvalidated upstream text and legitimately contain tabs and
+   newlines; render them literally rather than letting whitespace collapse. */
+.name-raw { white-space: pre; }
+
+.muted { color: var(--ink-muted); }
+.dim td { color: var(--ink-muted); }
+.dim .name-cell { font-weight: 400; }
+
+/* Production tier, from the aggregate bracket the API reports. Ordinal, one hue,
+   light→dark — never a rainbow. */
+.tier { display: inline-block; width: 3px; height: 16px; border-radius: 2px; vertical-align: -3px; margin-right: 10px; }
+.tier-0 { background: var(--line-strong); }
+.tier-1 { background: #184f95; }
+.tier-2 { background: #256abf; }
+.tier-3 { background: #2a78d6; }
+.tier-4 { background: #3987e5; }
+.tier-5 { background: #5598e7; }
+.tier-6 { background: #86b6ef; }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--line);
+  color: var(--ink-secondary);
+  white-space: nowrap;
+}
+.badge.warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 35%, transparent); }
+
+/* ------------------------------------------------------------ pagination --- */
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s4) var(--s5);
+  border-top: 1px solid var(--line);
+}
+.pager button {
+  height: 30px;
+  min-width: 30px;
+  padding: 0 var(--s3);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--ink-secondary);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.pager button:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
+.pager button[aria-current="true"] { background: var(--accent-quiet); border-color: transparent; color: var(--accent); }
+.pager button:disabled { opacity: 0.35; cursor: default; }
+.pager .count { margin-left: auto; color: var(--ink-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------------- chart --- */
+
+.chart { width: 100%; height: 300px; }
+/* An empty chart should not leave a 300px hole in the page. */
+.chart.is-empty { height: 0; }
+.chart-note {
+  padding: var(--s2) var(--s5) var(--s3);
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.chart-empty { padding: var(--s6) var(--s5); text-align: center; color: var(--ink-muted); }
+.chart-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-left: auto;
+}
+.seg {
+  display: inline-flex;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.seg button {
+  padding: 5px 11px;
+  background: none;
+  border: 0;
+  border-right: 1px solid var(--line);
+  color: var(--ink-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.seg button:last-child { border-right: 0; }
+.seg button:hover { background: var(--surface-hover); color: var(--ink); }
+.seg button[aria-pressed="true"] { background: var(--accent-quiet); color: var(--accent); }
+
+/* Legend is always present for two or more series, so identity is never carried
+   by colour alone. */
+.legend { display: flex; flex-wrap: wrap; gap: var(--s4); padding: var(--s3) var(--s5) 0; }
+.legend-item { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-secondary); }
+.swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+
+.u-tooltip {
+  position: absolute;
+  z-index: 20;
+  pointer-events: none;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  padding: var(--s2) var(--s3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transform: translate(-50%, calc(-100% - 12px));
+  opacity: 0;
+  transition: opacity 90ms ease;
+}
+.u-tooltip.on { opacity: 1; }
+.u-tooltip .t-date { color: var(--ink-muted); margin-bottom: 3px; }
+.u-tooltip .t-row { display: flex; align-items: center; gap: 7px; }
+.u-tooltip .t-val { margin-left: auto; font-weight: 600; }
+.u-tooltip .t-none { color: var(--ink-muted); }
+
+/* ----------------------------------------------------------------- tabs --- */
+
+.tabs {
+  display: flex;
+  gap: var(--s1);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
+  padding: var(--s3) var(--s4);
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--ink-muted);
+  font: inherit;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.tab:hover { color: var(--ink); }
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.tab .tab-val { color: var(--ink-muted); font-size: 12px; margin-left: 6px; font-variant-numeric: tabular-nums; }
+
+/* --------------------------------------------------------------- states --- */
+
+.skeleton {
+  background: linear-gradient(90deg, var(--surface) 25%, var(--surface-hover) 37%, var(--surface) 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.3s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+
+.empty, .error {
+  padding: var(--s7) var(--s5);
+  text-align: center;
+  color: var(--ink-muted);
+}
+.error { color: var(--critical); }
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--warning);
+  border-radius: var(--radius-sm);
+  color: var(--ink-secondary);
+  font-size: 13px;
+}
+
+/* minmax(0, …) rather than 1fr: a grid item's default min-width is auto, which is
+   min-content, so a wide table refuses to shrink and pushes the whole page into
+   horizontal scroll instead of scrolling inside its own wrapper. */
+.grid-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s5); }
+.breadcrumb { display: flex; align-items: center; gap: var(--s2); color: var(--ink-muted); font-size: 13px; margin-bottom: var(--s3); }
+
+footer {
+  max-width: var(--wide);
+  margin: 0 auto;
+  padding: var(--s5);
+  border-top: 1px solid var(--line);
+  color: var(--ink-muted);
+  font-size: 12px;
+  display: flex;
+  gap: var(--s4);
+  flex-wrap: wrap;
+}
+
+/* ------------------------------------------------------------------ home --- */
+
+.home {
+  display: grid;
+  /* The article column is sized for reading, not for filling the window: letting it
+     take 1fr on a wide screen leaves a 400px gulf between the text and the rail,
+     because the prose is capped at a comfortable measure anyway. Sizing the column
+     to the measure and centring the pair keeps them together. */
+  grid-template-columns: minmax(0, 68ch) 320px;
+  gap: var(--s6);
+  justify-content: center;
+  align-items: start;
+}
+.home-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+  position: sticky;
+  top: calc(var(--header-now, var(--header-h)) + var(--s5));
+}
+
+.rail-stat { padding: var(--s3) 0; border-bottom: 1px solid var(--line); }
+.rail-stat:first-child { padding-top: 0; }
+.rail-stat:last-child { padding-bottom: 0; border-bottom: 0; }
+.rail-label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-muted); }
+.rail-value { font-size: 22px; font-weight: 600; margin-top: 2px; color: var(--ink); }
+.rail-sub { font-size: 12px; color: var(--ink-muted); margin-top: 2px; }
+.rail-note { margin: 0 0 var(--s3); color: var(--ink-secondary); font-size: 13px; line-height: 1.55; }
+
+.post { max-width: 68ch; }
+.post-title { font-size: 30px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.2; color: var(--ink); }
+.post-date { display: block; margin-top: var(--s2); color: var(--ink-muted); font-size: 13px; }
+.post-page { margin-top: var(--s3); }
+
+.post-list { display: flex; flex-direction: column; }
+.post-row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--s4);
+  padding: var(--s3) var(--s4); border-bottom: 1px solid var(--line);
+}
+.post-row:last-child { border-bottom: 0; }
+.post-row:hover { background: var(--surface-hover); }
+.post-row-title { color: var(--ink); font-weight: 500; }
+.post-row-date { color: var(--ink-muted); font-size: 12px; white-space: nowrap; }
+
+/* Prose: measured for reading rather than for filling the column. */
+.prose { margin-top: var(--s5); color: var(--ink-secondary); font-size: 15px; line-height: 1.7; }
+.prose > :first-child { margin-top: 0; }
+.prose > :last-child { margin-bottom: 0; }
+.prose h2 {
+  margin: var(--s6) 0 var(--s3);
+  font-size: 19px; font-weight: 620; letter-spacing: -0.01em; color: var(--ink);
+}
+.prose h3 { margin: var(--s5) 0 var(--s2); font-size: 16px; font-weight: 600; color: var(--ink); }
+.prose p { margin: 0 0 var(--s4); }
+.prose strong { color: var(--ink); font-weight: 600; }
+.prose a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.prose ul, .prose ol { margin: 0 0 var(--s4); padding-left: var(--s5); }
+.prose li { margin-bottom: var(--s2); }
+.prose code {
+  font-family: var(--mono); font-size: 13px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 4px; padding: 1px 5px;
+}
+.prose pre {
+  margin: 0 0 var(--s4); padding: var(--s4);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  overflow-x: auto;                 /* long lines scroll here, not on the page */
+  font-size: 13px; line-height: 1.6;
+}
+.prose pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+.prose blockquote {
+  margin: 0 0 var(--s4); padding-left: var(--s4);
+  border-left: 2px solid var(--line); color: var(--ink-muted);
+}
+.prose hr { margin: var(--s6) 0; border: 0; border-top: 1px solid var(--line); }
+
+/* The header becomes two rows rather than dropping what does not fit. Freshness is
+   the only thing on the page that changes by itself, so hiding it on a narrow window
+   removes the one piece of live information there — and the countdown is precisely
+   what a reader should not have to widen a window to find.
+
+   This fires earlier than the content breakpoint because the header runs out of room
+   first: brand, nav, search, freshness and the toggle stop fitting around 1050px,
+   where the toggle was being pushed off the right edge. */
+@media (max-width: 1080px) {
+  .header {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: var(--header-h);
+    padding-top: var(--s2);
+    padding-bottom: var(--s2);
+    row-gap: var(--s2);
+  }
+  .brand-sub { display: none; }
+  /* Basis zero, not a width. Flexbox breaks lines on each item's *hypothetical*
+     size — its basis — and only shrinks within a line afterwards. Any non-zero basis
+     therefore forces a wrap at some width even though the item would have shrunk to
+     fit: at 640-680px a 160px basis overflowed the row by a few pixels, pushed the
+     34px toggle onto a line of its own, and the search then expanded to fill the row
+     it had been left alone on. With basis 0 the search only ever claims space that
+     is already spare, so it can never be the reason something else wraps. */
+  .search { margin-left: auto; flex: 1 1 0; min-width: 0; }
+  .freshness {
+    order: 10;            /* after the toggle, whatever the source order */
+    flex-basis: 100%;     /* claims a line of its own */
+    flex-wrap: wrap;      /* and degrades to two on a phone */
+    padding-top: var(--s2);
+    border-top: 1px solid var(--line);
+  }
+
+  /* A data table's min-content width is 500px, and side-by-side columns are
+     (viewport - 72) / 2 — so two of them stop fitting below 1072px and the table
+     spills past the viewport rather than shrinking. The wrapper only becomes a
+     scroll container lower down (making it one earlier would re-break sticky
+     headers, which anchor to the nearest scroll container). Collapsing to one
+     column here is what actually fits. */
+  .grid-2 { grid-template-columns: minmax(0, 1fr); }
+
+  /* The rail stops being a rail: below the article, full width, not sticky. */
+  .home { grid-template-columns: minmax(0, 1fr); justify-content: stretch; }
+  .home-side { position: static; }
+  .post { max-width: none; }
+}
+
+@media (max-width: 900px) {
+  /* Scroll shadows: without them a horizontally clipped table just looks like
+     broken layout, and nobody discovers the columns to the right. The `local`
+     gradients cover the shadows when scrolled to an edge, so the cue only appears
+     when there is actually more to see. */
+  .table-wrap {
+    overflow-x: auto;
+    background:
+      linear-gradient(to right, var(--surface) 40%, transparent) left center / 32px 100% no-repeat local,
+      linear-gradient(to left, var(--surface) 40%, transparent) right center / 32px 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, 0.4), transparent) left center / 12px 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, 0.4), transparent) right center / 12px 100% no-repeat scroll;
+  }
+  table.data th { position: static; }
+  /* Names give up room first: the numbers are the reason for the table. */
+  .name-cell { max-width: 18ch; }
+  .grid-2 { grid-template-columns: minmax(0, 1fr); }
+  .header { padding-left: var(--s4); padding-right: var(--s4); }
+  main { padding: var(--s5) var(--s4) var(--s6); }
+}
+@media (max-width: 620px) {
+  .nav { display: none; }
+}
+
+/* On a phone the search box can no longer share a row with the brand without
+   squeezing the toggle onto a line of its own — a 34px button with a whole row to
+   itself. Giving search the row instead spends the same vertical space on the thing
+   that benefits from the width. */
+@media (max-width: 480px) {
+  .search { order: 5; flex-basis: 100%; margin-left: 0; }
+  #theme-toggle { margin-left: auto; }
+}
+
+/* Once the freshness line itself has to wrap, a left divider on the countdown is a
+   rule hanging off the start of a line. Space separates them well enough there. */
+@media (max-width: 420px) {
+  .countdown { padding-left: 0; border-left: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

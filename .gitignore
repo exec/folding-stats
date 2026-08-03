@@ -1,0 +1,22 @@
+# Working notes on another operator's site — private research, not for publication.
+EOC-FEATURE-INVENTORY.md
+
+# Build output
+/foldingd
+/archiver
+/gendata
+/loadtest
+/loadramp
+*.exe
+
+# Runtime state: the archive and database are generated, large, and machine-local.
+/data/
+*.db
+*.db-shm
+*.db-wal
+/raw/
+state.json
+
+# Editor / OS
+.DS_Store
+*.swp
