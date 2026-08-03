@@ -877,8 +877,9 @@ export async function apiDocs(view) {
   // Placeholders resolve to entities that exist in every corpus, so each row is a
   // link you can actually follow: team 0 is "Default (No team specified)", the
   // largest team, and Anonymous is the most widely shared donor name. The column
-  // still shows the template, because that is the documentation; the href is a
-  // worked example, and the title says where it goes.
+  // shows the template, because that is the documentation; the href is a worked
+  // example, and the title says where it goes for anyone who wants to know before
+  // clicking.
   //
   // This previously read `.replace(/\{[^}]+\}/g, (m) => m)` — a substitution that
   // returns the match unchanged — so every templated row linked to a literal
@@ -893,9 +894,7 @@ export async function apiDocs(view) {
     const ex = exampleOf(path);
     return el('tr',
       el('td.left', el('code', { style: 'color:var(--series-3)' }, method)),
-      el('td.left',
-        el('a', { href: base + ex, title: `Example: ${ex}` }, el('code', path)),
-        ex === path ? null : el('span.muted', { style: 'margin-left:8px;font-size:12px' }, `try ${ex}`)),
+      el('td.left', el('a', { href: base + ex, title: `Example: ${ex}` }, el('code', path))),
       el('td.left.muted', desc));
   };
 
