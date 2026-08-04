@@ -99,6 +99,24 @@ CREATE TABLE IF NOT EXISTS team_monthly (
     PRIMARY KEY (slot, bucket)
 ) WITHOUT ROWID;
 
+-- Rollup lookups by bucket alone. The WITHOUT ROWID primary key is (entity, bucket),
+-- so a predicate on bucket with no entity cannot use it: the project-wide history and
+-- the hourly monthly-rollup recompute both degraded to a full table scan, and the cost
+-- tracked the size of the table rather than the size of the range asked for.
+--
+-- These are deliberately COVERING — (bucket, points, wus) rather than (bucket) —
+-- because a plain index on bucket is measurably *worse* than the scan it replaces. It
+-- orders the rows but still has to fetch points and wus for each one, which on a
+-- WITHOUT ROWID table means a random primary-key descent per row. Measured over 2M
+-- rows: 908ms scanning, 1669ms via a plain index, 268ms via the covering index; and
+-- over the 90-day default window, 238ms / 374ms / 60ms. The primary-key columns are
+-- appended to every secondary index automatically, so member_id and slot come along
+-- and the aggregate never touches the table at all.
+CREATE INDEX IF NOT EXISTS member_daily_bucket   ON member_daily(bucket, points, wus);
+CREATE INDEX IF NOT EXISTS member_monthly_bucket ON member_monthly(bucket, points, wus);
+CREATE INDEX IF NOT EXISTS team_daily_bucket     ON team_daily(bucket, points, wus);
+CREATE INDEX IF NOT EXISTS team_monthly_bucket   ON team_monthly(bucket, points, wus);
+
 -- One row per ingested snapshot pair. Doubles as the audit log and as the record
 -- of which snapshots have already been applied, so replay is idempotent.
 CREATE TABLE IF NOT EXISTS cycles (
