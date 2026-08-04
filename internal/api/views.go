@@ -37,7 +37,7 @@ func (s *Snapshot) teamView(slot int32) Team {
 	return Team{
 		TeamID:        t.ID,
 		Name:          s.State.Names.Name(t.NameID),
-		Rank:          s.Ranks.TeamRank[slot],
+		Rank:          s.Ranks.TeamRankOf(slot),
 		RankChange24h: change(s.Ranks.TeamChange24h(slot)),
 		MembersTotal:  total,
 		MembersActive: active,
@@ -60,8 +60,8 @@ func (s *Snapshot) memberView(slot int32, withTeamName bool) Member {
 	out := Member{
 		Name:          s.State.Names.Name(m.NameID),
 		TeamID:        m.TeamID,
-		RankGlobal:    s.Ranks.MemberRank[slot],
-		RankInTeam:    s.Ranks.InTeamRank[slot],
+		RankGlobal:    s.Ranks.MemberRankOf(slot),
+		RankInTeam:    s.Ranks.InTeamRankOf(slot),
 		RankChange24h: change(s.Ranks.MemberChange24h(slot)),
 		Production: Production{
 			PointsTotal:        m.Score,
@@ -183,7 +183,7 @@ func (s *Snapshot) donorIndexByName(name string) (int32, bool) {
 	if !ok {
 		return 0, false
 	}
-	idx := s.Ranks.DonorIndex[nameID]
+	idx := s.Ranks.DonorIndexOf(nameID)
 	if idx < 0 {
 		return 0, false
 	}

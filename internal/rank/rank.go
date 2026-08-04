@@ -462,6 +462,42 @@ func (t *Table) buildDonors(st *model.State, cfg Config) {
 	}
 }
 
+// The published Snapshot holds a pointer to the *live* model.State but to a table
+// frozen at the last publish, so State grows past this table between cycles: every
+// entity first seen since it was built has a slot beyond these arrays. Indexing them
+// blind panicked the handler — `index out of range [4] with length 3` — for any
+// request naming a new team or donor during the seconds between state.Apply and
+// Publish, on every detail, rivals, history and search route.
+//
+// Zero means "not ranked in this snapshot", which is the convention DonorRank already
+// used, and is the truthful answer: this snapshot describes the corpus as of its own
+// timestamp, and the entity did not exist then.
+
+// TeamRankOf returns a team's rank, or 0 for a slot this table does not cover.
+func (t *Table) TeamRankOf(slot int32) int32 { return rankAt(t.TeamRank, slot) }
+
+// MemberRankOf returns a member's global rank, or 0 if this table predates it.
+func (t *Table) MemberRankOf(slot int32) int32 { return rankAt(t.MemberRank, slot) }
+
+// InTeamRankOf returns a member's rank within its team, or 0 if this table predates it.
+func (t *Table) InTeamRankOf(slot int32) int32 { return rankAt(t.InTeamRank, slot) }
+
+// DonorIndexOf resolves a name id to its position in Donors, or -1 when the name has
+// no members or arrived after this table was built.
+func (t *Table) DonorIndexOf(nameID int32) int32 {
+	if nameID < 0 || int(nameID) >= len(t.DonorIndex) {
+		return -1
+	}
+	return t.DonorIndex[nameID]
+}
+
+func rankAt(ranks []int32, slot int32) int32 {
+	if slot < 0 || int(slot) >= len(ranks) {
+		return 0
+	}
+	return ranks[slot]
+}
+
 // DonorRank returns a donor's 1-based rank by name id, or 0 if the name has no
 // members.
 func (t *Table) DonorRank(nameID int32) int32 {

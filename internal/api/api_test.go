@@ -1618,3 +1618,83 @@ func TestPaginationCannotOverflowIntoANegativeBound(t *testing.T) {
 		}
 	}
 }
+
+// growState adds one team and one donor to a live State without rebuilding the table,
+// which is exactly what happens between state.Apply and Publish on every cycle.
+func growState(t *testing.T, state *model.State) {
+	t.Helper()
+	state.Apply(at(3),
+		[]parse.TeamRow{tr(32, "overclockers", 2500), tr(51, "Alliance", 900), tr(77, "newcomers", 400)},
+		[]parse.UserRow{u("DH", 1200, 32), u("toTOW", 1000, 32), u("DH", 500, 51),
+			u("solo", 400, 51), u("brandnew", 300, 77)})
+}
+
+func TestSnapshotSurvivesStateGrowingPastItsTable(t *testing.T) {
+	// The Snapshot points at the LIVE State but a table frozen at the last publish,
+	// so between state.Apply and Publish — seconds, every cycle — State holds entities
+	// the table has never seen. Their slots run past the rank arrays, and indexing
+	// blind panicked the handler for anyone who named one.
+	st, err := store.Open(filepath.Join(t.TempDir(), "g.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	state := model.NewState()
+	memberWin, teamWin := metrics.New(0), metrics.New(0)
+	ctx := context.Background()
+	for _, c := range []struct {
+		when  time.Time
+		teams []parse.TeamRow
+		users []parse.UserRow
+	}{
+		{at(1), []parse.TeamRow{tr(32, "overclockers", 1000), tr(51, "Alliance", 500)},
+			[]parse.UserRow{u("DH", 600, 32), u("toTOW", 400, 32), u("DH", 300, 51), u("solo", 200, 51)}},
+		{at(2), []parse.TeamRow{tr(32, "overclockers", 1900), tr(51, "Alliance", 700)},
+			[]parse.UserRow{u("DH", 1000, 32), u("toTOW", 900, 32), u("DH", 400, 51), u("solo", 300, 51)}},
+	} {
+		cy := state.Apply(c.when, c.teams, c.users)
+		if err := st.WriteCycle(ctx, state, cy, store.CycleMeta{
+			TeamSnapshotAt: c.when, UserSnapshotAt: c.when}); err != nil {
+			t.Fatal(err)
+		}
+		memberWin.Grow(len(state.Members))
+		memberWin.Push(c.when, cy.MemberDeltas)
+		teamWin.Grow(len(state.Teams))
+		teamWin.Push(c.when, cy.TeamDeltas)
+	}
+
+	tbl := rank.Build(state, at(2), rank.DefaultConfig)
+	tbl.BuildOrders(state, memberWin, teamWin, nil, nil)
+	srv := NewServer()
+	srv.Publish(Build(state, memberWin, teamWin, tbl, st, at(2), at(3), "grow-etag"))
+
+	// The next cycle lands in State. The published table still predates it.
+	growState(t, state)
+
+	// Every route that resolves an entity from live State and then reads the table.
+	for _, path := range []string{
+		"/v1/teams/77",
+		"/v1/teams/77/rivals",
+		"/v1/teams/77/members",
+		"/v1/donors/brandnew",
+		"/v1/donors/brandnew/rivals",
+		"/v1/donors/brandnew/teams",
+		"/v1/donors/brandnew/history",
+		"/v1/search?q=newcomers",
+		"/v1/search?q=brandnew",
+		"/v1/teams", "/v1/donors", "/v1/summary",
+	} {
+		rec, _ := get(t, srv, path)
+		// 404 is fine — this snapshot legitimately predates the entity. A panic is
+		// not, and net/http turns one into a torn-down connection mid-response.
+		if rec.Code != http.StatusOK && rec.Code != http.StatusNotFound {
+			t.Errorf("%s: status %d, want 200 or 404", path, rec.Code)
+		}
+	}
+
+	// Entities the table does know are unaffected.
+	if rec, _ := get(t, srv, "/v1/teams/32"); rec.Code != http.StatusOK {
+		t.Errorf("established team: status %d, want 200", rec.Code)
+	}
+}
