@@ -124,12 +124,37 @@ func (s *Server) handle(fn handlerFunc) http.HandlerFunc {
 
 		// The snapshot points at live ingest structures, so every read of them —
 		// including the view builders — happens under the read lock.
-		if snap.Guard != nil {
-			snap.Guard.RLock()
-			defer snap.Guard.RUnlock()
-		}
-
-		data, page, err := fn(snap, r)
+		//
+		// The lock is scoped to exactly those reads and released before anything is
+		// marshalled or written. It used to be held by a deferred unlock for the whole
+		// handler, which put the response write inside it: a client that asked for
+		// per_page=1000 and then stopped reading blocked in w.Write, holding the read
+		// lock until WriteTimeout. Ingest's writer then queued behind it, and Go's
+		// RWMutex blocks new readers once a writer is waiting — so every later request
+		// blocked too, including /v1/status. One connection renewed every 59 seconds
+		// was an unauthenticated outage from a single host.
+		//
+		// This is safe because the payload stops aliasing guarded state at the moment
+		// fn returns: the view builders copy scalars and take Names.Name(), which
+		// allocates its own string, so nothing in `data` points back into the arena or
+		// the windows. warmingUp is the one straggler — it reads the live window — so
+		// it is evaluated here rather than in the Envelope literal below.
+		var (
+			data any
+			page *PageInfo
+			warm *WarmingUp
+			err  error
+		)
+		func() {
+			if snap.Guard != nil {
+				snap.Guard.RLock()
+				defer snap.Guard.RUnlock()
+			}
+			if data, page, err = fn(snap, r); err != nil {
+				return
+			}
+			warm = warmingUp(snap)
+		}()
 		if err != nil {
 			writeAPIError(w, err)
 			return
@@ -147,7 +172,7 @@ func (s *Server) handle(fn handlerFunc) http.HandlerFunc {
 				NextExpectedAt: snap.NextExpected.UTC(),
 				Stale:          !snap.StaleAfter.IsZero() && now.After(snap.StaleAfter),
 				ServerTime:     now,
-				WarmingUp:      warmingUp(snap),
+				WarmingUp:      warm,
 			},
 			Data: data,
 			Page: page,

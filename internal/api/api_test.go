@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1697,4 +1698,59 @@ func TestSnapshotSurvivesStateGrowingPastItsTable(t *testing.T) {
 	if rec, _ := get(t, srv, "/v1/teams/32"); rec.Code != http.StatusOK {
 		t.Errorf("established team: status %d, want 200", rec.Code)
 	}
+}
+
+// blockingWriter stalls inside Write, the way a client that stops reading stalls the
+// kernel send buffer.
+type blockingWriter struct {
+	hdr     http.Header
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (w *blockingWriter) Header() http.Header { return w.hdr }
+func (w *blockingWriter) WriteHeader(int)     {}
+func (w *blockingWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() { close(w.started) })
+	<-w.release
+	return len(p), nil
+}
+
+func TestGuardIsReleasedBeforeTheResponseIsWritten(t *testing.T) {
+	// The read lock used to be held by a deferred unlock for the whole handler, so it
+	// covered w.Write. A client that requested a large page and stopped reading blocked
+	// there for up to WriteTimeout while holding it; ingest's writer queued behind it,
+	// and Go's RWMutex blocks new readers once a writer waits — so every subsequent
+	// request blocked too, including /v1/status. One connection renewed every 59
+	// seconds was an unauthenticated outage from a single host.
+	srv := fixture(t)
+	guard := &sync.RWMutex{}
+	srv.Current().Guard = guard
+
+	bw := &blockingWriter{hdr: http.Header{}, started: make(chan struct{}), release: make(chan struct{})}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.ServeHTTP(bw, httptest.NewRequest(http.MethodGet, "/v1/teams?per_page=1000", nil))
+	}()
+
+	select {
+	case <-bw.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler never reached Write")
+	}
+
+	// We are now parked inside Write. The writer must be able to take the lock — that
+	// is ingest, and on the old code it could not until the client drained or the
+	// write timed out.
+	if !guard.TryLock() {
+		close(bw.release)
+		<-done
+		t.Fatal("the response write still holds the read lock; ingest would block behind a stalled client")
+	}
+	guard.Unlock()
+
+	close(bw.release)
+	<-done
 }
