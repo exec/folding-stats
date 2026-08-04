@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -106,7 +107,16 @@ func run(dir, addr, ua string, poll, compactAfter, keepDaily time.Duration, noFe
 	// update, which would reach zero and then wait out the rest of a tick.
 	archiver.Delay = func(now time.Time) time.Duration { return svc.PollDelay(now, poll) }
 
+	// Background work is waited on, not abandoned. `defer db.Close()` above used to
+	// fire as soon as ListenAndServe returned, while the archiver goroutine could
+	// still be inside a cycle's write and maintain inside a compaction — closing the
+	// database out from under either. An aborted cycle write is not a clean rollback
+	// in effect: the in-memory model has already absorbed the snapshot destructively,
+	// so the hour is unrecoverable and the slots it assigned are never persisted.
+	var bg sync.WaitGroup
+	bg.Add(2)
 	go func() {
+		defer bg.Done()
 		if noFetch {
 			log.Warn("upstream polling disabled; following the existing archive")
 			follow(ctx, svc, poll, log)
@@ -115,7 +125,10 @@ func run(dir, addr, ua string, poll, compactAfter, keepDaily time.Duration, noFe
 		archiver.Run(ctx, poll)
 	}()
 
-	go maintain(ctx, svc, db, compactAfter, keepDaily, log)
+	go func() {
+		defer bg.Done()
+		maintain(ctx, svc, db, compactAfter, keepDaily, log)
+	}()
 
 	httpSrv := &http.Server{
 		Addr:              addr,
@@ -135,7 +148,16 @@ func run(dir, addr, ua string, poll, compactAfter, keepDaily time.Duration, noFe
 	}()
 
 	log.Info("serving", "addr", addr, "dir", dir)
-	return httpSrv.ListenAndServe()
+	err = httpSrv.ListenAndServe()
+
+	// However the server ended — a signal or a failure to listen — stop the
+	// background work and let it finish before the deferred db.Close() runs. Without
+	// the explicit stop, a listen failure would leave ctx live and this would block
+	// forever instead of reporting the error.
+	stop()
+	bg.Wait()
+	log.Info("background work finished")
+	return err
 }
 
 // follow serves an archive somebody else is filling.

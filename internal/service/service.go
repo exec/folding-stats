@@ -40,6 +40,10 @@ const staleGrace = 20 * time.Minute
 // how far back a restart must replay deltas to rebuild them.
 const windowSpan = 7 * 24 * time.Hour
 
+// cycleWriteTimeout bounds a cycle's commit once it has started. Measured writes are
+// ~50ms at corpus scale, so this is a wedged-database ceiling rather than a budget.
+const cycleWriteTimeout = 60 * time.Second
+
 // Service owns the mutable ingest state and publishes immutable views.
 type Service struct {
 	Archive *feed.Archive
@@ -278,7 +282,23 @@ func (s *Service) applyCycle(ctx context.Context, p snapshotPair) error {
 	cycle := s.state.Apply(p.at, teamRows, userRows)
 	s.guard.Unlock()
 
-	if err := s.Store.WriteCycle(ctx, s.state, cycle, store.CycleMeta{
+	// The commit deliberately outlives a cancelled parent.
+	//
+	// state.Apply above is destructive — it advances every touched total to the new
+	// snapshot — and there is no per-cycle undo. So an aborted write is not a clean
+	// rollback: the database rolls back, the model does not, and the two disagree
+	// permanently. The hour's production exists only as the diff that Apply just
+	// consumed, so replaying the same snapshot produces an empty cycle, and the slots
+	// Apply assigned are never persisted, which makes the next LoadIdentity fail
+	// outright.
+	//
+	// Shutdown cancels ctx while this goroutine may be exactly here, so the write
+	// gets its own deadline instead of the caller's cancellation. Bounded rather than
+	// unbounded: a wedged write must not hold shutdown open forever, and a cycle
+	// commit is ~50ms against 2.7M members.
+	writeCtx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), cycleWriteTimeout)
+	defer cancelWrite()
+	if err := s.Store.WriteCycle(writeCtx, s.state, cycle, store.CycleMeta{
 		TeamSnapshotAt: p.team.Meta.SnapshotAt,
 		UserSnapshotAt: p.user.Meta.SnapshotAt,
 		TeamRows:       teamStats.Rows,

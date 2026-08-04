@@ -488,3 +488,57 @@ func mustLookup(t *testing.T, svc *Service, name string) int32 {
 	}
 	return id
 }
+
+func TestCycleCommitSurvivesACancelledContext(t *testing.T) {
+	// Shutdown cancels the context while the archiver goroutine may be inside a
+	// cycle's write. state.Apply is destructive and has no undo, so an aborted commit
+	// is not a clean rollback: the database rolls back, the model does not, the hour's
+	// production only ever existed as the diff Apply just consumed, and the slots it
+	// assigned are never persisted — which makes the next LoadIdentity fail outright.
+	//
+	// So the commit must outlive the cancellation that triggered the shutdown.
+	dir := t.TempDir()
+	a := seed(t, dir, twoCycles())
+	svc, _, db := newService(t, dir, a)
+	defer db.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled, as it would be mid-shutdown
+
+	n, err := svc.Ingest(ctx)
+	if err != nil {
+		t.Fatalf("ingest under a cancelled context: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("applied %d cycles under a cancelled context, want 2", n)
+	}
+
+	// The model and the store must agree, or a restart cannot boot.
+	applied, err := db.AppliedCycles(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applied) != 2 {
+		t.Errorf("store recorded %d applied cycles, want 2 — a cycle was lost", len(applied))
+	}
+
+	// The decisive check: a fresh process must load this database without the slot
+	// mismatch that a half-written cycle produces.
+	svc2, _, db2 := newService(t, dir, a)
+	defer db2.Close()
+	if got, want := len(svc2.state.Members), len(svc.state.Members); got != want {
+		t.Errorf("restart loaded %d members, want %d", got, want)
+	}
+	if !svc2.state.At.Equal(svc.state.At) {
+		t.Errorf("restart resumed at %v, want %v", svc2.state.At, svc.state.At)
+	}
+	// And production is intact rather than silently zeroed.
+	nameID, ok := svc2.state.Names.Lookup("DH")
+	if !ok {
+		t.Fatal("DH missing after restart")
+	}
+	slot, _ := svc2.state.MemberSlot(nameID, 32)
+	if svc2.memberWin.Last7d(slot) == 0 {
+		t.Error("DH has no recorded production after restart; the cycle's deltas were lost")
+	}
+}
