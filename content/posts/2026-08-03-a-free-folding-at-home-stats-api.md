@@ -48,6 +48,7 @@ So: no key, no sign-up, no quota. I would much rather optimise than restrict, so
 GET /v1/donors/{name}          one donor, with per-team breakdown
 GET /v1/donors/{name}/history  production over time
 GET /v1/teams/{id}/members     a team roster
+GET /v1/donors/{name}/rivals   who you are about to pass, and who is passing you
 GET /v1/summary                project-wide totals
 ```
 
@@ -77,11 +78,19 @@ I did check the arithmetic before committing to it: rounding the seven-day total
 
 Anything bucketed by calendar day or month is explicitly UTC and says so. Timestamps that are moments rather than periods — publish times, hourly points — render in your own timezone.
 
+### Overtake projections
+
+*Added 4 August. This post originally listed these as deliberately left out.*
+
+The reservation that kept them out has not gone away, and it is worth stating before the feature is: a projection assumes your output and your rival's both hold constant, and that is not true of anybody with a job or a power bill. It is a guess dressed as a date.
+
+What changed my mind is that the guess is useful anyway, provided it never pretends otherwise. So `/rivals` gives you the ranking either side of you with the projection attached, and says nothing at all — rather than inventing a date — when the one behind is not actually gaining, or would not arrive this decade. In the API that is `overtake_days`, and it is null far more often than it is set. Your own row travels in the list, so the page reads as one ranking with you inside it rather than two tables either side of a gap.
+
+Precision is deliberately thrown away too. "in 3 days" is a claim worth making; "in 3.17 days" dresses the same guess up as a measurement.
+
 ## What is not here yet
 
 **History starts on 3 August 2026.** Lifetime point totals come from upstream and are complete going back to the beginning. But *rates and history* — anything requiring a comparison between two moments — only exist from the day collection started. That window deepens every hour.
-
-**No overtake projections.** These are a popular feature elsewhere and I understand the appeal. I have left them out because the projection assumes your output and your rival's both hold constant, which is not true of anybody with a job or a power bill. If enough people want it anyway, I will revisit.
 
 **No affiliation.** This site is not run by or endorsed by the Folding@home project — today based at the University of Pennsylvania, after Stanford and Washington University in St. Louis before it — nor by ExtremeOverclocking. The data comes from the official Folding@home feeds.
 
