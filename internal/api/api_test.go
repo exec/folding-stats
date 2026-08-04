@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -2004,5 +2005,101 @@ func TestActiveOnlyRosterPagesOverExactlyTheActiveMembers(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("position %d: paged %q, filter %q", i, got[i], want[i])
 		}
+	}
+}
+
+// TestDonorTotalsAgreeWithSummingTheMembers holds the precomputed per-donor figures
+// to the walk they replace.
+//
+// donorView has two paths now, and they must produce the same Donor. The fallback is
+// still reachable — any Table built without BuildOrders takes it — so this builds the
+// same state both ways and compares every field of every donor. A drift here would
+// not look like a bug from outside: it would be a slightly wrong points-per-day on
+// exactly the donors nobody can check by hand, the ones on thousands of teams.
+func TestDonorTotalsAgreeWithSummingTheMembers(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	state := model.NewState()
+	memberWin, teamWin := metrics.New(0), metrics.New(0)
+
+	// A spread of shapes: a donor on many teams (the expensive case the precompute
+	// exists for), donors on one, a donor whose teams produce unevenly, and one that
+	// appears late so its observed span is shorter than the window.
+	rows := func(cycle int) []parse.UserRow {
+		var out []parse.UserRow
+		for team := int32(1); team <= 12; team++ {
+			out = append(out, u("spread", int64(100*int(team)+cycle*7*int(team)), team))
+		}
+		out = append(out, u("solo", int64(5000+cycle*250), 1))
+		out = append(out, u("dormant", 900, 2))
+		for team := int32(1); team <= 3; team++ {
+			out = append(out, u("uneven", int64(200+cycle*cycle*int(team)*13), team))
+		}
+		if cycle >= 2 {
+			out = append(out, u("latecomer", int64(40*cycle), 4))
+		}
+		return out
+	}
+	var teamRows []parse.TeamRow
+	for id := int32(1); id <= 12; id++ {
+		teamRows = append(teamRows, tr(id, fmt.Sprintf("t%d", id), int64(10000*int(id))))
+	}
+	for i, when := range []time.Time{at(1), at(2), at(3)} {
+		cy := state.Apply(when, teamRows, rows(i+1))
+		if err := st.WriteCycle(context.Background(), state, cy, store.CycleMeta{
+			TeamSnapshotAt: when, UserSnapshotAt: when}); err != nil {
+			t.Fatal(err)
+		}
+		memberWin.Grow(len(state.Members))
+		memberWin.Push(when, cy.MemberDeltas)
+		teamWin.Grow(len(state.Teams))
+		teamWin.Push(when, cy.TeamDeltas)
+	}
+
+	// Fast path: BuildOrders fills the per-donor totals.
+	fast := rank.Build(state, at(3), rank.DefaultConfig)
+	fast.BuildOrders(state, memberWin, teamWin, nil, nil)
+	fastSnap := Build(state, memberWin, teamWin, fast, st, at(3), at(4), "fast")
+
+	// Fallback: no BuildOrders, so donorView sums the members itself.
+	slow := rank.Build(state, at(3), rank.DefaultConfig)
+	slowSnap := Build(state, memberWin, teamWin, slow, st, at(3), at(4), "slow")
+
+	if _, ok := fast.DonorTotals(0); !ok {
+		t.Fatal("fast table has no precomputed totals; the paths are not being compared")
+	}
+	if _, ok := slow.DonorTotals(0); ok {
+		t.Fatal("slow table has precomputed totals; the fallback is not being exercised")
+	}
+	if len(fast.Donors) < 5 {
+		t.Fatalf("only %d donors in the fixture", len(fast.Donors))
+	}
+
+	var checked int
+	for i := range fast.Donors {
+		// ThisMonth comes from the rollup, which neither path computes here, so it is
+		// zero on both and is not what this test is about.
+		a := fastSnap.donorView(int32(i), true)
+		b := slowSnap.donorView(int32(i), true)
+		if a.Name != b.Name {
+			t.Fatalf("donor %d: fast is %q, fallback is %q — the tables disagree on order",
+				i, a.Name, b.Name)
+		}
+		if a.Production != b.Production {
+			t.Errorf("donor %q:\n  precomputed %+v\n  summed      %+v", a.Name, a.Production, b.Production)
+		}
+		if !reflect.DeepEqual(a.Teams, b.Teams) || a.TeamsTruncated != b.TeamsTruncated {
+			t.Errorf("donor %q: the embedded team breakdown differs between paths", a.Name)
+		}
+		if a.PointsLast7d > 0 {
+			checked++
+		}
+	}
+	if checked < 3 {
+		t.Fatalf("only %d donors had any production; the fixture proves little", checked)
 	}
 }

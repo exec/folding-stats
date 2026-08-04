@@ -102,26 +102,41 @@ func (s *Snapshot) donorView(idx int32, withTeams bool) Donor {
 			WUsTotal:    d.WUs,
 		},
 	}
-	// A donor has been observed since the first of their members was, so the longest
-	// member span is the donor's. Taking the shortest would restart the clock every
-	// time an existing donor joined another team, collapsing a long-standing donor's
-	// average onto whatever their newest membership has produced.
-	var observed time.Duration
-	for _, slot := range members {
-		out.PointsLastUpdate += s.Members.LastUpdate(slot)
-		out.PointsLast24h += s.Members.Last24h(slot)
-		out.PointsLast7d += s.Members.Last7d(slot)
-		out.PointsTodayUTC += s.Members.Today(slot)
-		out.PointsThisWeekUTC += s.Members.ThisWeek(slot)
-		if span := s.Members.ObservedSpan(slot); span > observed {
-			observed = span
+	// Summed across this donor's members when the periods were built, because the
+	// donors with the most members are precisely the ones a leaderboard sorted by
+	// team count or work units puts on its first page — so the per-response walk was
+	// slowest exactly where it ran most.
+	if p, ok := s.Ranks.DonorTotals(idx); ok {
+		out.PointsLastUpdate = p.LastUpdate
+		out.PointsLast24h = p.Last24h
+		out.PointsLast7d = p.Last7d
+		out.PointsTodayUTC = p.Today
+		out.PointsThisWeekUTC = p.ThisWeek
+		out.PointsThisMonthUTC = p.ThisMonth
+		out.PointsPerDay7dAvg = p.PerDay
+	} else {
+		// No prebuilt totals (a Table assembled without BuildOrders): sum them here.
+		// A donor has been observed since the first of their members was, so the
+		// longest member span is the donor's. Taking the shortest would restart the
+		// clock every time an existing donor joined another team, collapsing a
+		// long-standing donor's average onto whatever their newest membership has
+		// produced.
+		var observed time.Duration
+		for _, slot := range members {
+			out.PointsLastUpdate += s.Members.LastUpdate(slot)
+			out.PointsLast24h += s.Members.Last24h(slot)
+			out.PointsLast7d += s.Members.Last7d(slot)
+			out.PointsTodayUTC += s.Members.Today(slot)
+			out.PointsThisWeekUTC += s.Members.ThisWeek(slot)
+			if span := s.Members.ObservedSpan(slot); span > observed {
+				observed = span
+			}
 		}
+		out.PointsThisMonthUTC = s.Ranks.DonorMonth(idx)
+		// Averaging the summed week, not summing per-member averages: rounding each
+		// member separately then adding would drift by up to half a point per team.
+		out.PointsPerDay7dAvg = metrics.PerDay(out.PointsLast7d, observed)
 	}
-	// Already summed across this donor's members when the periods were built.
-	out.PointsThisMonthUTC = s.Ranks.DonorMonth(idx)
-	// Averaging the summed week, not summing per-member averages: rounding each
-	// member separately then adding would drift by up to half a point per team.
-	out.PointsPerDay7dAvg = metrics.PerDay(out.PointsLast7d, observed)
 
 	if withTeams {
 		out.Teams, out.TeamsTruncated = s.breakdown(members, maxEmbeddedTeams)

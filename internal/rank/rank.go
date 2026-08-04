@@ -112,10 +112,24 @@ type Table struct {
 	teamOrders  map[SortKey][]int32
 	donorOrders map[SortKey][]int32
 
-	// donorMonth is each donor's month-to-date total, summed from its members. Kept
-	// because it is the sort key the API also has to report — recomputing it per
-	// response would mean re-walking every member of the donor.
-	donorMonth []int64
+	// Each donor's production per period, summed from its members. Kept because they
+	// are the sort keys the API also has to report — recomputing one per response
+	// means re-walking every member of the donor, and the donors with the most
+	// members are exactly the ones a "sort by teams" or "sort by WUs" page selects.
+	//
+	// Filling them costs nothing: BuildOrders already makes this pass to build the
+	// orderings, and previously discarded every column but the month. Retaining them
+	// adds 102 MB of live heap across 2.1M donors — but measured resident size grew
+	// by 17 MB, because that memory was already being allocated on every publish and
+	// only thrown away afterwards. The publish itself is where the full amount shows,
+	// since the next set is built while this one is still being served.
+	donorMonth  []int64
+	donorDay    []int64
+	donorWeek   []int64
+	donorLast24 []int64
+	donorLast7d []int64
+	donorUpdate []int64
+	donorPerDay []int64
 
 	buf sortBuf
 }
@@ -229,6 +243,7 @@ func (t *Table) BuildOrders(st *model.State, members, teams *metrics.Window,
 	month := make([]int64, n)
 	last24 := make([]int64, n)
 	last7d := make([]int64, n)
+	update := make([]int64, n)
 	observed := make([]time.Duration, n)
 	mMonth := indexed(memberMonth, len(st.Members))
 	for slot := range st.Members {
@@ -242,6 +257,7 @@ func (t *Table) BuildOrders(st *model.State, members, teams *metrics.Window,
 		month[d] += mMonth[slot]
 		last24[d] += members.Last24h(id)
 		last7d[d] += members.Last7d(id)
+		update[d] += members.LastUpdate(id)
 		// A donor has been observed since the first of its members was; see donorView.
 		if span := members.ObservedSpan(id); span > observed[d] {
 			observed[d] = span
@@ -264,9 +280,42 @@ func (t *Table) BuildOrders(st *model.State, members, teams *metrics.Window,
 	t.donorOrders[Last24h] = t.orderBy(last24)
 	t.donorOrders[WUs] = t.orderBy(wus)
 	t.donorOrders[Teams] = t.orderBy(teamCount)
-	t.donorMonth = month
+
+	t.donorMonth, t.donorDay, t.donorWeek = month, day, week
+	t.donorLast24, t.donorLast7d, t.donorUpdate, t.donorPerDay = last24, last7d, update, perDay
 
 	t.buf = sortBuf{}
+}
+
+// DonorTotals is a donor's production over every period the API reports.
+type DonorTotals struct {
+	LastUpdate int64
+	Last24h    int64
+	Last7d     int64
+	Today      int64
+	ThisWeek   int64
+	ThisMonth  int64
+	PerDay     int64
+}
+
+// DonorTotals returns a donor's summed production, and whether it is available.
+//
+// False means BuildOrders has not run — the case for a Table built directly in a
+// test. Callers sum the members themselves then, so the totals are an accelerator
+// rather than something correctness depends on.
+func (t *Table) DonorTotals(i int32) (DonorTotals, bool) {
+	if i < 0 || int(i) >= len(t.donorLast7d) {
+		return DonorTotals{}, false
+	}
+	return DonorTotals{
+		LastUpdate: t.donorUpdate[i],
+		Last24h:    t.donorLast24[i],
+		Last7d:     t.donorLast7d[i],
+		Today:      t.donorDay[i],
+		ThisWeek:   t.donorWeek[i],
+		ThisMonth:  t.donorMonth[i],
+		PerDay:     t.donorPerDay[i],
+	}, true
 }
 
 // orderBy sorts ids best-first by score. The radix scratch aliases across calls, so
