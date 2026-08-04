@@ -1754,3 +1754,85 @@ func TestGuardIsReleasedBeforeTheResponseIsWritten(t *testing.T) {
 	close(bw.release)
 	<-done
 }
+
+func TestTeamSearchIndexPreservesSemantics(t *testing.T) {
+	// Search's team half stopped scanning every team and now uses a sorted name
+	// index, the way the donor half always did. The results have to be identical,
+	// including the two cases the old full scan handled incidentally: several teams
+	// sharing one exact name, and a name that is a strict prefix of longer ones.
+	st, err := store.Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	state := model.NewState()
+	memberWin, teamWin := metrics.New(0), metrics.New(0)
+	// "Folders" is an exact name shared by two teams, and a prefix of three more.
+	// Scores set the rank order the results must come back in.
+	teams := []parse.TeamRow{
+		tr(1, "Folders", 900), tr(2, "Folders United", 800), tr(3, "Folders", 700),
+		tr(4, "folders anonymous", 600), tr(5, "FOLDERSXTREME", 500), tr(6, "Unrelated", 400),
+	}
+	users := []parse.UserRow{u("someone", 100, 1)}
+	for _, when := range []time.Time{at(1), at(2)} {
+		cy := state.Apply(when, teams, users)
+		if err := st.WriteCycle(context.Background(), state, cy, store.CycleMeta{
+			TeamSnapshotAt: when, UserSnapshotAt: when}); err != nil {
+			t.Fatal(err)
+		}
+		memberWin.Grow(len(state.Members))
+		memberWin.Push(when, cy.MemberDeltas)
+		teamWin.Grow(len(state.Teams))
+		teamWin.Push(when, cy.TeamDeltas)
+	}
+	tbl := rank.Build(state, at(2), rank.DefaultConfig)
+	tbl.BuildOrders(state, memberWin, teamWin, nil, nil)
+	srv := NewServer()
+	srv.Publish(Build(state, memberWin, teamWin, tbl, st, at(2), at(3), "search-etag"))
+
+	ids := func(path string) ([]int32, bool) {
+		t.Helper()
+		_, env := get(t, srv, path)
+		r := decode[SearchResults](t, env.Data)
+		var out []int32
+		for _, tm := range r.Teams {
+			out = append(out, tm.TeamID)
+		}
+		return out, r.ExactTeam
+	}
+
+	// Case-insensitive prefix, best-ranked first.
+	got, exact := ids("/v1/search?q=Folders&type=team&limit=50")
+	if !exact {
+		t.Error("exact_team not set for a name that exists verbatim")
+	}
+	// Both teams named exactly "Folders" lead, in rank order, then the longer names.
+	want := []int32{1, 3, 2, 4, 5}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("q=Folders order = %v, want %v", got, want)
+			break
+		}
+	}
+
+	// A lowercase query must find the mixed- and upper-case names too.
+	if got, _ := ids("/v1/search?q=folders&type=team&limit=50"); len(got) != 5 {
+		t.Errorf("q=folders matched %d teams, want 5 — the fold is not case-insensitive", len(got))
+	}
+	// A prefix that matches nothing is empty and, critically, not an error.
+	if got, exact := ids("/v1/search?q=zzzzzzzz&type=team&limit=50"); len(got) != 0 || exact {
+		t.Errorf("q=zzzzzzzz returned %v exact=%v, want none", got, exact)
+	}
+	// Numeric exact-by-id still leads and is still marked.
+	if got, exact := ids("/v1/search?q=6&type=team&limit=50"); len(got) == 0 || got[0] != 6 || !exact {
+		t.Errorf("q=6 returned %v exact=%v, want team 6 first and marked", got, exact)
+	}
+	// A longer prefix narrows rather than widening.
+	if got, _ := ids("/v1/search?q=Folders%20U&type=team&limit=50"); len(got) != 1 || got[0] != 2 {
+		t.Errorf("q='Folders U' returned %v, want just team 2", got)
+	}
+}

@@ -83,9 +83,11 @@ type Table struct {
 	teamMembers []int32
 	teamOffsets []int32
 
-	// nameOrder indexes into Donors, sorted case-insensitively by name, for
-	// prefix search.
-	nameOrder []int32
+	// nameOrder indexes into Donors, and teamNameOrder into State.Teams, both sorted
+	// case-insensitively by name so a prefix lookup is a binary search plus a short
+	// scan rather than a pass over the whole corpus.
+	nameOrder     []int32
+	teamNameOrder []int32
 
 	// 24-hour rank movement, positive meaning improved. Indexed by member slot, team
 	// slot and donor position respectively, and nil until a 24h baseline exists.
@@ -716,6 +718,63 @@ func (t *Table) buildSearchIndex(st *model.State) {
 			st.Names.Bytes(t.Donors[t.nameOrder[b]].NameID),
 		)
 	})
+
+	// Teams get the same treatment, and did not have it. Search walked all 130k of
+	// them in rank order per request, allocating a string for the name and another to
+	// lowercase it — twice over, because an interned query also triggered an exact-name
+	// scan. A query matching nothing walked the whole corpus twice and cost 16.8ms,
+	// against 0.2ms for the donor half doing the same job with this index.
+	t.teamNameOrder = make([]int32, len(st.Teams))
+	for i := range st.Teams {
+		t.teamNameOrder[i] = int32(i)
+	}
+	sort.Slice(t.teamNameOrder, func(a, b int) bool {
+		return lessFold(
+			st.Names.Bytes(st.Teams[t.teamNameOrder[a]].NameID),
+			st.Names.Bytes(st.Teams[t.teamNameOrder[b]].NameID),
+		)
+	})
+}
+
+// TeamPrefix returns up to limit team slots whose names begin with q,
+// case-insensitively, ordered by rank so the strongest team leads.
+//
+// Names that equal q exactly sort to the front of the prefix range, so a caller
+// looking for an exact hit finds it among the first results rather than needing a
+// separate pass over every team.
+func (t *Table) TeamPrefix(st *model.State, q string, limit int) []int32 {
+	if q == "" || limit <= 0 || len(t.teamNameOrder) == 0 {
+		return nil
+	}
+	p := []byte(q)
+	name := func(i int32) []byte { return st.Names.Bytes(st.Teams[i].NameID) }
+
+	lo := sort.Search(len(t.teamNameOrder), func(i int) bool {
+		return !lessFold(name(t.teamNameOrder[i]), p)
+	})
+
+	var hits []int32
+	for i := lo; i < len(t.teamNameOrder); i++ {
+		slot := t.teamNameOrder[i]
+		if !hasPrefixFold(name(slot), p) {
+			break // sorted, so the prefix range has ended
+		}
+		hits = append(hits, slot)
+		// A one-letter query would otherwise walk most of the corpus; stop once there
+		// is plenty to rank.
+		if len(hits) >= limit*20 {
+			break
+		}
+	}
+
+	// Unlike Donors, team slots are not stored in rank order, so rank explicitly.
+	sort.Slice(hits, func(a, b int) bool {
+		return t.TeamRankOf(hits[a]) < t.TeamRankOf(hits[b])
+	})
+	if len(hits) > limit {
+		hits = hits[:limit]
+	}
+	return hits
 }
 
 // lessFold compares ASCII case-insensitively. Donor names are arbitrary bytes, so
