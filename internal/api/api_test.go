@@ -2103,3 +2103,123 @@ func TestDonorTotalsAgreeWithSummingTheMembers(t *testing.T) {
 		t.Fatalf("only %d donors had any production; the fixture proves little", checked)
 	}
 }
+
+// TestCappedDonorHistorySelectsTheSameMembers pins the shortcut to the thing it
+// replaced.
+//
+// The capped set decides which teams a wide donor's history actually sums, so
+// selecting a different hundred does not fail — it returns different numbers under
+// the same label. This rebuilds the old route (order, render to views, look the slots
+// back up by name and team) and requires the prefix to match it exactly.
+func TestCappedDonorHistorySelectsTheSameMembers(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	state := model.NewState()
+	memberWin, teamWin := metrics.New(0), metrics.New(0)
+
+	// One donor across more teams than the cap, with scores descending by team so
+	// rank order is unambiguous, plus unrelated donors so the CSR is not trivially
+	// the whole member array.
+	const teams = maxHistoryTeams + 37
+	var teamRows []parse.TeamRow
+	for id := int32(1); id <= teams; id++ {
+		teamRows = append(teamRows, tr(id, fmt.Sprintf("t%d", id), int64(1000*int(id))))
+	}
+	rows := func(cycle int) []parse.UserRow {
+		var out []parse.UserRow
+		for id := int32(1); id <= teams; id++ {
+			// The base term sets rank order (team 1 highest), and it dominates so that
+			// order is stable. The per-cycle term is what *differs per member*, which
+			// is the point: if every member produced the same amount, any hundred of
+			// them would sum alike and this test could not tell a wrong prefix from a
+			// right one.
+			base := int64(teams-id+1) * 10000
+			out = append(out, u("wide", base+int64(cycle)*int64(id), id))
+			out = append(out, u(fmt.Sprintf("other%d", id), int64(50+cycle), id))
+		}
+		return out
+	}
+	for i, when := range []time.Time{at(1), at(2)} {
+		cy := state.Apply(when, teamRows, rows(i+1))
+		if err := st.WriteCycle(context.Background(), state, cy, store.CycleMeta{
+			TeamSnapshotAt: when, UserSnapshotAt: when}); err != nil {
+			t.Fatal(err)
+		}
+		memberWin.Grow(len(state.Members))
+		memberWin.Push(when, cy.MemberDeltas)
+		teamWin.Grow(len(state.Teams))
+		teamWin.Push(when, cy.TeamDeltas)
+	}
+	tbl := rank.Build(state, at(2), rank.DefaultConfig)
+	tbl.BuildOrders(state, memberWin, teamWin, nil, nil)
+	snap := Build(state, memberWin, teamWin, tbl, st, at(2), at(3), "cap")
+
+	idx, ok := snap.donorIndexByName("wide")
+	if !ok {
+		t.Fatal("donor not found")
+	}
+	members := snap.Ranks.DonorMembers(idx)
+	if len(members) <= maxHistoryTeams {
+		t.Fatalf("donor has %d members, need more than the cap of %d",
+			len(members), maxHistoryTeams)
+	}
+
+	// The old route, rebuilt here.
+	ordered, truncated := snap.breakdown(members, maxHistoryTeams)
+	if !truncated {
+		t.Fatal("breakdown did not truncate; the comparison is vacuous")
+	}
+	var want []int32
+	for _, m := range ordered {
+		if slot, ok := snap.memberSlot(m.Name, m.TeamID); ok {
+			want = append(want, slot)
+		}
+	}
+
+	got := members[:maxHistoryTeams]
+	if len(got) != len(want) {
+		t.Fatalf("prefix has %d members, the view round trip yields %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("position %d: prefix slot %d, round trip slot %d", i, got[i], want[i])
+		}
+	}
+
+	// The equivalence above is only worth anything if the handler is the thing using
+	// it, so compare what the endpoint actually returns against the history of the
+	// members the old route would have chosen. A prefix off by one selects a
+	// different team and changes these totals without changing anything visible.
+	srv := NewServer()
+	srv.Publish(snap)
+	_, env := get(t, srv, "/v1/donors/wide/history?granularity=daily")
+	h := decode[History](t, env.Data)
+	if !h.TeamsTruncated || h.TeamsIncluded != maxHistoryTeams {
+		t.Errorf("response reports truncated=%v included=%d, want true and %d",
+			h.TeamsTruncated, h.TeamsIncluded, maxHistoryTeams)
+	}
+
+	from, to := defaultHistoryRange(snap.At, store.Daily)
+	expect, err := st.MembersHistory(context.Background(), want, from, to, store.Daily)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expect) == 0 {
+		t.Fatal("no history for the expected members; the comparison proves nothing")
+	}
+	if len(h.Points) != len(expect) {
+		t.Fatalf("endpoint returned %d buckets, the expected members have %d",
+			len(h.Points), len(expect))
+	}
+	for i := range expect {
+		if h.Points[i].Points != expect[i].Points || h.Points[i].WUs != expect[i].WUs {
+			t.Errorf("bucket %s: endpoint %d pts/%d wus, expected members sum to %d/%d",
+				expect[i].At.Format(time.RFC3339), h.Points[i].Points, h.Points[i].WUs,
+				expect[i].Points, expect[i].WUs)
+		}
+	}
+}

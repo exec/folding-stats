@@ -327,14 +327,12 @@ func (s *Server) donorHistory(snap *Snapshot, r *http.Request) (any, *PageInfo, 
 	// the ones that actually matter — and it says so.
 	truncated := false
 	if len(members) > maxHistoryTeams {
-		ordered, _ := snap.breakdown(members, maxHistoryTeams)
-		capped := make([]int32, 0, len(ordered))
-		for _, m := range ordered {
-			if slot, ok := snap.memberSlot(m.Name, m.TeamID); ok {
-				capped = append(capped, slot)
-			}
-		}
-		members, truncated = capped, true
+		// A donor's members are stored in global rank order, which is lifetime points
+		// order, so the ones that matter most are already at the front. This used to
+		// build a hundred Member views and then look their names back up to recover
+		// the slots it started with — a round trip through the view layer, two map
+		// lookups per row, to select a prefix.
+		members, truncated = members[:maxHistoryTeams], true
 	}
 
 	pts, err := snap.Store.MembersHistory(r.Context(), members, q.from, q.to, q.gran)
