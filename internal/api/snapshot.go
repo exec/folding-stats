@@ -22,6 +22,7 @@
 package api
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -73,6 +74,19 @@ type Snapshot struct {
 
 	// ETag identifies this snapshot for conditional requests.
 	ETag string
+
+	// ProjectHist is the default-window project history for each granularity,
+	// computed once when the snapshot is published.
+	//
+	// It is the one endpoint whose cost does not shrink with paging: every other
+	// route reads a bounded slice of one entity, while this sums every team in the
+	// database. That made it 2.8ms against a 0.09ms median, on the request the
+	// overview page issues first.
+	//
+	// A missing entry is not an error — the handler runs the query. Nothing depends
+	// on the cache being populated, so a Snapshot built without it (every test that
+	// calls Build directly) still answers correctly, just slower.
+	ProjectHist map[store.Granularity][]store.Point
 
 	// Guard protects State, Members and Teams, which are the live ingest
 	// structures rather than copies.
@@ -199,3 +213,32 @@ func (s *Snapshot) donorLast7d(i int32) int64 {
 // the first week of collection it does not, and the average reads low — the API says
 // so rather than presenting a number that looks authoritative but is not.
 func (s *Snapshot) AvgWindowComplete() bool { return s.Members.Complete() }
+
+// WarmProjectHistory precomputes the project-wide history for the four default
+// windows, so the request path never runs the aggregate.
+//
+// The whole endpoint is a GROUP BY over every team that produced in the range —
+// millions of rows at hourly granularity — and the answer is identical for every
+// caller until the next cycle lands. Doing it once per publish rather than once per
+// request is the entire optimisation; there is nothing to invalidate, because a
+// snapshot is replaced wholesale rather than updated.
+//
+// Errors are returned rather than stored. A failure here must leave the map empty so
+// the handler falls back to querying, never cache a truncated list as if it were the
+// history.
+func (s *Snapshot) WarmProjectHistory(ctx context.Context) error {
+	if s.Store == nil {
+		return nil
+	}
+	out := make(map[store.Granularity][]store.Point, 4)
+	for _, g := range []store.Granularity{store.Hourly, store.Daily, store.Weekly, store.Monthly} {
+		from, to := defaultHistoryRange(s.At, g)
+		pts, err := s.Store.ProjectHistory(ctx, from, to, g)
+		if err != nil {
+			return err
+		}
+		out[g] = pts
+	}
+	s.ProjectHist = out
+	return nil
+}

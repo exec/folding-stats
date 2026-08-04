@@ -376,6 +376,23 @@ func (s *Service) publish() {
 	snap.Interval = s.cadence.Interval()
 	snap.IntervalMeasured = s.cadence.Measured()
 
+	// Aggregate the project history now rather than per request. This runs under the
+	// read lock, which the queries do not need — but it costs about 5ms once an hour
+	// against an ingest that already holds the write lock for ~1.3s, so splitting the
+	// lock to save it would buy nothing and add a second place state can be read.
+	//
+	// Failure is logged, not fatal: the snapshot serves correctly without the cache,
+	// and refusing to publish a good snapshot because an optimisation failed would
+	// turn a slow endpoint into an outage.
+	// Bounded, because this holds the read lock: a query that never returns would
+	// block every future ingest rather than just this optimisation.
+	warmCtx, cancelWarm := context.WithTimeout(context.Background(), cycleWriteTimeout)
+	if err := snap.WarmProjectHistory(warmCtx); err != nil {
+		s.Log.Warn("project history precompute failed; serving it from the query path",
+			"err", err)
+	}
+	cancelWarm()
+
 	s.Server.Publish(snap)
 	s.Log.Info("published",
 		"at", s.state.At.Format(time.RFC3339),

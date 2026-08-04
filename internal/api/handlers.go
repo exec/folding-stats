@@ -79,9 +79,11 @@ func (s *Server) projectHistory(snap *Snapshot, r *http.Request) (any, *PageInfo
 	if err != nil {
 		return nil, nil, err
 	}
-	pts, err := snap.Store.ProjectHistory(r.Context(), q.from, q.to, q.gran)
-	if err != nil {
-		return nil, nil, err
+	pts, ok := snap.ProjectHist[q.gran]
+	if !q.defaulted || !ok {
+		if pts, err = snap.Store.ProjectHistory(r.Context(), q.from, q.to, q.gran); err != nil {
+			return nil, nil, err
+		}
 	}
 	return historyView(q, pts), nil, nil
 }
@@ -421,6 +423,22 @@ type historyQuery struct {
 	metric   string
 	gran     store.Granularity
 	from, to time.Time
+	// defaulted marks a request that named neither from nor to, so its range is
+	// derived entirely from the snapshot and the granularity. Those are the only
+	// ranges worth precomputing: there are four of them per cycle and they are what
+	// the site itself asks for, while a caller-supplied window is unbounded in
+	// variety and must not be allowed to fill a cache.
+	defaulted bool
+}
+
+// defaultHistoryRange is the window an unparameterised history request covers.
+//
+// One definition, called by the request parser and by the precompute that warms
+// them. Two copies of this would drift, and a precomputed range that disagreed with
+// the parsed one by a second would serve a cached answer to a different question —
+// silently, since both are plausible-looking lists of points.
+func defaultHistoryRange(now time.Time, g store.Granularity) (from, to time.Time) {
+	return now.Add(-defaultWindow[g]), now.Add(time.Hour)
 }
 
 func parseHistoryQuery(r *http.Request, now time.Time) (historyQuery, error) {
@@ -446,17 +464,19 @@ func parseHistoryQuery(r *http.Request, now time.Time) (historyQuery, error) {
 	// Default windows are per-granularity: an unparameterised hourly request over
 	// 30 days is 720 points of noise, while a month of daily buckets is too little
 	// to see a trend. Asking for more is deliberate.
-	q.to = now.Add(time.Hour)
-	q.from = now.Add(-defaultWindow[q.gran])
+	q.from, q.to = defaultHistoryRange(now, q.gran)
+	q.defaulted = true
 	if v := r.URL.Query().Get("from"); v != "" {
 		if q.from, err = time.Parse(time.RFC3339, v); err != nil {
 			return q, badRequest("from must be an RFC3339 timestamp")
 		}
+		q.defaulted = false
 	}
 	if v := r.URL.Query().Get("to"); v != "" {
 		if q.to, err = time.Parse(time.RFC3339, v); err != nil {
 			return q, badRequest("to must be an RFC3339 timestamp")
 		}
+		q.defaulted = false
 	}
 	if !q.to.After(q.from) {
 		return q, badRequest("to must be after from")

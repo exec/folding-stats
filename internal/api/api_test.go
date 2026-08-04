@@ -1836,3 +1836,72 @@ func TestTeamSearchIndexPreservesSemantics(t *testing.T) {
 		t.Errorf("q='Folders U' returned %v, want just team 2", got)
 	}
 }
+
+func TestWarmedProjectHistoryMatchesTheQueryItReplaces(t *testing.T) {
+	// The precomputed history is served instead of running the aggregate, so the two
+	// have to be the same answer to the same question. The dangerous failure is not a
+	// crash: it is the warm path covering a slightly different window from the one
+	// the request parser derives, which returns a plausible list of points that is
+	// quietly wrong at the edges.
+	//
+	// Both are exercised through the handler, since that is where the substitution
+	// happens — comparing the store calls directly would test neither.
+	srv := fixture(t)
+
+	for _, g := range []string{"hourly", "daily", "weekly", "monthly"} {
+		// Cold: the fixture's snapshot has no warm cache, so this is the query path.
+		_, cold := get(t, srv, "/v1/summary/history?granularity="+g)
+		want := decode[History](t, cold.Data)
+
+		snap := srv.Current()
+		if err := snap.WarmProjectHistory(context.Background()); err != nil {
+			t.Fatalf("%s: warming: %v", g, err)
+		}
+		if _, ok := snap.ProjectHist[store.Granularity(g).Normalize()]; !ok {
+			t.Fatalf("%s: warming left no entry, so the handler would silently keep "+
+				"using the query path and this test would prove nothing", g)
+		}
+
+		// Warm: same request, now answered from the precomputed map.
+		_, hot := get(t, srv, "/v1/summary/history?granularity="+g)
+		got := decode[History](t, hot.Data)
+
+		if len(got.Points) != len(want.Points) {
+			t.Fatalf("%s: warm returned %d points, query returned %d",
+				g, len(got.Points), len(want.Points))
+		}
+		for i := range want.Points {
+			if got.Points[i] != want.Points[i] {
+				t.Errorf("%s: point %d: warm %+v, query %+v",
+					g, i, got.Points[i], want.Points[i])
+			}
+		}
+	}
+}
+
+func TestCallerSuppliedHistoryRangeIgnoresTheWarmCache(t *testing.T) {
+	// The cache holds exactly one window per granularity, so a request naming its own
+	// from/to must not be answered from it. Serving the default seven days to someone
+	// who asked for one hour would be wrong in the direction that looks right.
+	srv := fixture(t)
+	snap := srv.Current()
+	if err := snap.WarmProjectHistory(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// The default window covers the fixture's production.
+	_, full := get(t, srv, "/v1/summary/history?granularity=hourly")
+	if wide := decode[History](t, full.Data); len(wide.Points) == 0 {
+		t.Fatal("default window is empty, so this test cannot tell the paths apart")
+	}
+
+	// A window ending before the fixture begins contains nothing. Anything returned
+	// here came from the cache, which holds the default range.
+	_, empty := get(t, srv,
+		"/v1/summary/history?granularity=hourly&from="+at(1).Add(-48*time.Hour).Format(time.RFC3339)+
+			"&to="+at(1).Add(-24*time.Hour).Format(time.RFC3339))
+	if got := decode[History](t, empty.Data); len(got.Points) != 0 {
+		t.Errorf("a range predating every cycle returned %d points: the caller's "+
+			"window was ignored and the cached default served instead", len(got.Points))
+	}
+}
