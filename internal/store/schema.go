@@ -66,11 +66,26 @@ CREATE TABLE IF NOT EXISTS team_deltas (
     PRIMARY KEY (slot, ts)
 ) WITHOUT ROWID;
 
--- The clustered (entity, ts) key answers per-entity history, but restoring the
--- rolling windows after a restart reads by time across all entities. These indexes
--- make that a range scan rather than a full table sort.
-CREATE INDEX IF NOT EXISTS member_deltas_ts ON member_deltas(ts);
-CREATE INDEX IF NOT EXISTS team_deltas_ts ON team_deltas(ts);
+-- The clustered (entity, ts) key answers per-entity history, but three paths read by
+-- time across all entities: restoring the rolling windows at startup, the hourly
+-- rollup recompute, and the project-wide hourly history. These indexes make that a
+-- range scan rather than a full table sort.
+--
+-- Covering, for the same reason as the rollup indexes below: every one of those
+-- readers wants d_score and d_wu, and a bare index on ts orders the rows but then
+-- pays a random primary-key descent to fetch them. Measured over 2M rows, the
+-- project-wide hourly history took 1670ms through a plain index and 282ms through
+-- this one, for 5.8 MB. The primary key rides along automatically, so member_id and
+-- slot come with it and the aggregate never touches the table.
+-- Renamed rather than redefined. CREATE INDEX IF NOT EXISTS matches on NAME alone,
+-- so reusing member_deltas_ts would have found the old bare-ts index already there
+-- and silently done nothing — the schema would claim the covering index while every
+-- database in existence kept the slow one. The DROP clears the old name and is a
+-- no-op on every open after the first.
+DROP INDEX IF EXISTS member_deltas_ts;
+DROP INDEX IF EXISTS team_deltas_ts;
+CREATE INDEX IF NOT EXISTS member_deltas_by_ts ON member_deltas(ts, d_score, d_wu);
+CREATE INDEX IF NOT EXISTS team_deltas_by_ts   ON team_deltas(ts, d_score, d_wu);
 
 -- Rollups. bucket is a UTC day number (unix/86400) for daily, the day number of
 -- the week's Sunday for weekly, and year*12+month for monthly. Weekly has no table:

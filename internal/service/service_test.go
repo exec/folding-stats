@@ -16,6 +16,7 @@ import (
 
 	"folding/internal/api"
 	"folding/internal/feed"
+	"folding/internal/rank"
 	"folding/internal/store"
 )
 
@@ -540,5 +541,58 @@ func TestCycleCommitSurvivesACancelledContext(t *testing.T) {
 	slot, _ := svc2.state.MemberSlot(nameID, 32)
 	if svc2.memberWin.Last7d(slot) == 0 {
 		t.Error("DH has no recorded production after restart; the cycle's deltas were lost")
+	}
+}
+
+func TestPublishedOrderingsReflectTheNewestCycle(t *testing.T) {
+	// applyCycle advances state.At under one lock and pushes the cycle's deltas under
+	// a later one. Anything publishing between the two builds a table from windows
+	// that do not yet hold the cycle, and caches it under the new state.At — so
+	// ingest's own publish finds a matching key and keeps the stale table for the rest
+	// of the cycle, leaving every rate ordering a cycle behind.
+	//
+	// The periodic Refresh was exactly such a publisher and is gone. This pins the
+	// property it was breaking: after ingest, the published orderings must describe
+	// the cycle that was just applied.
+	dir := t.TempDir()
+	// "sleeper" holds a commanding lifetime lead and produces nothing in cycle 2.
+	// "sprinter" is far behind on lifetime and produces everything.
+	cycles := []world{
+		{cyc(20),
+			[]string{"1\tsleeper\t1000000\t100", "2\tsprinter\t10\t1"},
+			[]string{"a\t1000000\t100\t1", "b\t10\t1\t2"},
+		},
+		{cyc(21),
+			[]string{"1\tsleeper\t1000000\t100", "2\tsprinter\t500000\t50"},
+			[]string{"a\t1000000\t100\t1", "b\t500000\t50\t2"},
+		},
+	}
+	a := seed(t, dir, cycles)
+	svc, srv, db := newService(t, dir, a)
+	defer db.Close()
+	if _, err := svc.Ingest(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	snap := srv.Current()
+	if snap == nil {
+		t.Fatal("nothing published")
+	}
+	// Lifetime still leads with sleeper...
+	if got := snap.Ranks.TeamOrderFor(rank.Lifetime); len(got) == 0 ||
+		snap.State.Teams[got[0]].ID != 1 {
+		t.Errorf("lifetime leader is not team 1: %v", got)
+	}
+	// ...but every rate ordering must lead with sprinter, which requires the table to
+	// have been built after the deltas reached the windows.
+	for _, key := range []rank.SortKey{rank.PerDay, rank.Today, rank.ThisWeek, rank.Last24h} {
+		order := snap.Ranks.TeamOrderFor(key)
+		if len(order) == 0 {
+			t.Errorf("sort=%s produced no ordering", key)
+			continue
+		}
+		if id := snap.State.Teams[order[0]].ID; id != 2 {
+			t.Errorf("sort=%s leads with team %d, want 2 — the table predates the cycle's deltas", key, id)
+		}
 	}
 }

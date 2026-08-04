@@ -67,11 +67,10 @@ type Service struct {
 	teamMonth   []int64
 	memberMonth []int64
 
-	// tbl is the published ranking, kept so a Refresh that ingested nothing does not
-	// rebuild it. The table is a pure function of state, and state only moves on
-	// ingest — but Refresh runs every five minutes, so rebuilding unconditionally
-	// spent a full sort of 2.7M members twelve times an hour to produce the identical
-	// answer. tblAt is the state it was built from.
+	// tbl is the published ranking, and tblAt the state it was built from. The table
+	// is a pure function of state, so the key is enough to tell a rebuild from a
+	// reuse — provided nothing publishes while state.At and the windows disagree,
+	// which is why publish has a single caller. See the note there.
 	tbl   *rank.Table
 	tblAt time.Time
 
@@ -327,6 +326,20 @@ func (s *Service) applyCycle(ctx context.Context, p snapshotPair) error {
 }
 
 // publish rebuilds the ranked view when the corpus has moved, and swaps it in.
+//
+// Only ingest calls this, and only after the cycle's deltas have reached the windows.
+// That ordering is load-bearing rather than incidental: applyCycle advances state.At
+// under one lock and pushes the deltas under a later one, so anything publishing
+// between the two builds a table from windows that do not yet hold the cycle — and
+// caches it under the new state.At, so ingest's own publish then finds a matching key
+// and keeps the stale table for the rest of the cycle. Every rate ordering and every
+// rank_change_24h would be a cycle behind.
+//
+// A periodic Refresh used to do exactly that. It was removed rather than fixed: it
+// republished a byte-identical snapshot every five minutes, because everything it
+// could have changed — staleness above all — is computed per request from the live
+// structures instead. If a future field ever does need to age, compute it in the
+// handler the way Stale is, rather than reintroducing a second publisher here.
 func (s *Service) publish() {
 	start := time.Now()
 
@@ -334,8 +347,7 @@ func (s *Service) publish() {
 	defer s.publishMu.Unlock()
 
 	// Read lock: building the ranked view only reads state, but it must not run
-	// while a cycle is mutating it. Refresh calls this from a different goroutine
-	// than Ingest does.
+	// while a cycle is mutating it.
 	s.guard.RLock()
 	defer s.guard.RUnlock()
 
@@ -370,14 +382,6 @@ func (s *Service) publish() {
 		"teams", len(s.state.Teams), "donors", len(tbl.Donors),
 		"stale_after", snap.StaleAfter.Format(time.RFC3339),
 		"took", time.Since(start).Round(time.Millisecond))
-}
-
-// Refresh republishes without ingesting, so the stale flag reflects the passage of
-// time even when upstream has gone quiet.
-func (s *Service) Refresh() {
-	if s.Server.Current() != nil {
-		s.publish()
-	}
 }
 
 func readTeams(s feed.Snapshot) ([]parse.TeamRow, parse.Stats, error) {

@@ -191,13 +191,10 @@ func follow(ctx context.Context, svc *service.Service, poll time.Duration, log *
 	}
 }
 
-// maintain republishes periodically so the staleness flag tracks real time, and
-// compacts history once a day.
+// maintain compacts the database and thins the raw archive once a day.
 func maintain(ctx context.Context, svc *service.Service, db *store.Store, archive *feed.Archive,
 	compactAfter, keepDaily, keepRaw time.Duration, log *slog.Logger) {
 
-	refresh := time.NewTicker(5 * time.Minute)
-	defer refresh.Stop()
 	compact := time.NewTicker(24 * time.Hour)
 	defer compact.Stop()
 
@@ -205,8 +202,6 @@ func maintain(ctx context.Context, svc *service.Service, db *store.Store, archiv
 		select {
 		case <-ctx.Done():
 			return
-		case <-refresh.C:
-			svc.Refresh()
 		case <-compact.C:
 			start := time.Now()
 			now := time.Now().UTC()
