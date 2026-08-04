@@ -860,3 +860,141 @@ func TestMonthTotalsIndexBySlot(t *testing.T) {
 		t.Errorf("empty month = %v, want [0]", empty)
 	}
 }
+
+// projectRollupCycles spans three UTC days and two calendar months, so daily,
+// weekly and monthly buckets all have more than one row to get wrong.
+func projectRollupCycles(t *testing.T, s *Store) *model.State {
+	t.Helper()
+	st := model.NewState()
+	base := time.Date(2026, 7, 30, 6, 0, 0, 0, time.UTC)
+	score := map[int32]int64{7: 1000, 9: 500, 11: 0}
+	for i, gap := range []time.Duration{0, 20 * time.Hour, 26 * time.Hour, 30 * time.Hour} {
+		base = base.Add(gap)
+		// Uneven growth per team, and one team that only starts producing partway
+		// through, so a sum that quietly used the wrong team cannot match.
+		score[7] += int64(300 * (i + 1))
+		score[9] += int64(70 * i)
+		if i >= 2 {
+			score[11] += int64(11 * i)
+		}
+		writeCycle(t, s, st, base,
+			teams(parse.TeamRow{ID: 7, Name: "seven", Score: score[7], WUs: int64(i)},
+				parse.TeamRow{ID: 9, Name: "nine", Score: score[9], WUs: int64(2 * i)},
+				parse.TeamRow{ID: 11, Name: "eleven", Score: score[11], WUs: int64(i)}),
+			users(parse.UserRow{Name: "a", Score: score[7], WUs: int64(i), TeamID: 7}))
+	}
+	return st
+}
+
+// sumTeams is what ProjectHistory used to compute: every team's history, added up.
+func sumTeams(t *testing.T, s *Store, st *model.State, from, to time.Time, g Granularity) map[time.Time]Point {
+	t.Helper()
+	out := map[time.Time]Point{}
+	for slot := range st.Teams {
+		pts, err := s.TeamHistory(context.Background(), int32(slot), from, to, g)
+		if err != nil {
+			t.Fatalf("TeamHistory(%d, %s): %v", slot, g, err)
+		}
+		for _, p := range pts {
+			cur := out[p.At]
+			cur.At, cur.Points, cur.WUs = p.At, cur.Points+p.Points, cur.WUs+p.WUs
+			out[p.At] = cur
+		}
+	}
+	return out
+}
+
+func checkProjectMatchesTeams(t *testing.T, s *Store, st *model.State, label string) {
+	t.Helper()
+	from := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+
+	for _, g := range []Granularity{Hourly, Daily, Weekly, Monthly} {
+		want := sumTeams(t, s, st, from, to, g)
+		got, err := s.ProjectHistory(context.Background(), from, to, g)
+		if err != nil {
+			t.Fatalf("%s/%s: ProjectHistory: %v", label, g, err)
+		}
+		if len(got) == 0 {
+			t.Fatalf("%s/%s: no project points, so this proves nothing", label, g)
+		}
+		if len(got) != len(want) {
+			t.Errorf("%s/%s: %d project buckets, %d summing teams", label, g, len(got), len(want))
+		}
+		var total int64
+		for _, p := range got {
+			w, ok := want[p.At]
+			if !ok {
+				t.Errorf("%s/%s: bucket %s exists in the project rollup but in no team",
+					label, g, p.At.Format(time.RFC3339))
+				continue
+			}
+			if p.Points != w.Points || p.WUs != w.WUs {
+				t.Errorf("%s/%s: bucket %s: rollup %d pts/%d wus, teams sum to %d/%d",
+					label, g, p.At.Format(time.RFC3339), p.Points, p.WUs, w.Points, w.WUs)
+			}
+			total += p.Points
+		}
+		if total == 0 {
+			t.Errorf("%s/%s: every bucket is zero", label, g)
+		}
+	}
+}
+
+// TestProjectRollupsEqualTheSumOverTeams pins the invariant the whole optimisation
+// rests on. The rollups are a duplicate of data that already exists, and a duplicate
+// that drifts is worse than the slow query it replaced: every figure still looks
+// like a plausible number of points.
+func TestProjectRollupsEqualTheSumOverTeams(t *testing.T) {
+	s := open(t)
+	st := projectRollupCycles(t, s)
+	checkProjectMatchesTeams(t, s, st, "per-cycle")
+}
+
+// TestProjectBackfillMatchesPerCycleMaintenance covers the upgrade path: a database
+// that already holds history gets its project tables built in one pass from the team
+// tables, and that pass has to agree with what maintaining them cycle by cycle would
+// have produced. Nothing else ever rebuilds them, so an error here is permanent.
+func TestProjectBackfillMatchesPerCycleMaintenance(t *testing.T) {
+	s := open(t)
+	st := projectRollupCycles(t, s)
+
+	// Discard everything the per-cycle path wrote and clear the marker, leaving the
+	// database in the state an upgrade finds it in.
+	for _, tbl := range []string{"project_deltas", "project_daily", "project_monthly"} {
+		if _, err := s.w.Exec("DELETE FROM " + tbl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.w.Exec(`DELETE FROM meta WHERE key = ?`, projectBackfillKey); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := s.w.QueryRow(`SELECT COUNT(*) FROM project_daily`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("project_daily still has %d rows; the backfill would not be exercised", n)
+	}
+
+	if err := backfillProjectRollups(s.w); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	checkProjectMatchesTeams(t, s, st, "backfilled")
+
+	// Second call is a no-op rather than a second pass: the marker is what stops
+	// every restart re-deriving from every delta ever recorded.
+	if _, err := s.w.Exec(`UPDATE project_daily SET points = -1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := backfillProjectRollups(s.w); err != nil {
+		t.Fatal(err)
+	}
+	var pts int64
+	if err := s.w.QueryRow(`SELECT points FROM project_daily LIMIT 1`).Scan(&pts); err != nil {
+		t.Fatal(err)
+	}
+	if pts != -1 {
+		t.Error("backfill ran a second time; it is guarded by a marker, not by emptiness")
+	}
+}

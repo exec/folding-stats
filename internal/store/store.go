@@ -54,6 +54,10 @@ func Open(path string) (*Store, error) {
 		w.Close()
 		return nil, fmt.Errorf("store: applying schema: %w", err)
 	}
+	if err := backfillProjectRollups(w); err != nil {
+		w.Close()
+		return nil, err
+	}
 	r, err := openPool(path, readPoolSize)
 	if err != nil {
 		w.Close()

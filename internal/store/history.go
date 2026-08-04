@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -551,6 +552,55 @@ func rollupCycle(ctx context.Context, tx *sql.Tx, at time.Time) error {
 			return fmt.Errorf("store: monthly rollup for %s: %w", e.table, err)
 		}
 	}
+
+	// The project's own buckets, summed from the team tables in the same
+	// transaction. Teams are authoritative for the project rather than members: the
+	// team feed exceeds the sum of its member rows for a fraction of teams, because
+	// the two feeds publish a minute apart and some production is not attributable
+	// to any listed donor.
+	//
+	// Only the current cycle, day and month are touched, so each of these is a
+	// bounded range scan rather than a pass over history.
+	for _, q := range []struct {
+		what string
+		sql  string
+		args []any
+	}{
+		// GROUP BY, not a bare aggregate. A bare SUM over an empty range still returns
+		// one row — NULL, or 0 once coalesced — and inserting that writes a bucket
+		// claiming the project produced nothing, where the old query returned no
+		// bucket at all. Every entity's first cycle is such a range, because a first
+		// sighting has no delta, so the difference is a phantom zero at the start of
+		// every chart. HAVING does the same job where the group is not the key.
+		{"cycle", `
+            INSERT INTO project_deltas(ts, d_score, d_wu)
+            SELECT ts, SUM(d_score), SUM(d_wu)
+              FROM team_deltas WHERE ts = ? GROUP BY ts
+            ON CONFLICT(ts) DO UPDATE SET
+                d_score = excluded.d_score, d_wu = excluded.d_wu`,
+			[]any{at.UTC().Unix()}},
+		{"daily", `
+            INSERT INTO project_daily(bucket, points, wus)
+            SELECT bucket, SUM(points), SUM(wus)
+              FROM team_daily WHERE bucket = ? GROUP BY bucket
+            ON CONFLICT(bucket) DO UPDATE SET
+                points = excluded.points, wus = excluded.wus`,
+			[]any{day}},
+		// Monthly derives from project_daily, matching the per-entity path, so it
+		// stays correct once raw deltas are pruned.
+		{"monthly", `
+            INSERT INTO project_monthly(bucket, points, wus)
+            SELECT ?, SUM(points), SUM(wus)
+              FROM project_daily WHERE bucket >= ? AND bucket < ?
+            HAVING COUNT(*) > 0
+            ON CONFLICT(bucket) DO UPDATE SET
+                points = excluded.points, wus = excluded.wus`,
+			[]any{month, monthFirstDay, monthLastDay}},
+	} {
+		if _, err := tx.ExecContext(ctx, q.sql, q.args...); err != nil {
+			return fmt.Errorf("store: project %s rollup: %w", q.what, err)
+		}
+	}
 	return nil
 }
 
@@ -562,25 +612,29 @@ func rollupCycle(ctx context.Context, tx *sql.Tx, at time.Time) error {
 func (s *Store) ProjectHistory(ctx context.Context, from, to time.Time, g Granularity) ([]Point, error) {
 	g = g.Normalize()
 
+	// Read from the project rollups, which hold one row per period rather than one
+	// per team per period. Only weekly still aggregates, and it groups 1,825 daily
+	// rows over the five-year cap rather than the quarter-billion the same range
+	// costs across team_daily.
 	var table, bucketCol, groupCol, pointsCol, wusCol string
 	var lo, hi int64
 	upper := "<="
 	switch g {
 	case Hourly:
-		table, bucketCol, pointsCol, wusCol = "team_deltas", "ts", "d_score", "d_wu"
+		table, bucketCol, pointsCol, wusCol = "project_deltas", "ts", "d_score", "d_wu"
 		lo, hi = from.UTC().Unix(), to.UTC().Unix()
 		upper = "<"
 	case Daily:
-		table, bucketCol, pointsCol, wusCol = "team_daily", "bucket", "points", "wus"
+		table, bucketCol, pointsCol, wusCol = "project_daily", "bucket", "points", "wus"
 		lo, hi = DayBucket(from), DayBucket(to)
 	case Weekly:
 		// Filtered on the day bucket, grouped by the week it falls in — see the
 		// matching note in history().
-		table, bucketCol, pointsCol, wusCol = "team_daily", "bucket", "points", "wus"
+		table, bucketCol, pointsCol, wusCol = "project_daily", "bucket", "points", "wus"
 		groupCol = fmt.Sprintf("(bucket - %d) / 7", firstSundayDay)
 		lo, hi = DayBucket(startOfWeekUTC(from)), DayBucket(endOfWeekUTC(to))
 	case Monthly:
-		table, bucketCol, pointsCol, wusCol = "team_monthly", "bucket", "points", "wus"
+		table, bucketCol, pointsCol, wusCol = "project_monthly", "bucket", "points", "wus"
 		lo, hi = MonthBucket(from), MonthBucket(to)
 	default:
 		return nil, fmt.Errorf("store: unknown granularity %q", g)
@@ -608,4 +662,67 @@ func (s *Store) ProjectHistory(ctx context.Context, from, to time.Time, g Granul
 		out = append(out, Point{At: bucketTime(bucket, g), Points: pts, WUs: wus})
 	}
 	return out, rows.Err()
+}
+
+// projectBackfillKey marks the database as having had its project rollups built from
+// the team tables. The rollups are maintained per cycle from then on.
+const projectBackfillKey = "project_rollups_backfilled"
+
+// backfillProjectRollups populates the project tables from the team tables, once.
+//
+// The project rollups were added after the database already held history, so an
+// existing file has the team tables fully populated and the project ones empty.
+// Without this the endpoint would answer "no production" for everything before the
+// upgrade, which is worse than the slow query it replaces: it is confidently wrong.
+//
+// Guarded by a marker rather than by emptiness. An empty project_deltas is the
+// correct state for a database whose team tables are also empty, and re-deriving on
+// every open would scan every delta ever recorded at each restart.
+//
+// The whole thing is one transaction: a partial backfill marked as complete would
+// leave a permanent hole no later cycle ever revisits.
+func backfillProjectRollups(w *sql.DB) error {
+	var done string
+	err := w.QueryRow(`SELECT value FROM meta WHERE key = ?`, projectBackfillKey).Scan(&done)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("store: checking project backfill: %w", err)
+	}
+
+	tx, err := w.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for _, q := range []struct{ what, sql string }{
+		{"deltas", `INSERT INTO project_deltas(ts, d_score, d_wu)
+                    SELECT ts, SUM(d_score), SUM(d_wu) FROM team_deltas GROUP BY ts
+                    ON CONFLICT(ts) DO UPDATE SET
+                        d_score = excluded.d_score, d_wu = excluded.d_wu`},
+		{"daily", `INSERT INTO project_daily(bucket, points, wus)
+                   SELECT bucket, SUM(points), SUM(wus) FROM team_daily GROUP BY bucket
+                   ON CONFLICT(bucket) DO UPDATE SET
+                       points = excluded.points, wus = excluded.wus`},
+		// From team_monthly rather than from the daily rollup just written: months
+		// whose days have already been pruned exist only in the monthly table, and
+		// deriving from daily would silently drop them.
+		{"monthly", `INSERT INTO project_monthly(bucket, points, wus)
+                     SELECT bucket, SUM(points), SUM(wus) FROM team_monthly GROUP BY bucket
+                     ON CONFLICT(bucket) DO UPDATE SET
+                         points = excluded.points, wus = excluded.wus`},
+	} {
+		if _, err := tx.Exec(q.sql); err != nil {
+			return fmt.Errorf("store: backfilling project %s: %w", q.what, err)
+		}
+	}
+
+	if _, err := tx.Exec(
+		`INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)`,
+		projectBackfillKey, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("store: marking project backfill: %w", err)
+	}
+	return tx.Commit()
 }

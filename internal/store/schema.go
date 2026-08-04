@@ -132,6 +132,38 @@ CREATE INDEX IF NOT EXISTS member_monthly_bucket ON member_monthly(bucket, point
 CREATE INDEX IF NOT EXISTS team_daily_bucket     ON team_daily(bucket, points, wus);
 CREATE INDEX IF NOT EXISTS team_monthly_bucket   ON team_monthly(bucket, points, wus);
 
+-- Project-wide production, one row per period, no entity column.
+--
+-- These are pure duplication — every figure is the sum of the team tables — and they
+-- exist because that sum is the one query whose cost has no ceiling. Per-entity
+-- history reads a bounded slice of one clustered key; the project's reads every team
+-- that produced in the range, which is ~130k rows per bucket and grows with the
+-- project. Summing five years of team_daily is a quarter of a billion rows for an
+-- answer that is 1,825 numbers.
+--
+-- INTEGER PRIMARY KEY and no WITHOUT ROWID: with a single integer key the primary key
+-- *is* the rowid, so the table is already clustered on it and the WITHOUT ROWID that
+-- the per-entity tables need would buy nothing here.
+--
+-- Never pruned. project_deltas gains 8,760 rows a year and project_daily 365, so
+-- keeping every one of them forever costs less than a megabyte a decade, and it lets
+-- project history answer past the raw-delta retention that bounds the per-team tables.
+CREATE TABLE IF NOT EXISTS project_deltas (
+    ts      INTEGER PRIMARY KEY,
+    d_score INTEGER NOT NULL,
+    d_wu    INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS project_daily (
+    bucket INTEGER PRIMARY KEY,
+    points INTEGER NOT NULL,
+    wus    INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS project_monthly (
+    bucket INTEGER PRIMARY KEY,
+    points INTEGER NOT NULL,
+    wus    INTEGER NOT NULL
+);
+
 -- One row per ingested snapshot pair. Doubles as the audit log and as the record
 -- of which snapshots have already been applied, so replay is idempotent.
 CREATE TABLE IF NOT EXISTS cycles (
