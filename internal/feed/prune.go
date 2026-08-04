@@ -82,20 +82,25 @@ func (a *Archive) Prune(p RetentionPolicy, now time.Time) (PruneResult, error) {
 	return res, nil
 }
 
-// removeSnapshot deletes a payload and its sidecar, returning bytes freed. The
-// sidecar goes first: a payload without metadata is invisible to List and would
-// linger forever, whereas metadata without a payload is merely a broken entry that
-// the next prune cleans up.
+// removeSnapshot deletes a payload and its sidecar, returning bytes freed.
+//
+// The payload goes first, which is what the reasoning here always said and the
+// opposite of what the code did. A payload without its sidecar is invisible to List,
+// so nothing — not ingest, not a later prune — can ever see or reclaim it: an
+// interruption between the two removals leaked disk permanently. A sidecar without a
+// payload is merely a broken entry: it stays visible, the next prune removes it, and
+// os.IsNotExist makes that second attempt a no-op. One direction is self-healing and
+// the other is not.
 func removeSnapshot(s Snapshot) (int64, error) {
 	var freed int64
 	if fi, err := os.Stat(s.Path); err == nil {
 		freed = fi.Size()
 	}
-	metaPath := strings.TrimSuffix(s.Path, payloadExt) + metaExt
-	if err := os.Remove(metaPath); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(s.Path); err != nil && !os.IsNotExist(err) {
 		return 0, err
 	}
-	if err := os.Remove(s.Path); err != nil && !os.IsNotExist(err) {
+	metaPath := strings.TrimSuffix(s.Path, payloadExt) + metaExt
+	if err := os.Remove(metaPath); err != nil && !os.IsNotExist(err) {
 		return freed, err
 	}
 	return freed, nil

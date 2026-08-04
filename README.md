@@ -72,6 +72,7 @@ cycles apply in ~1.5 s.
 | `-user-agent` | — | **set this in production**, with a contact URL |
 | `-compact-after` | `2160h` | age at which raw deltas roll up to daily |
 | `-keep-daily` | `17520h` | age at which daily rollups collapse to monthly |
+| `-keep-raw` | `2160h` | age at which archived snapshots thin to one per UTC day (`0` keeps every snapshot) |
 | `-v` | off | verbose logging |
 
 ### Running a read-only replica

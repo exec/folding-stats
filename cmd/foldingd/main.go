@@ -35,6 +35,7 @@ func main() {
 		noFetch   = flag.Bool("no-fetch", false, "serve from the existing archive without polling upstream")
 		compact   = flag.Duration("compact-after", 90*24*time.Hour, "age at which raw deltas are rolled up")
 		keepDaily = flag.Duration("keep-daily", 2*365*24*time.Hour, "age at which daily rollups collapse to monthly (0 keeps them)")
+		keepRaw   = flag.Duration("keep-raw", 90*24*time.Hour, "age at which archived snapshots thin to one per UTC day (0 keeps every snapshot)")
 		verbose   = flag.Bool("v", false, "verbose logging")
 	)
 	flag.Parse()
@@ -45,14 +46,14 @@ func main() {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
-	if err := run(*dir, *addr, *ua, *poll, *compact, *keepDaily, *noFetch, log); err != nil &&
+	if err := run(*dir, *addr, *ua, *poll, *compact, *keepDaily, *keepRaw, *noFetch, log); err != nil &&
 		!errors.Is(err, context.Canceled) && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("fatal", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(dir, addr, ua string, poll, compactAfter, keepDaily time.Duration, noFetch bool, log *slog.Logger) error {
+func run(dir, addr, ua string, poll, compactAfter, keepDaily, keepRaw time.Duration, noFetch bool, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -127,7 +128,7 @@ func run(dir, addr, ua string, poll, compactAfter, keepDaily time.Duration, noFe
 
 	go func() {
 		defer bg.Done()
-		maintain(ctx, svc, db, compactAfter, keepDaily, log)
+		maintain(ctx, svc, db, archiver.Archive, compactAfter, keepDaily, keepRaw, log)
 	}()
 
 	httpSrv := &http.Server{
@@ -192,8 +193,8 @@ func follow(ctx context.Context, svc *service.Service, poll time.Duration, log *
 
 // maintain republishes periodically so the staleness flag tracks real time, and
 // compacts history once a day.
-func maintain(ctx context.Context, svc *service.Service, db *store.Store,
-	compactAfter, keepDaily time.Duration, log *slog.Logger) {
+func maintain(ctx context.Context, svc *service.Service, db *store.Store, archive *feed.Archive,
+	compactAfter, keepDaily, keepRaw time.Duration, log *slog.Logger) {
 
 	refresh := time.NewTicker(5 * time.Minute)
 	defer refresh.Stop()
@@ -219,9 +220,32 @@ func maintain(ctx context.Context, svc *service.Service, db *store.Store,
 				continue
 			}
 			log.Info("compacted",
-				"daily_rows", res.DailyRows, "monthly_rows", res.MonthlyRows,
 				"pruned_raw", res.PrunedRaw, "pruned_daily", res.PrunedDaily,
 				"took", time.Since(start).Round(time.Millisecond))
+
+			// Thin the raw archive on the same daily pass. This was written, tested
+			// and documented as implemented, and never called from anywhere — the
+			// archive grew unthinned at ~282 GB/year against a 600 GB volume, which
+			// fills in a little over two years. Filling it is not a degraded mode: a
+			// snapshot that cannot be written is gone, because upstream overwrites
+			// each file and nothing can backfill it.
+			if keepRaw > 0 {
+				start = time.Now()
+				pr, err := archive.Prune(feed.RetentionPolicy{
+					FullResolution: keepRaw, KeepDailyAfter: true,
+				}, time.Now().UTC())
+				if err != nil {
+					log.Error("archive prune failed", "err", err)
+					continue
+				}
+				if err := archive.PruneEmptyDirs(); err != nil {
+					log.Warn("archive prune: removing empty directories", "err", err)
+				}
+				log.Info("archive pruned",
+					"kept", pr.Kept, "deleted", pr.Deleted,
+					"freed_mb", pr.Freed/(1<<20),
+					"took", time.Since(start).Round(time.Millisecond))
+			}
 		}
 	}
 }
