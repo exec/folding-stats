@@ -160,23 +160,46 @@ func (s *Server) teamMembers(snap *Snapshot, r *http.Request) (any, *PageInfo, e
 	// every request would work, but it would cost the same for a two-person team as
 	// for the largest one.
 	slots := snap.Ranks.TeamMembers(teamID)
+
+	total := len(slots)
 	if activeOnly {
-		filtered := make([]int32, 0, len(slots))
-		for _, slot := range slots {
-			if snap.Members.Last7d(slot) > 0 {
-				filtered = append(filtered, slot)
-			}
-		}
-		slots = filtered
+		// The count is already known per team from the snapshot build, so the filter
+		// does not have to materialise the whole roster just to learn how long it is.
+		// Copying every member of the largest team to return a hundred of them made
+		// the filtered view twelve times more expensive than the unfiltered one,
+		// which is backwards — asking for fewer rows should not cost more.
+		_, active := snap.TeamMemberCounts(teamID)
+		total = int(active)
 	}
 
-	lo, hi, page, err := paginate(r, len(slots))
+	lo, hi, page, err := paginate(r, total)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	out := make([]Member, 0, hi-lo)
-	for _, slot := range slots[lo:hi] {
-		out = append(out, snap.memberView(slot, false))
+	if !activeOnly {
+		for _, slot := range slots[lo:hi] {
+			out = append(out, snap.memberView(slot, false))
+		}
+		return out, page, nil
+	}
+	// Walk only as far as the requested window. The roster is in rank order, so the
+	// first page is usually reached in about its own length; the worst case is a team
+	// whose active members are all at the bottom, which is the whole scan this used to
+	// do every time regardless.
+	seen := 0
+	for _, slot := range slots {
+		if snap.Members.Last7d(slot) <= 0 {
+			continue
+		}
+		if seen >= lo {
+			out = append(out, snap.memberView(slot, false))
+		}
+		seen++
+		if seen >= hi {
+			break
+		}
 	}
 	return out, page, nil
 }

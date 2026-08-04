@@ -1905,3 +1905,104 @@ func TestCallerSuppliedHistoryRangeIgnoresTheWarmCache(t *testing.T) {
 			"window was ignored and the cached default served instead", len(got.Points))
 	}
 }
+
+// TestActiveOnlyRosterPagesOverExactlyTheActiveMembers pins the invariant the fast
+// path depends on: the precomputed active count it paginates against has to equal the
+// number of members the walk will actually yield.
+//
+// If those two ever disagree the failure is silent and ugly — a total_pages promising
+// a page that comes back empty, or a last page cut short — so this walks every page
+// and checks the concatenation against the filter done the slow, obvious way.
+func TestActiveOnlyRosterPagesOverExactlyTheActiveMembers(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	state := model.NewState()
+	memberWin, teamWin := metrics.New(0), metrics.New(0)
+
+	// 25 members on one team. Only those whose score moves between the two cycles are
+	// active, and the dormant ones are interleaved with the producers rather than
+	// grouped, so a walk that stops early or an off-by-one lands on a real member.
+	const n = 25
+	mk := func(cycle int) []parse.UserRow {
+		rows := make([]parse.UserRow, 0, n)
+		for i := 0; i < n; i++ {
+			score := int64(1000 - i*10) // descending, so rank order is index order
+			if cycle == 2 && i%3 == 0 {
+				score += 500 // every third member produces
+			}
+			rows = append(rows, u(fmt.Sprintf("m%02d", i), score, 42))
+		}
+		return rows
+	}
+	for i, when := range []time.Time{at(1), at(2)} {
+		cy := state.Apply(when, []parse.TeamRow{tr(42, "mixed", 100000)}, mk(i+1))
+		if err := st.WriteCycle(context.Background(), state, cy, store.CycleMeta{
+			TeamSnapshotAt: when, UserSnapshotAt: when}); err != nil {
+			t.Fatal(err)
+		}
+		memberWin.Grow(len(state.Members))
+		memberWin.Push(when, cy.MemberDeltas)
+		teamWin.Grow(len(state.Teams))
+		teamWin.Push(when, cy.TeamDeltas)
+	}
+	tbl := rank.Build(state, at(2), rank.DefaultConfig)
+	tbl.BuildOrders(state, memberWin, teamWin, nil, nil)
+	snap := Build(state, memberWin, teamWin, tbl, st, at(2), at(3), "active-etag")
+	srv := NewServer()
+	srv.Publish(snap)
+
+	// The filter done the obvious way, over the whole roster.
+	var want []string
+	for _, slot := range tbl.TeamMembers(42) {
+		if memberWin.Last7d(slot) > 0 {
+			want = append(want, state.Names.Name(state.Members[slot].NameID))
+		}
+	}
+	if len(want) < 5 || len(want) >= n {
+		t.Fatalf("%d of %d members active; the fixture needs a real mix", len(want), n)
+	}
+
+	// Page through the endpoint and concatenate.
+	var got []string
+	perPage := 3
+	for page := 1; ; page++ {
+		rec, env := get(t, srv, fmt.Sprintf(
+			"/v1/teams/42/members?active_only=true&per_page=%d&page=%d", perPage, page))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("page %d: status %d", page, rec.Code)
+		}
+		if env.Page == nil {
+			t.Fatal("no page info")
+		}
+		if env.Page.TotalItems != len(want) {
+			t.Fatalf("page %d reports %d total items, filter finds %d",
+				page, env.Page.TotalItems, len(want))
+		}
+		rows := decode[[]Member](t, env.Data)
+		if len(rows) == 0 {
+			t.Fatalf("page %d of %d is empty but was promised", page, env.Page.TotalPages)
+		}
+		for _, m := range rows {
+			got = append(got, m.Name)
+			if m.PointsLast7d <= 0 {
+				t.Errorf("%s has no recent production but appears in the active roster", m.Name)
+			}
+		}
+		if page >= env.Page.TotalPages {
+			break
+		}
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("paged over %d active members, filter finds %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("position %d: paged %q, filter %q", i, got[i], want[i])
+		}
+	}
+}
