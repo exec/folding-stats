@@ -261,17 +261,19 @@ function escapeHtml(s) {
  */
 export function productionChart(el, label = 'Points') {
   const chart = new Chart(el, (t, meta, self) => ({
+    // A rate and a total are different quantities, so the tooltip has to say which
+    // one it is quoting — the bars look identical either way.
     padding: [12, 24, 0, 0],
     tzDate: dateFn(meta?.granularity),
     axes: axes(t, meta?.granularity),
     cursor: cursor(),
-    hooks: tooltipHooks(self, label),
+    hooks: tooltipHooks(self, meta?.perDay ? `${label}/day` : label),
     legend: { show: false },
     scales: { y: { range: (u, min, max) => [0, max === 0 ? 1 : max * 1.08] } },
     series: [
       { label: 'Time' },
       {
-        label,
+        label: meta?.perDay ? `${label}/day` : label,
         stroke: t.series[0],
         _swatch: t.series[0],
         width: 2,
@@ -413,7 +415,55 @@ function bucketStep(granularity) {
   }
 }
 
-export function densify(points, granularity, { limit = 5000, until } = {}) {
+/**
+ * How many days this bucket covers, for rendering production as a rate.
+ *
+ * The newest bucket is nearly always in progress — today, this week, this month — so
+ * dividing it by its nominal length reports a collapse that has not happened. Divide
+ * by however much of it has actually elapsed instead; the same correction
+ * metrics.PerDay makes on the server, where assuming a full window once made the
+ * project's per-day figure read 8.8x low.
+ *
+ * Hourly points are the delta between two publishes, which drifts a few seconds each
+ * cycle and is complete the moment it exists. They take the nominal hour — the step
+ * densify already walks — rather than a per-point measurement the rest of the chart
+ * does not use.
+ */
+function bucketDays(at, granularity, until, since) {
+  const t = Date.parse(at);
+  let nominal;
+  if (granularity === 'monthly') {
+    const d = new Date(t);
+    nominal = (Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)
+      - Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)) / 86400e3;
+  } else {
+    nominal = bucketStep(granularity) / 86400e3;
+  }
+  if (granularity !== 'daily' && granularity !== 'weekly' && granularity !== 'monthly') return nominal;
+  if (until == null) return nominal;
+  // Only count time we were actually watching. A bucket can be older than the
+  // service: with two days of history the week that began on Sunday is three days
+  // long and one day observed, and dividing by three reports a team producing 2.8B
+  // a day as if it were doing 1.9B. The two coarse views would disagree with the two
+  // fine ones for a month, which is exactly when someone is looking.
+  const from = since == null ? t : Math.max(t, since);
+  // One hour is the floor. Extrapolating a whole day from the first minutes after
+  // 00:00 UTC divides by something near zero and throws the bar off the top of the
+  // chart; an hour in, the estimate is merely noisy, which is what a rate this fresh
+  // honestly is.
+  return Math.max(Math.min(nominal, (until - from) / 86400e3), 1 / 24);
+}
+
+/** Production per bucket, restated as production per day. */
+export function perDayPoints(points, granularity, until, since) {
+  return points.map((p) => {
+    const d = bucketDays(p.at, granularity, until, since);
+    return { ...p, points: Math.round(p.points / d), wus: Math.round(p.wus / d) };
+  });
+}
+
+export function densify(points, granularity, { limit = 5000, until, since, perDay = false } = {}) {
+  if (perDay) points = perDayPoints(points, granularity, until, since);
   if (points.length < 2) return padLone(points, granularity, limit, until);
 
   const step = bucketStep(granularity);

@@ -7,7 +7,7 @@
 import { api, snapshot } from '/api.js';
 import { el, clear, card, cardWith, statTile, pager, segmented, notice, loading, errorView, link } from '/ui.js';
 import { n, short, ago, dateTime, delta, tierName, nameText, plural, span, tzName } from '/format.js';
-import { productionChart, stackedChart, stack, legend, densify, MAX_STACK_SERIES } from '/charts.js';
+import { productionChart, stackedChart, stack, legend, densify, perDayPoints, MAX_STACK_SERIES } from '/charts.js';
 
 const PER_PAGE = 100;
 
@@ -29,12 +29,41 @@ function snapshotMs() {
   return s ? Date.parse(s.at) : Date.now();
 }
 
+/**
+ * The window a chart may draw in: nothing after the newest snapshot, nothing before
+ * the service started watching.
+ *
+ * One helper rather than the pair repeated at every render site. Both bounds are
+ * needed together or a per-day rate is wrong — the upper one keeps the in-progress
+ * bucket from being divided by time that has not happened, the lower one keeps it
+ * from being divided by time nobody was recording.
+ */
+function chartSpan() {
+  const w = snapshot()?.warming_up;
+  const until = snapshotMs();
+  return { until, since: w?.history_span_sec ? until - w.history_span_sec * 1000 : null };
+}
+
 /** The granularities every history chart offers, in coarsening order. */
 const GRANULARITIES = [
   { value: 'hourly', label: 'Hourly', title: 'One point per upstream publish' },
   { value: 'daily', label: 'Daily', title: 'UTC days' },
   { value: 'weekly', label: 'Weekly', title: 'UTC weeks starting Sunday' },
   { value: 'monthly', label: 'Monthly', title: 'UTC calendar months' },
+];
+
+/**
+ * What a bar stands for: what the bucket produced, or the rate it produced at.
+ *
+ * Totals make the granularity control a unit change — a monthly bar is roughly 700x
+ * an hourly one, so the four views cannot be compared with each other or with the
+ * "Per day" figure in the stats above. Dividing each bucket by its own length holds
+ * the unit still and leaves granularity doing the only thing it is useful for here,
+ * which is smoothing.
+ */
+const RATES = [
+  { value: 'total', label: 'Total', title: 'Points produced in each bucket' },
+  { value: 'per-day', label: 'Per day', title: 'Each bucket as a points-per-day rate' },
 ];
 
 /**
@@ -390,12 +419,20 @@ function productionStats(d, extra = []) {
  * the difference between a reader trusting the chart and thinking it disagrees with
  * the clock in the header.
  */
-function chartNote(granularity) {
-  if (granularity === 'monthly') return `Months are UTC. Gaps are months with no production.`;
-  if (granularity === 'weekly')
-    return `Weeks start Sunday 00:00 UTC. Gaps are weeks with no production.`;
-  if (granularity === 'daily') return `Days are UTC. Gaps are days with no production.`;
-  return `Times are ${tzName()}. Gaps are hours with no production.`;
+function chartNote(granularity, rate = 'total') {
+  let s;
+  if (granularity === 'monthly') s = `Months are UTC. Gaps are months with no production.`;
+  else if (granularity === 'weekly')
+    s = `Weeks start Sunday 00:00 UTC. Gaps are weeks with no production.`;
+  else if (granularity === 'daily') s = `Days are UTC. Gaps are days with no production.`;
+  else s = `Times are ${tzName()}. Gaps are hours with no production.`;
+  if (rate !== 'per-day') return s;
+  // The in-progress bucket is divided by the part of it that has elapsed, so it is a
+  // rate so far and not a total, and it moves around early in the period. Saying so
+  // costs a clause and stops the newest bar reading as a crash or a spike.
+  return granularity === 'hourly'
+    ? `${s} Each point is its hour's output as a daily rate.`
+    : `${s} Each bar is a daily rate; the one in progress is measured over the part elapsed.`;
 }
 
 /**
@@ -408,14 +445,22 @@ function historyCard(title, fetcher) {
   const legendEl = el('div.legend');
   const chart = productionChart(plotEl);
   let granularity = 'hourly';
+  let rate = 'total';
 
   const controls = el('div.chart-toolbar');
-  const noteEl = el('div.chart-note', chartNote(granularity));
+  const noteEl = el('div.chart-note', chartNote(granularity, rate));
   const body = el('div.card-body', { style: 'padding:0' }, legendEl, plotEl, noteEl);
   const node = cardWith(title, controls, body);
 
+  function renderControls() {
+    clear(controls).append(
+      segmented(GRANULARITIES, granularity, (v) => { granularity = v; renderControls(); load(); }),
+      segmented(RATES, rate, (v) => { rate = v; renderControls(); load(); })
+    );
+  }
+
   async function load() {
-    noteEl.textContent = chartNote(granularity);
+    noteEl.textContent = chartNote(granularity, rate);
     try {
       const res = await fetcher({ granularity, metric: 'points' });
       const pts = res.data.points || [];
@@ -425,41 +470,17 @@ function historyCard(title, fetcher) {
         return;
       }
       clear(legendEl);
-      const dense = densify(pts, granularity, { until: snapshotMs() });
+      const dense = densify(pts, granularity, { ...chartSpan(), perDay: rate === 'per-day' });
       const xs = dense.map((p) => Math.floor(Date.parse(p.at) / 1000));
       const ys = dense.map((p) => p.points);
-      chart.render([xs, ys], { granularity });
+      chart.render([xs, ys], { granularity, perDay: rate === 'per-day' });
     } catch (err) {
       chart.render(null);
       clear(legendEl).append(el('div.error', { style: 'padding:40px 0' }, err.message));
     }
   }
 
-  controls.append(
-    segmented(
-      GRANULARITIES,
-      granularity,
-      (v) => {
-        granularity = v;
-        clear(controls);
-        controls.append(rebuildControls());
-        load();
-      }
-    )
-  );
-  function rebuildControls() {
-    return segmented(
-      GRANULARITIES,
-      granularity,
-      (v) => {
-        granularity = v;
-        clear(controls);
-        controls.append(rebuildControls());
-        load();
-      }
-    );
-  }
-
+  renderControls();
   load();
   return { node, destroy: () => chart.destroy() };
 }
@@ -863,10 +884,11 @@ function breakdownCard(donor, teams) {
   const controls = el('div.chart-toolbar');
 
   let granularity = 'hourly';
+  let rate = 'total';
   let selected = 'all';
   let chart = null;
 
-  const noteEl = el('div.chart-note', chartNote(granularity));
+  const noteEl = el('div.chart-note', chartNote(granularity, rate));
   const body = el('div.card-body', { style: 'padding:0' }, tabs, legendEl, plotEl, noteEl);
   const node = cardWith('Production by team', controls, body);
 
@@ -909,11 +931,8 @@ function breakdownCard(donor, teams) {
 
   function renderControls() {
     clear(controls).append(
-      segmented(
-        GRANULARITIES,
-        granularity,
-        (v) => { granularity = v; load(); }
-      )
+      segmented(GRANULARITIES, granularity, (v) => { granularity = v; load(); }),
+      segmented(RATES, rate, (v) => { rate = v; load(); })
     );
   }
 
@@ -932,10 +951,12 @@ function breakdownCard(donor, teams) {
   async function load() {
     renderTabs();
     renderControls();
-    noteEl.textContent = chartNote(granularity);
+    noteEl.textContent = chartNote(granularity, rate);
     if (chart) chart.destroy();
     clear(legendEl);
 
+    const perDay = rate === 'per-day';
+    const win = chartSpan();
     try {
       if (selected === 'all' && !producers.length) {
         legendEl.append(el('div.chart-empty',
@@ -955,21 +976,24 @@ function breakdownCard(donor, teams) {
           legendEl.append(emptyChart(granularity));
           return;
         }
-        const dense = densify(pts, granularity, { until: snapshotMs() });
+        const dense = densify(pts, granularity, { ...chartSpan(), perDay });
         chart.render(
           [dense.map((p) => Math.floor(Date.parse(p.at) / 1000)), dense.map((p) => p.points)],
-          { granularity }
+          { granularity, perDay }
         );
         return;
       }
 
       if (selected === 'all') {
+        // Rescale on arrival rather than at render: the bands are summed, filtered and
+        // stacked below, and a stack is only meaningful if every band is in the same
+        // unit. Doing it once here is the only way that stays true down every branch.
         const fetched = await Promise.all(
-          shown.map(async (t) => ({
-            team: t,
-            points: (await api.donorHistory(donor.name, { granularity, team_id: t.team_id }))
-              .data.points || [],
-          }))
+          shown.map(async (t) => {
+            const pts = (await api.donorHistory(donor.name, { granularity, team_id: t.team_id }))
+              .data.points || [];
+            return { team: t, points: perDay ? perDayPoints(pts, granularity, win.until, win.since) : pts };
+          })
         );
 
         // A team that produced nothing *in this window* gets no band, no legend
@@ -984,10 +1008,11 @@ function breakdownCard(donor, teams) {
         if (active.length === 1) {
           const only = active[0];
           chart = productionChart(plotEl, only.team.team_name || `Team ${only.team.team_id}`);
-          const dense = densify(only.points, granularity, { until: snapshotMs() });
+          // Already rescaled at fetch, with the rest of the stack.
+          const dense = densify(only.points, granularity, { ...chartSpan() });
           chart.render(
             [dense.map((p) => Math.floor(Date.parse(p.at) / 1000)), dense.map((p) => p.points)],
-            { granularity }
+            { granularity, perDay }
           );
           return;
         }
@@ -1003,7 +1028,7 @@ function breakdownCard(donor, teams) {
           legendEl.append(emptyChart(granularity));
           return;
         }
-        const times = densify(merged, granularity, { until: snapshotMs() }).map((p) => p.at);
+        const times = densify(merged, granularity, { ...chartSpan() }).map((p) => p.at);
         const idx = new Map(times.map((t, i) => [t, i]));
         const rows = seriesData.map((r) => {
           const arr = new Array(times.length).fill(0);
@@ -1017,8 +1042,11 @@ function breakdownCard(donor, teams) {
             rest.slice(0, 8).map((t) => api.donorHistory(donor.name, { granularity, team_id: t.team_id }))
           );
           const arr = new Array(times.length).fill(0);
-          for (const r of others) for (const p of r.data.points || []) {
-            if (idx.has(p.at)) arr[idx.get(p.at)] += p.points;
+          for (const r of others) {
+            const pts = r.data.points || [];
+            for (const p of perDay ? perDayPoints(pts, granularity, win.until, win.since) : pts) {
+              if (idx.has(p.at)) arr[idx.get(p.at)] += p.points;
+            }
           }
           if (arr.some((v) => v > 0)) {
             rows.push(arr);
@@ -1029,7 +1057,7 @@ function breakdownCard(donor, teams) {
         chart = stackedChart(plotEl);
         legend(legendEl, labels);
         const xs = times.map((t) => Math.floor(new Date(t).getTime() / 1000));
-        chart.render([xs, ...stack(rows)], { granularity, labels, stacked: true });
+        chart.render([xs, ...stack(rows)], { granularity, labels, stacked: true, perDay });
       } else {
         const res = await api.donorHistory(donor.name, { granularity, team_id: selected });
         const pts = res.data.points || [];
@@ -1038,9 +1066,9 @@ function breakdownCard(donor, teams) {
           legendEl.append(emptyChart(granularity));
           return;
         }
-        const dense = densify(pts, granularity, { until: snapshotMs() });
+        const dense = densify(pts, granularity, { ...chartSpan(), perDay });
         const xs = dense.map((p) => Math.floor(Date.parse(p.at) / 1000));
-        chart.render([xs, dense.map((p) => p.points)], { granularity });
+        chart.render([xs, dense.map((p) => p.points)], { granularity, perDay });
       }
     } catch (err) {
       legendEl.append(el('div.error', { style: 'padding:40px 0' }, err.message));
