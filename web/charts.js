@@ -259,6 +259,16 @@ function escapeHtml(s) {
  * No legend: the card title names the series, and one series plus a legend box is
  * redundant chrome.
  */
+/**
+ * What the tooltip calls the series once it is showing a rate.
+ *
+ * A single-series chart is labelled "Points", which becomes plain PPD — the term
+ * Folding@home uses, so it needs no gloss. A per-team series is labelled with the
+ * team's name, which has to keep it and take the unit as a suffix.
+ */
+const rateLabel = (label, perDay) =>
+  !perDay ? label : label === 'Points' ? 'PPD' : `${label} PPD`;
+
 export function productionChart(el, label = 'Points') {
   const chart = new Chart(el, (t, meta, self) => ({
     // A rate and a total are different quantities, so the tooltip has to say which
@@ -267,13 +277,13 @@ export function productionChart(el, label = 'Points') {
     tzDate: dateFn(meta?.granularity),
     axes: axes(t, meta?.granularity),
     cursor: cursor(),
-    hooks: tooltipHooks(self, meta?.perDay ? `${label}/day` : label),
+    hooks: tooltipHooks(self, rateLabel(label, meta?.perDay)),
     legend: { show: false },
     scales: { y: { range: (u, min, max) => [0, max === 0 ? 1 : max * 1.08] } },
     series: [
       { label: 'Time' },
       {
-        label: meta?.perDay ? `${label}/day` : label,
+        label: rateLabel(label, meta?.perDay),
         stroke: t.series[0],
         _swatch: t.series[0],
         width: 2,

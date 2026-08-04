@@ -63,7 +63,9 @@ const GRANULARITIES = [
  */
 const RATES = [
   { value: 'total', label: 'Total', title: 'Points produced in each bucket' },
-  { value: 'per-day', label: 'Per day', title: 'Each bucket as a points-per-day rate' },
+  // PPD is what Folding@home calls this and what donors already compare each other
+  // by, so the control is labelled in the reader's vocabulary rather than ours.
+  { value: 'per-day', label: 'PPD', title: 'Each bucket as points per day' },
 ];
 
 /**
@@ -431,8 +433,8 @@ function chartNote(granularity, rate = 'total') {
   // rate so far and not a total, and it moves around early in the period. Saying so
   // costs a clause and stops the newest bar reading as a crash or a spike.
   return granularity === 'hourly'
-    ? `${s} Each point is its hour's output as a daily rate.`
-    : `${s} Each bar is a daily rate; the one in progress is measured over the part elapsed.`;
+    ? `${s} Each point is its hour's output as PPD.`
+    : `${s} Each bar is PPD; the one in progress is measured over the part elapsed.`;
 }
 
 /**
