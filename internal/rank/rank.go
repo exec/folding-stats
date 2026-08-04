@@ -455,11 +455,17 @@ func (t *Table) buildDonors(st *model.State, cfg Config) {
 	for i := 1; i < len(t.donorOffsets); i++ {
 		t.donorOffsets[i] += t.donorOffsets[i-1]
 	}
+	// Scattered in global rank order rather than slot order, exactly as the team
+	// rosters above are. A donor's teams are presented best-first everywhere they
+	// appear, and scattering in slot order meant every one of those places had to sort
+	// the donor's whole membership first — 10,426 entries for a name like "PS3", to
+	// return a page of 100. The global order is already to hand here, so ordering it
+	// once per cycle costs nothing and every read is a slice.
 	t.donorMembers = make([]int32, len(st.Members))
 	cursor := append([]int32(nil), t.donorOffsets[:len(t.Donors)]...)
-	for slot, m := range st.Members {
-		d := t.DonorIndex[m.NameID]
-		t.donorMembers[cursor[d]] = int32(slot)
+	for _, slot := range t.MemberOrder {
+		d := t.DonorIndex[st.Members[slot].NameID]
+		t.donorMembers[cursor[d]] = slot
 		cursor[d]++
 	}
 }
@@ -513,8 +519,9 @@ func (t *Table) DonorRank(nameID int32) int32 {
 	return i + 1
 }
 
-// DonorMembers returns the member slots belonging to donor i, ordered by slot. The
-// result aliases internal storage and must not be modified.
+// DonorMembers returns the member slots belonging to donor i in global rank order,
+// so the donor's strongest membership leads. The result aliases internal storage and
+// must not be modified.
 func (t *Table) DonorMembers(i int32) []int32 {
 	if i < 0 || int(i) >= len(t.Donors) {
 		return nil

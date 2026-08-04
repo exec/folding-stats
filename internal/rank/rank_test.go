@@ -472,3 +472,54 @@ func TestTeamMembersUnknownTeam(t *testing.T) {
 		t.Errorf("negative team roster = %v, want nil", got)
 	}
 }
+
+func TestDonorMembersAreInRankOrder(t *testing.T) {
+	// The API presents a donor's teams best-first everywhere, and used to sort the
+	// donor's whole membership to get there — 10,426 entries for "PS3", to return a
+	// page of 100. Scattering the CSR in global rank order makes that ordering free,
+	// exactly as it already was for team rosters, so the guarantee has to hold here.
+	st, tbl := build(t, nil, []parse.UserRow{
+		u("DH", 100, 1), u("DH", 900, 2), u("DH", 500, 3), u("DH", 700, 4),
+		u("other", 400, 1),
+	})
+	idx := tbl.DonorIndex[st.Names.Intern("DH")]
+	members := tbl.DonorMembers(idx)
+	if len(members) != 4 {
+		t.Fatalf("DonorMembers = %d entries, want 4", len(members))
+	}
+
+	var scores []int64
+	var teams []int32
+	for _, slot := range members {
+		scores = append(scores, st.Members[slot].Score)
+		teams = append(teams, st.Members[slot].TeamID)
+	}
+	for i := 1; i < len(scores); i++ {
+		if scores[i] > scores[i-1] {
+			t.Errorf("not in descending score order: %v (teams %v)", scores, teams)
+			break
+		}
+	}
+	if want := []int64{900, 700, 500, 100}; len(scores) == len(want) {
+		for i := range want {
+			if scores[i] != want[i] {
+				t.Errorf("order = %v, want %v", scores, want)
+				break
+			}
+		}
+	}
+
+	// Ties must be deterministic, or a donor's team list would reshuffle between
+	// cycles for no reason. MemberOrder breaks ties by slot ascending.
+	st2, tbl2 := build(t, nil, []parse.UserRow{
+		u("tie", 500, 1), u("tie", 500, 2), u("tie", 500, 3),
+	})
+	i2 := tbl2.DonorIndex[st2.Names.Intern("tie")]
+	first := append([]int32(nil), tbl2.DonorMembers(i2)...)
+	for i := 1; i < len(first); i++ {
+		if first[i] <= first[i-1] {
+			t.Errorf("tied members not in ascending slot order: %v", first)
+			break
+		}
+	}
+}

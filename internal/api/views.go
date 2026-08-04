@@ -147,25 +147,50 @@ func (s *Snapshot) breakdown(members []int32, limit int) ([]Member, bool) {
 // total are routinely dormant, so ordering a production view by lifetime points
 // selects exactly the teams with nothing to plot.
 func (s *Snapshot) breakdownSorted(members []int32, limit int, byProduction bool) ([]Member, bool) {
-	ordered := append([]int32(nil), members...)
-	if byProduction {
-		sort.Slice(ordered, func(a, b int) bool {
-			return s.Members.Last7d(ordered[a]) > s.Members.Last7d(ordered[b])
-		})
-	} else {
-		// With a cap, the rows dropped should be the ones that matter least.
-		sortSlotsByScoreDesc(ordered, s.State.Members)
-	}
-
+	ordered := s.orderMembers(members, byProduction)
 	truncated := false
 	if limit > 0 && len(ordered) > limit {
+		// With a cap, the rows dropped should be the ones that matter least.
 		ordered, truncated = ordered[:limit], true
 	}
-	out := make([]Member, 0, len(ordered))
-	for _, slot := range ordered {
+	return s.memberViews(ordered), truncated
+}
+
+// orderMembers puts a donor's memberships in the requested order without building a
+// view for any of them, so a caller that only wants a page pays for a page.
+//
+// The lifetime order is free: rank.DonorMembers already returns them in global rank
+// order, which is descending lifetime points. Only the production ordering needs
+// work, and it is the rarer of the two.
+//
+// In the free case the caller's slice is handed straight back, so it may still alias
+// the table's own storage. Callers slice and read it; nothing here may sort or write
+// through it.
+func (s *Snapshot) orderMembers(members []int32, byProduction bool) []int32 {
+	if !byProduction {
+		return members
+	}
+	ordered := append([]int32(nil), members...)
+	// Stable, so equal production keeps the incoming order — which is now global rank
+	// order, making the tiebreak "same output, better lifetime rank first" rather than
+	// whatever the sort happened to do. Most of a wide donor's teams have produced
+	// nothing at all, so ties are the common case, not the edge: with an unstable sort
+	// their order was arbitrary and could reshuffle between cycles for no reason.
+	sort.SliceStable(ordered, func(a, b int) bool {
+		return s.Members.Last7d(ordered[a]) > s.Members.Last7d(ordered[b])
+	})
+	return ordered
+}
+
+// memberViews builds the wire rows for exactly the slots given. This is the expensive
+// half — two arena copies, a team lookup and a window read apiece — so callers slice
+// first and build second.
+func (s *Snapshot) memberViews(slots []int32) []Member {
+	out := make([]Member, 0, len(slots))
+	for _, slot := range slots {
 		out = append(out, s.memberView(slot, true))
 	}
-	return out, truncated
+	return out
 }
 
 // memberSlot resolves a (name, team) pair back to its slot.
