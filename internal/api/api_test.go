@@ -1545,3 +1545,45 @@ func TestEveryNumericColumnIsSortable(t *testing.T) {
 		t.Errorf("400 body does not list the valid keys: %s", rec.Body.String())
 	}
 }
+
+func TestEveryHistoryEndpointServesEveryGranularity(t *testing.T) {
+	// Three separate functions in the store map a granularity onto a table, and
+	// weekly was added to two of them. The donor path is the third, and it answered
+	// `store: unknown granularity "weekly"` on a live page.
+	//
+	// The mapping being duplicated is the defect; this is the check that makes the
+	// duplication survivable, by refusing to let any one copy fall behind. Endpoints
+	// times granularities is a small enough matrix to just take all of it.
+	srv := fixture(t)
+
+	paths := []string{
+		"/v1/summary/history",
+		"/v1/teams/32/history",
+		"/v1/donors/DH/history",            // aggregates across a donor's members
+		"/v1/donors/DH/history?team_id=32", // scoped to one, a different code path
+	}
+	grans := []string{"hourly", "cycle", "daily", "weekly", "monthly"}
+
+	for _, path := range paths {
+		sep := "?"
+		if strings.Contains(path, "?") {
+			sep = "&"
+		}
+		for _, g := range grans {
+			url := path + sep + "granularity=" + g
+			rec, env := get(t, srv, url)
+			if rec.Code != http.StatusOK {
+				t.Errorf("%s: status %d, want 200\n%s", url, rec.Code, rec.Body.String())
+				continue
+			}
+			h := decode[History](t, env.Data)
+			want := g
+			if g == "cycle" {
+				want = "hourly"
+			}
+			if h.Granularity != want {
+				t.Errorf("%s: granularity echoed as %q, want %q", url, h.Granularity, want)
+			}
+		}
+	}
+}

@@ -371,7 +371,7 @@ func (s *Store) MembersHistory(ctx context.Context, ids []int32, from, to time.T
 	}
 	g = g.Normalize()
 
-	var table, bucketCol, pointsCol, wusCol string
+	var table, bucketCol, groupCol, pointsCol, wusCol string
 	var lo, hi int64
 	switch g {
 	case Hourly:
@@ -380,11 +380,20 @@ func (s *Store) MembersHistory(ctx context.Context, ids []int32, from, to time.T
 	case Daily:
 		table, bucketCol, pointsCol, wusCol = "member_daily", "bucket", "points", "wus"
 		lo, hi = DayBucket(from), DayBucket(to)
+	case Weekly:
+		// Summed from daily on read, filtered on the raw day bucket so the clustered
+		// key still drives the scan — see the matching note in history().
+		table, bucketCol, pointsCol, wusCol = "member_daily", "bucket", "points", "wus"
+		groupCol = fmt.Sprintf("(bucket - %d) / 7", firstSundayDay)
+		lo, hi = DayBucket(startOfWeekUTC(from)), DayBucket(endOfWeekUTC(to))
 	case Monthly:
 		table, bucketCol, pointsCol, wusCol = "member_monthly", "bucket", "points", "wus"
 		lo, hi = MonthBucket(from), MonthBucket(to)
 	default:
 		return nil, fmt.Errorf("store: unknown granularity %q", g)
+	}
+	if groupCol == "" {
+		groupCol = bucketCol
 	}
 
 	// Cycle timestamps are instants so the upper bound is exclusive; bucketed
@@ -402,10 +411,10 @@ func (s *Store) MembersHistory(ctx context.Context, ids []int32, from, to time.T
 	}
 	placeholders := strings.Repeat("?,", n-1) + "?"
 	query := fmt.Sprintf(
-		`SELECT %[1]s, SUM(%[2]s), SUM(%[3]s) FROM %[4]s
-		  WHERE member_id IN (%[5]s) AND %[1]s >= ? AND %[1]s %[6]s ?
-		  GROUP BY %[1]s ORDER BY %[1]s`,
-		bucketCol, pointsCol, wusCol, table, placeholders, upper)
+		`SELECT %[1]s AS b, SUM(%[2]s), SUM(%[3]s) FROM %[4]s
+		  WHERE member_id IN (%[5]s) AND %[7]s >= ? AND %[7]s %[6]s ?
+		  GROUP BY b ORDER BY b`,
+		groupCol, pointsCol, wusCol, table, placeholders, upper, bucketCol)
 
 	args := make([]any, 0, n+2)
 	for _, id := range ids {
