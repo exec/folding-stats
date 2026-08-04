@@ -363,7 +363,7 @@ function statsRail(d) {
         fig('Work units', short(d.wus_total), n(d.wus_total)))),
     card('The API',
       el('div.card-body',
-        el('p.rail-note', 'Every figure here is available as JSON. No key, no account, no rate limit.'),
+        el('p.rail-note', 'Every figure here is available as JSON. No key, no account, and no rate limit for now.'),
         el('a.section-link', { href: '/api' }, 'Read the docs →'))));
 }
 
@@ -1224,7 +1224,7 @@ export async function apiDocs(view) {
 
   view.append(el('section.section', el('div.stats',
     statTile('Auth', 'None', 'no key required'),
-    statTile('Rate limit', 'None', 'be reasonable'),
+    statTile('Rate limit', 'None yet', 'and not before it is needed'),
     statTile('Format', 'JSON', 'one envelope for every route'),
     statTile('Refresh', 'Hourly', 'matching upstream')
   )));
@@ -1248,6 +1248,33 @@ export async function apiDocs(view) {
         endpoint('GET', '/v1/donors/{name}/rivals', 'Ranking around this donor with projected overtakes; opens on its own page'),
         endpoint('GET', '/v1/search', '?q= name prefix, exact name, or team ID')
       ))))));
+
+  view.append(el('section.section', card('Rate limits',
+    el('div.card-body', { style: 'padding-bottom:0' },
+      el('p', { style: 'margin-top:0' },
+        'There are none, and adding one is a last resort rather than a plan. ' +
+        'Applications that call this heavily are often the most useful ones to the ' +
+        'community, and a limit set defensively would break them before they were ' +
+        'ever a problem.'),
+      el('p',
+        'The bar for changing that is deliberately concrete: API calls consistently ' +
+        'taking over half a second, with no optimisation left that would bring them ' +
+        'down. Today every route answers in well under a millisecond, and load has ' +
+        'been met by making the slow path fast rather than by turning callers away. ' +
+        'That is the order those two things will always be tried in.'),
+      el('p',
+        'If it ever does become necessary it will be as lenient as it can be, and ' +
+        'aimed at whatever is actually causing the problem rather than at everyone — ' +
+        'most likely per-address, engaging only for traffic heavy enough to degrade ' +
+        'the service for other people, and generous even then.'),
+      el('p',
+        'One ask, which makes all of the above easier to keep to: if you are building ' +
+        'a site on this, pass your users’ requests through rather than mirroring ' +
+        'the whole dataset on a schedule. Copying every team and every donor every ' +
+        'hour costs far more than serving the pages people actually open, and it is ' +
+        'the one pattern likely to make a limit necessary. Every response carries a ',
+        el('code', 'snapshot'), ' block with ', el('code', 'next_expected_at'),
+        ', so you can cache precisely instead of polling.')))));
 
   view.append(el('section.section', card('Sorting leaderboards',
     el('div.card-body', { style: 'padding-bottom:0' },

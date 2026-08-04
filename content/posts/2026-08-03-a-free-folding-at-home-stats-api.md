@@ -6,7 +6,7 @@ summary: Every donor, every team, updated hourly — with an open, unauthenticat
 
 This site tracks every Folding@home donor and every team: points, work units, rankings, and production over time. It updates within about a minute of the upstream feeds publishing, roughly once an hour.
 
-Everything on it is also available as JSON — no key, no account, no rate limit. If you want your own numbers on your own dashboard, [the API](/api) is the whole site.
+Everything on it is also available as JSON — no key, no account, and no rate limit for now. If you want your own numbers on your own dashboard, [the API](/api) is the whole site.
 
 ## Why I built it
 
@@ -42,7 +42,7 @@ I think this is the part that matters most.
 
 A free, unauthenticated API for folding statistics is genuinely useful to the people doing the folding. Team captains can build their own recruitment and retention pages. Somebody can finally make a decent mobile widget. Discord bots stop screen-scraping. Rig monitoring dashboards can show what the rig is actually earning. And there will be uses nobody has thought of yet, which is usually the best argument for opening something up.
 
-So: no key, no sign-up, no quota, and I intend to keep it that way for as long as I can keep the lights on. If you build something against this, I do not want to be the reason it breaks.
+So: no key, no sign-up, no quota. I would much rather optimise than restrict, so the bar for changing that is deliberately concrete — calls consistently taking longer than half a second, with no optimisation left that would bring them down. If it ever comes to that, any limit will be as lenient as I can make it and aimed at whatever is actually causing the problem rather than at everyone. If you build something against this, I do not want to be the reason it breaks.
 
 ```
 GET /v1/donors/{name}          one donor, with per-team breakdown

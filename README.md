@@ -2,7 +2,8 @@
 
 Folding@home donor and team statistics, with a free public API.
 
-**Live at [folding.exec.codes](https://folding.exec.codes)** — no key, no account, no rate limit, no challenge page.
+**Live at [folding.exec.codes](https://folding.exec.codes)** — no key, no account, no challenge page,
+and [no rate limit](#rate-limits) for now.
 
 Folding@home publishes cumulative totals as two large text files. Everything anyone
 actually wants — rates, rankings, history, per-team breakdowns — has to be derived by
@@ -186,6 +187,31 @@ Every response carries a `snapshot` block describing freshness, then the data.
 - **A UTC day has ~23.94 publishes, not 24.** See [Cadence](#cadence-is-measured-not-assumed).
 - Responses over 1 KB are gzipped and `Vary: Accept-Encoding`. The ETag differs by
   encoding.
+
+### Rate limits
+
+There are none, and adding one is a last resort rather than a plan. The applications
+that call an API like this hardest — bots, widgets, dashboards, monitors — are often
+the most useful ones to the community, and a limit set defensively breaks them before
+they were ever a problem.
+
+The bar for introducing one is deliberately concrete: **API calls consistently taking
+over 500 ms, with no optimisation left that would bring them down.** Both halves
+matter. Every route currently answers in well under a millisecond, and the measured
+comfortable ceiling is [~28,000 req/s](#throughput) — so the response to load is to
+make the slow path fast, and that is the order the two will always be tried in.
+
+If it ever does become necessary, it will be as lenient as it can be and aimed at
+whatever is actually causing the problem rather than at everyone: most likely
+per-address, engaging only for traffic heavy enough to degrade the service for other
+people, and generous even then. Nothing here is currently rate limited, throttled or
+counted.
+
+**Please pass requests through rather than mirroring.** If you are building a site on
+this, forwarding your users' requests costs a fraction of copying the whole dataset on
+a schedule — every team and every donor is 2.25M requests an hour, against pages people
+actually open. Cache against `next_expected_at`; the data only changes hourly, and a
+conditional request is [~6× cheaper](#notes-for-clients) and returns no body.
 
 ---
 
