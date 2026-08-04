@@ -1587,3 +1587,34 @@ func TestEveryHistoryEndpointServesEveryGranularity(t *testing.T) {
 		}
 	}
 }
+
+func TestPaginationCannotOverflowIntoANegativeBound(t *testing.T) {
+	// `page` was bounded below but not above, so (page-1)*perPage overflowed to a
+	// negative offset that survived the `lo > n` clamp and reached the caller's slice
+	// expression. One URL, no authentication, panic on every paginated route.
+	srv := fixture(t)
+	huge := []string{
+		"9223372036854775807", // MaxInt64
+		"9223372036854775806",
+		"92233720368547758", // still overflows once multiplied
+		"1000000000000",
+	}
+	paths := []string{
+		"/v1/teams", "/v1/donors", "/v1/teams/32/members",
+		"/v1/teams/32/rivals", "/v1/donors/DH/rivals", "/v1/donors/DH/teams",
+	}
+	for _, p := range paths {
+		for _, page := range huge {
+			rec, _ := get(t, srv, p+"?page="+page)
+			// Past the end is an empty page, which is what it has always meant.
+			// Anything except a clean status means the bound escaped again.
+			if rec.Code != http.StatusOK && rec.Code != http.StatusBadRequest {
+				t.Errorf("%s?page=%s: status %d, want 200 or 400", p, page, rec.Code)
+			}
+		}
+		// And an ordinary page still works.
+		if rec, _ := get(t, srv, p+"?page=1"); rec.Code != http.StatusOK {
+			t.Errorf("%s?page=1: status %d, want 200", p, rec.Code)
+		}
+	}
+}

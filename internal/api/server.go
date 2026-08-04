@@ -298,9 +298,16 @@ func paginateAround(r *http.Request, n, anchor int) (lo, hi int, info *PageInfo,
 	}
 
 	totalPages := (n + perPage - 1) / perPage
-	lo = (page - 1) * perPage
-	if lo > n {
-		lo = n
+
+	// A page past the end is an empty page, not an error — but it must not be
+	// multiplied out first. page is only bounded below, so `?page=9223372036854775807`
+	// overflowed (page-1)*perPage into a negative offset that survived the `lo > n`
+	// clamp and reached the caller's slice expression as a negative bound: a one-URL
+	// unauthenticated panic on every paginated route. Doing the multiply only for
+	// pages that exist keeps it inside n by construction.
+	lo = n
+	if page <= totalPages {
+		lo = (page - 1) * perPage
 	}
 	hi = lo + perPage
 	if hi > n {
