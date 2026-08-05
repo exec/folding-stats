@@ -94,15 +94,32 @@ func (s *Server) MCPHandler() http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		case http.MethodPost:
+		case http.MethodGet:
+			// A conforming client opening a stream asks for one by Accept, and the
+			// spec says to refuse when there is nothing to stream — every tool here is
+			// a pure read, so there never is.
+			//
+			// Anything else issuing a GET is a person who pasted the URL into a
+			// browser, and answering them with a JSON-RPC error is a wasted chance to
+			// explain what they found.
+			if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+				h.Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				_ = json.NewEncoder(w).Encode(mcpResponse{
+					JSONRPC: "2.0",
+					Error: &mcpError{mcpInvalidRequest,
+						"this endpoint is POST-only: every tool is a pure read, so there is no event stream to subscribe to"},
+				})
+				return
+			}
+			http.Redirect(w, r, "/agents", http.StatusSeeOther)
+			return
 		default:
-			// No server-initiated messages exist here, so there is no stream to open
-			// with GET. Saying so is friendlier than a bare 405.
 			h.Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			_ = json.NewEncoder(w).Encode(mcpResponse{
 				JSONRPC: "2.0",
-				Error: &mcpError{mcpInvalidRequest,
-					"this endpoint is POST-only: every tool is a pure read, so there is no event stream to subscribe to"},
+				Error:   &mcpError{mcpInvalidRequest, "this endpoint takes POST"},
 			})
 			return
 		}

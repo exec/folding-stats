@@ -814,6 +814,22 @@ footer {
   font-size: 13px; line-height: 1.6;
 }
 .prose pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+
+/* Code outside prose — the connect snippets on /agents. Same treatment as a prose
+   block, but reachable from a view that builds its own markup rather than rendering
+   Markdown. Scrolls rather than wraps: a command broken across lines is a command
+   somebody pastes wrong. */
+.code-block {
+  margin: var(--s3) 0;
+  padding: var(--s3) var(--s4);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.code-block code { background: none; border: 0; padding: 0; font-size: inherit; white-space: pre; }
 .prose blockquote {
   margin: 0 0 var(--s4); padding-left: var(--s4);
   border-left: 2px solid var(--line); color: var(--ink-muted);

@@ -203,3 +203,29 @@ func toStrings(v any) []string {
 	}
 	return out
 }
+
+// TestMCPGetIsNegotiated covers the two very different callers of GET on this
+// endpoint. A conforming MCP client asks for a stream by Accept and must be refused,
+// because there is nothing to stream. A person who pasted the URL into a browser is
+// not an error and should be sent somewhere that explains what they found.
+func TestMCPGetIsNegotiated(t *testing.T) {
+	srv := fixture(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	req.Header.Set("Accept", "text/event-stream")
+	srv.MCPHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("stream request got %d, want 405 — the spec requires refusal when "+
+			"there are no server-initiated messages", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	srv.MCPHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/agents" {
+		t.Errorf("browser request got %d to %q, want 303 to /agents",
+			rec.Code, rec.Header().Get("Location"))
+	}
+}

@@ -1253,22 +1253,13 @@ export async function apiDocs(view) {
     el('div.card-body', { style: 'padding-bottom:0' },
       el('p', { style: 'margin-top:0' },
         'There is a Model Context Protocol server at ', el('code', '/mcp'),
-        ' — JSON-RPC over POST, no key, no session. Point an MCP client at ',
-        el('code', 'https://folding.exec.codes/mcp'), ' and it gets seven tools: ',
-        el('code', 'search'), ', ', el('code', 'get_donor'), ', ', el('code', 'get_team'), ', ',
-        el('code', 'leaderboard'), ', ', el('code', 'production_history'), ', ',
-        el('code', 'compare'), ' and ', el('code', 'project_status'), '.'),
-      el('p',
-        'The tools are shaped like questions rather than like the routes above. ',
-        el('code', 'compare'),
-        ' answers "is my team catching them?" in one call — the gap, who is gaining, ' +
-        'and when one would pass the other — instead of making a model fetch two ' +
-        'entities and do the arithmetic. Every answer carries the age of the data it ' +
-        'came from.'),
+        ' — seven tools shaped like questions rather than like the routes above, so ' +
+        'an agent can ask "is my team catching them?" in one call instead of five. ',
+        link('/agents', 'How to connect →')),
       el('p', { style: 'margin-bottom:0' },
-        'If you are writing a program rather than an agent, the REST API above is the ' +
-        'better interface. This one exists because a model asking a question should ' +
-        'not have to page a leaderboard to get an answer.')))));
+        'If you are writing a program rather than an agent, the REST API on this page ' +
+        'is the better interface: cheaper, paginated, and structured JSON rather than ' +
+        'text meant to be read.')))));
 
   view.append(el('section.section', card('Rate limits',
     el('div.card-body', { style: 'padding-bottom:0' },
@@ -1591,4 +1582,115 @@ export async function disclaimerPage(view) {
        target: '_blank', rel: 'noopener noreferrer',
      }, 'github.com/exec/folding-stats'),
      '.']));
+}
+
+/* ---------------------------------------------------------------- agents --- */
+
+/** The seven tools, as the server itself declares them. */
+const MCP_TOOLS = [
+  ['search', 'query, limit?',
+   'Find donors and teams by name, or a team by number. The entry point: everything ' +
+   'else needs an exact name or id, and donor names are not unique.'],
+  ['get_donor', 'name',
+   'One donor: lifetime total, rank, rate, 24-hour rank movement, and every team ' +
+   'they fold for.'],
+  ['get_team', 'team_id, members?',
+   'One team: totals, rank, how many members it has and how many are active, and ' +
+   'its top contributors.'],
+  ['leaderboard', 'kind, sort?, limit?',
+   'Top teams or donors by any column — lifetime, per_day, today, this_week, ' +
+   'this_month, last_24h, wus.'],
+  ['production_history', 'scope, team_id?, donor?, granularity?',
+   'Production over time for the project, one team, or one donor, bucketed hourly, ' +
+   'daily, weekly or monthly.'],
+  ['compare', 'kind, a, b',
+   'Two teams or donors head to head: the gap, who is gaining, and roughly when one ' +
+   'would pass the other.'],
+  ['project_status', '—',
+   'Project totals and freshness: donors, teams, active counts, and when the next ' +
+   'update is due.'],
+];
+
+export async function agentsPage(view) {
+  clear(view);
+  const origin = location.origin;
+
+  view.append(el('div.page-head',
+    el('h1.page-title', 'For AI agents'),
+    el('p.page-sub',
+      'A Model Context Protocol server, live and unauthenticated. Point a client at it ' +
+      'and it gets seven tools over this data.')));
+
+  view.append(el('section.section', el('div.stats',
+    statTile('Endpoint', '/mcp', 'JSON-RPC 2.0 over POST'),
+    statTile('Auth', 'None', 'no key, no session'),
+    statTile('Tools', String(MCP_TOOLS.length), 'read-only'),
+    statTile('Transport', 'HTTP', 'stateless, CORS open')
+  )));
+
+  view.append(el('section.section', card('Connect',
+    el('div.card-body', { style: 'padding-bottom:var(--s4)' },
+      el('p', { style: 'margin-top:0' }, 'In Claude Code:'),
+      el('pre.code-block', el('code', `claude mcp add --transport http folding ${origin}/mcp`)),
+      el('p', 'Or in any client that reads a config file:'),
+      el('pre.code-block', el('code',
+        `{\n  "mcpServers": {\n    "folding": {\n      "type": "http",\n      "url": "${origin}/mcp"\n    }\n  }\n}`)),
+      el('p', { style: 'margin-bottom:0' },
+        'No headers, no token, no OAuth. Most MCP clients connect at startup, so ' +
+        'restart yours after adding it.')))));
+
+  const rows = el('tbody');
+  for (const [name, args, what] of MCP_TOOLS) {
+    rows.append(el('tr',
+      el('td.left', el('code', name)),
+      el('td.left.muted', el('code', args)),
+      el('td.left', what)));
+  }
+  view.append(el('section.section', card('The tools',
+    el('div.table-wrap', el('table.data',
+      el('thead', el('tr', el('th.left', 'Tool'), el('th.left', 'Arguments'), el('th.left', ''))),
+      rows)))));
+
+  view.append(el('section.section', card('Why these and not the REST routes',
+    el('div.card-body', { style: 'padding-bottom:var(--s4)' },
+      el('p', { style: 'margin-top:0' },
+        'The obvious design is one tool per endpoint. It is also the wrong one. Asking ' +
+        '"is my team catching up to theirs?" that way costs five round trips — find an ' +
+        'id, page a leaderboard, fetch two entities, pull two histories, do the ' +
+        'arithmetic — with five chances to get the join wrong.'),
+      el('p',
+        el('code', 'compare'), ' answers it in one call, and states the assumption in ' +
+        'the same breath as the number: the projection holds both sides at their ' +
+        'current seven-day average forever, which nobody does. A caveat that travels ' +
+        'separately from the figure it qualifies is a caveat nobody repeats.'),
+      el('p', { style: 'margin-bottom:0' },
+        'Every answer also carries the age of the data it came from. A model quoting a ' +
+        'figure without knowing how old it is is the failure an endpoint like this ' +
+        'invites, and nothing downstream can catch it.')))));
+
+  view.append(el('section.section', card('A worked call',
+    el('div.card-body', { style: 'padding-bottom:var(--s4)' },
+      el('pre.code-block', el('code',
+        `curl -X POST ${origin}/mcp \\\n` +
+        `  -H 'content-type: application/json' \\\n` +
+        `  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",\n` +
+        `       "params":{"name":"compare","arguments":\n` +
+        `         {"kind":"teams","a":"51","b":"32"}}}'`)),
+      el('p', { style: 'margin-bottom:0' },
+        'Tool failures come back as results with ', el('code', 'isError'),
+        ' rather than as protocol errors, so a wrong name tells you how to find the ' +
+        'right one instead of looking like the server is down.')))));
+
+  view.append(el('section.section', card('Crawling instead',
+    el('div.card-body', { style: 'padding-bottom:0' },
+      el('p', { style: 'margin-top:0' },
+        'Automated clients are welcome here generally — see ',
+        el('a', { href: '/robots.txt' }, 'robots.txt'),
+        ', which allows everything and names the AI agents explicitly. There are no ' +
+        'challenge pages and no rate limit.'),
+      el('p', { style: 'margin-bottom:0' },
+        'Before scraping these pages, though: the ', link('/api', 'JSON API'),
+        ' has everything the HTML shows, costs us both less, and will not change shape ' +
+        'under you. Cache against ', el('code', 'next_expected_at'),
+        ' rather than polling — the data changes once an hour and not otherwise.')))));
 }
