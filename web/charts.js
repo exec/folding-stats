@@ -196,6 +196,24 @@ function axes(t, gran) {
   ];
 }
 
+/**
+ * The bucket the pointer is inside, rather than the boundary it is nearest.
+ *
+ * uPlot's cursor.idx is always the closest x point, and with stepped paths a bucket
+ * owns [its own timestamp, the next one) — so past the halfway mark of any plateau
+ * the nearest boundary belongs to the following bucket, and the tooltip names a
+ * period the pointer is not over.
+ *
+ * cursor.dataIdx does not fix this on its own: uPlot applies it to the per-series
+ * indices it draws points and legend values from, while cursor.idx keeps the nearest
+ * one. Anything reading cursor.idx — this tooltip — has to floor for itself, so both
+ * callers share this rather than each carrying a copy to drift apart.
+ */
+function bucketIdx(u, closestIdx, xVal) {
+  if (closestIdx == null || closestIdx <= 0) return closestIdx;
+  return u.data[0][closestIdx] > xVal ? closestIdx - 1 : closestIdx;
+}
+
 /** Cursor configuration. */
 function cursor() {
   return {
@@ -218,10 +236,7 @@ function cursor() {
     // owns [its own timestamp, the next one), so nearest-point snapping hands the
     // right half of every plateau to the following bucket — naming one period while
     // the pointer is over another.
-    dataIdx: (u, seriesIdx, closestIdx, xVal) => {
-      const xs = u.data[0];
-      return closestIdx > 0 && xs[closestIdx] > xVal ? closestIdx - 1 : closestIdx;
-    },
+    dataIdx: (u, seriesIdx, closestIdx, xVal) => bucketIdx(u, closestIdx, xVal),
     // A vertical crosshair only: a horizontal one implies reading a value off the
     // y-axis, which the tooltip already does more precisely.
     y: false,
@@ -240,11 +255,13 @@ function tooltipHooks(chart, label) {
   return {
     setCursor: [
       (u) => {
-        const { idx, left, top } = u.cursor;
-        if (idx == null || left == null || left < 0) {
+        const { left, top } = u.cursor;
+        if (u.cursor.idx == null || left == null || left < 0) {
           chart.tip.classList.remove('on');
           return;
         }
+        // cursor.idx is the nearest boundary; the reader is pointing at a period.
+        const idx = bucketIdx(u, u.cursor.idx, u.posToVal(left, 'x'));
         const ts = u.data[0][idx];
         const rows = [];
         for (let s = 1; s < u.series.length; s++) {
