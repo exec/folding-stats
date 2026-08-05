@@ -669,6 +669,13 @@ export async function teamDetail(view, { id }, nav) {
     cleanups.push(hist.destroy);
     view.append(el('section.section', hist.node));
 
+    // Who is producing it, after the team's own total. Someone landing on a team page
+    // came for "how is my team doing" before "who is doing it", so the breakdown
+    // follows the headline chart rather than replacing it.
+    const byMember = teamMembersChartCard(t);
+    cleanups.push(byMember.destroy);
+    view.append(el('section.section', byMember.node));
+
     view.append(el('section.section', await teamMembersCard(t.team_id, nav)));
 
     // Last, and deliberately. This is the only block on the page about somebody else,
@@ -912,7 +919,20 @@ export async function donorDetail(view, { name }, nav) {
  * confidence a single series carries does not survive stacking, so the two views
  * are deliberately separate rather than layered.
  */
-function breakdownCard(donor, teams) {
+/**
+ * Production split into contributions, over time.
+ *
+ * Two pages ask the same question of different things. A donor's output divides among
+ * the teams they fold for; a team's divides among its members. The decomposition, the
+ * "Other" tail, the per-contributor tabs and both view shapes are identical either
+ * way, so they are one card parameterised by what a contributor is rather than two
+ * that drift.
+ *
+ * A contributor is { key, label, value }: `key` is whatever fetchFor needs to ask for
+ * its history, `label` is what the legend and tab call it, and `value` is its recent
+ * production — used only to rank and to annotate the tabs.
+ */
+function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyDetail }) {
   const plotEl = el('div.chart');
   const legendEl = el('div.legend');
   const tabs = el('div.tabs', { role: 'tablist' });
@@ -926,28 +946,28 @@ function breakdownCard(donor, teams) {
 
   const noteEl = el('div.chart-note', chartNote(granularity, rate));
   const body = el('div.card-body', { style: 'padding:0' }, tabs, legendEl, plotEl, noteEl);
-  const node = cardWith('Production by team', controls, body);
+  const node = cardWith(title, controls, body);
 
-  // Series are chosen by recent production, not lifetime points. A donor's biggest
-  // teams by lifetime total are frequently dormant, so ranking this card the same
-  // way as the table below selects precisely the teams with nothing to plot — the
-  // chart then looks broken while the donor is demonstrably producing.
+  // Ranked by recent production, not lifetime total. The biggest contributors by
+  // lifetime are frequently dormant, so ranking this card the way the table below it
+  // ranks selects precisely the ones with nothing to plot — the chart then looks
+  // broken while there is demonstrably output to show.
   let shown = [];
   let rest = [];
   let producers = [];
 
   function setSeries(list) {
-    producers = list.filter((t) => (t.points_last_7d ?? 0) > 0);
+    producers = list.filter((c) => (c.value ?? 0) > 0);
     const ranked = producers.length ? producers : list;
     shown = ranked.slice(0, MAX_STACK_SERIES);
     rest = ranked.slice(MAX_STACK_SERIES);
   }
-  setSeries(teams);
+  setSeries(items || []);
 
   function renderTabs() {
     clear(tabs);
-    // With a single producing team, "All teams" and that team's tab are the same
-    // series; showing both is a choice between two identical views.
+    // With a single producing contributor, "all" and its own tab are the same series;
+    // showing both is a choice between two identical views.
     if (shown.length < 2) return;
     const mk = (key, label, val) =>
       el('button.tab', {
@@ -956,13 +976,10 @@ function breakdownCard(donor, teams) {
         onclick: () => { selected = key; load(); },
       }, label, val ? el('span.tab-val', short(val)) : null);
 
-    tabs.append(mk('all', producers.length > 1 ? `Top ${Math.min(shown.length, MAX_STACK_SERIES)} teams` : 'All teams',
-      donor.points_last_7d));
-    // Tabs are the producing teams, labelled with what they produced — the figure
-    // this card is actually about.
-    for (const t of shown) {
-      tabs.append(mk(String(t.team_id), t.team_name || `Team ${t.team_id}`, t.points_last_7d));
-    }
+    tabs.append(mk('all',
+      producers.length > 1 ? `Top ${Math.min(shown.length, MAX_STACK_SERIES)} ${noun}s` : `All ${noun}s`,
+      total));
+    for (const c of shown) tabs.append(mk(c.key, c.label, c.value));
   }
 
   function renderControls(bands) {
@@ -978,17 +995,18 @@ function breakdownCard(donor, teams) {
     }
   }
 
-  // The embedded breakdown is capped and ordered by lifetime points, so a donor's
-  // actual producers can fall outside it entirely. Ask for them explicitly.
-  async function loadProducers() {
-    if (!donor.teams_truncated && producers.length) return;
-    try {
-      const res = await api.donorTeams(donor.name, { sort: 'production', per_page: 20 });
-      if (res.data.length) setSeries(res.data);
-    } catch {
-      // Fall back to the embedded list; it is a worse ordering, not a broken one.
+  const one = (pts, label, perDay, rescaled) => {
+    chart = productionChart(plotEl, label);
+    if (!pts.length) {
+      legendEl.append(emptyChart(granularity));
+      return;
     }
-  }
+    const dense = densify(pts, granularity, rescaled ? { ...chartSpan() } : { ...chartSpan(), perDay });
+    chart.render(
+      [dense.map((p) => Math.floor(Date.parse(p.at) / 1000)), dense.map((p) => p.points)],
+      { granularity, perDay }
+    );
+  };
 
   async function load() {
     renderTabs();
@@ -1002,27 +1020,16 @@ function breakdownCard(donor, teams) {
     try {
       if (selected === 'all' && !producers.length) {
         legendEl.append(el('div.chart-empty',
-          el('div', 'No team has produced recently'),
-          el('div', { style: 'font-size:12px;margin-top:4px' },
-            `${n(donor.team_count)} teams on record, none with output in the last 7 days.`)));
+          el('div', `No ${noun} has produced recently`),
+          el('div', { style: 'font-size:12px;margin-top:4px' }, emptyDetail)));
         return;
       }
-      // A stack of one is a line. Stacking a single series draws it as a solid
-      // block, which reads as far more emphatic than the data warrants.
+      // A stack of one is a line. Stacking a single series draws it as a solid block,
+      // which reads as far more emphatic than the data warrants.
       if (selected === 'all' && shown.length === 1) {
         const only = shown[0];
-        const res = await api.donorHistory(donor.name, { granularity, team_id: only.team_id });
-        const pts = res.data.points || [];
-        chart = productionChart(plotEl, only.team_name || `Team ${only.team_id}`);
-        if (!pts.length) {
-          legendEl.append(emptyChart(granularity));
-          return;
-        }
-        const dense = densify(pts, granularity, { ...chartSpan(), perDay });
-        chart.render(
-          [dense.map((p) => Math.floor(Date.parse(p.at) / 1000)), dense.map((p) => p.points)],
-          { granularity, perDay }
-        );
+        const res = await fetchFor(only.key, { granularity });
+        one(res.data.points || [], only.label, perDay, false);
         return;
       }
 
@@ -1030,40 +1037,29 @@ function breakdownCard(donor, teams) {
         // Rescale on arrival rather than at render: the bands are summed, filtered and
         // stacked below, and a stack is only meaningful if every band is in the same
         // unit. Doing it once here is the only way that stays true down every branch.
-        const fetched = await Promise.all(
-          shown.map(async (t) => {
-            const pts = (await api.donorHistory(donor.name, { granularity, team_id: t.team_id }))
-              .data.points || [];
-            return { team: t, points: perDay ? perDayPoints(pts, granularity, win.until, win.since) : pts };
-          })
-        );
+        const fetched = await Promise.all(shown.map(async (c) => {
+          const pts = (await fetchFor(c.key, { granularity })).data.points || [];
+          return { c, points: perDay ? perDayPoints(pts, granularity, win.until, win.since) : pts };
+        }));
 
-        // A team that produced nothing *in this window* gets no band, no legend
-        // entry and no tooltip row. Selecting series by the 7-day figure is wrong
-        // as soon as the chart is showing a different window — the key would name
-        // colours that appear nowhere on the plot.
+        // A contributor that produced nothing *in this window* gets no band, no legend
+        // entry and no tooltip row. Selecting series by the recent figure is wrong as
+        // soon as the chart shows a different window — the key would name colours that
+        // appear nowhere on the plot.
         const active = fetched.filter((f) => f.points.some((p) => p.points > 0));
         if (!active.length) {
           legendEl.append(emptyChart(granularity));
           return;
         }
         if (active.length === 1) {
-          const only = active[0];
-          chart = productionChart(plotEl, only.team.team_name || `Team ${only.team.team_id}`);
-          // Already rescaled at fetch, with the rest of the stack.
-          const dense = densify(only.points, granularity, { ...chartSpan() });
-          chart.render(
-            [dense.map((p) => Math.floor(Date.parse(p.at) / 1000)), dense.map((p) => p.points)],
-            { granularity, perDay }
-          );
+          one(active[0].points, active[0].c.label, perDay, true);
           return;
         }
 
-        const labels = active.map((f) => f.team.team_name || `Team ${f.team.team_id}`);
-        const seriesData = active.map((f) => ({ data: { points: f.points } }));
-        // Align every team onto the union of timestamps: a team idle in a bucket
+        const labels = active.map((f) => f.c.label);
+        // Align every contributor onto the union of timestamps: one idle in a bucket
         // contributes zero there rather than shortening the series.
-        const merged = [...new Set(seriesData.flatMap((r) => (r.data.points || []).map((p) => p.at)))]
+        const merged = [...new Set(active.flatMap((f) => f.points.map((p) => p.at)))]
           .sort()
           .map((at) => ({ at, points: 0, wus: 0 }));
         if (!merged.length) {
@@ -1072,17 +1068,16 @@ function breakdownCard(donor, teams) {
         }
         const times = densify(merged, granularity, { ...chartSpan() }).map((p) => p.at);
         const idx = new Map(times.map((t, i) => [t, i]));
-        const rows = seriesData.map((r) => {
+        const rows = active.map((f) => {
           const arr = new Array(times.length).fill(0);
-          for (const p of r.data.points || []) arr[idx.get(p.at)] = p.points;
+          for (const p of f.points) if (idx.has(p.at)) arr[idx.get(p.at)] = p.points;
           return arr;
         });
         if (rest.length) {
           // Everything past the slot count, as one band — but only if it actually
           // produced in this window.
           const others = await Promise.all(
-            rest.slice(0, 8).map((t) => api.donorHistory(donor.name, { granularity, team_id: t.team_id }))
-          );
+            rest.slice(0, 8).map((c) => fetchFor(c.key, { granularity })));
           const arr = new Array(times.length).fill(0);
           for (const r of others) {
             const pts = r.data.points || [];
@@ -1106,16 +1101,8 @@ function breakdownCard(donor, teams) {
         chart.render([xs, ...(stacked ? stack(rows) : rows)],
           { granularity, labels, stacked, perDay });
       } else {
-        const res = await api.donorHistory(donor.name, { granularity, team_id: selected });
-        const pts = res.data.points || [];
-        chart = productionChart(plotEl);
-        if (!pts.length) {
-          legendEl.append(emptyChart(granularity));
-          return;
-        }
-        const dense = densify(pts, granularity, { ...chartSpan(), perDay });
-        const xs = dense.map((p) => Math.floor(Date.parse(p.at) / 1000));
-        chart.render([xs, dense.map((p) => p.points)], { granularity, perDay });
+        const res = await fetchFor(selected, { granularity });
+        one(res.data.points || [], undefined, perDay, false);
       }
     } catch (err) {
       legendEl.append(el('div.error', { style: 'padding:40px 0' }, err.message));
@@ -1123,10 +1110,70 @@ function breakdownCard(donor, teams) {
   }
 
   (async () => {
-    await loadProducers();
+    if (refresh) {
+      try {
+        const fresh = await refresh(producers);
+        if (fresh && fresh.length) setSeries(fresh);
+      } catch {
+        // Fall back to whatever we started with; a worse ordering, not a broken one.
+      }
+    }
     load();
   })();
   return { node, destroy: () => chart && chart.destroy() };
+}
+
+/** A donor's production, split across the teams they fold for. */
+function breakdownCard(donor, teams) {
+  const item = (t) => ({
+    key: String(t.team_id),
+    label: t.team_name || `Team ${t.team_id}`,
+    value: t.points_last_7d ?? 0,
+  });
+  return contributionCard({
+    title: 'Production by team',
+    noun: 'team',
+    items: (teams || []).map(item),
+    total: donor.points_last_7d,
+    emptyDetail: `${n(donor.team_count)} teams on record, none with output in the last 7 days.`,
+    fetchFor: (key, p) => api.donorHistory(donor.name, { ...p, team_id: key }),
+    // The embedded breakdown is capped and ordered by lifetime points, so a donor's
+    // actual producers can fall outside it entirely. Ask for them explicitly.
+    refresh: async (found) => {
+      if (!donor.teams_truncated && found.length) return null;
+      return (await api.donorTeams(donor.name, { sort: 'production', per_page: 20 })).data.map(item);
+    },
+  });
+}
+
+/**
+ * A team's production, split across its members.
+ *
+ * The share the top few hold is itself the finding, and it varies enormously: six
+ * people are 84% of one team on this site and 36% of another. "This team is six
+ * people" and "this team is four hundred people and nobody carries it" are different
+ * facts about a team that nothing else on the page tells you.
+ *
+ * A member's history is a donor's history scoped to one team, which is the same
+ * request the donor card makes with the other half fixed.
+ */
+function teamMembersChartCard(team) {
+  return contributionCard({
+    title: 'Production by member',
+    noun: 'member',
+    items: [],
+    total: team.points_last_7d,
+    emptyDetail: `${n(team.members_total)} members on record, none with output in the last 7 days.`,
+    fetchFor: (name, p) => api.donorHistory(name, { ...p, team_id: team.team_id }),
+    // Always fetched: the team payload carries no roster, and the members worth
+    // plotting are the recent producers rather than the lifetime leaders.
+    refresh: async () => {
+      const res = await api.teamMembers(team.team_id, {
+        sort: 'per_day', per_page: MAX_STACK_SERIES + 8,
+      });
+      return res.data.map((m) => ({ key: m.name, label: m.name, value: m.points_last_7d ?? 0 }));
+    },
+  });
 }
 
 function teamsCard(donor, teams) {
