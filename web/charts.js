@@ -356,7 +356,7 @@ const rateLabel = (label, perDay) =>
 export function productionChart(el, label = 'Points') {
   const chart = new Chart(el, (t, meta, self) => ({
     // A rate and a total are different quantities, so the tooltip has to say which
-    // one it is quoting — the bars look identical either way.
+    // one it is quoting — the marks look identical either way.
     padding: [12, 24, 0, 0],
     tzDate: dateFn(meta?.granularity),
     axes: axes(t, meta?.granularity),
@@ -372,22 +372,11 @@ export function productionChart(el, label = 'Points') {
         _swatch: t.series[0],
         width: 2,
         fill: fade(t.series[0], 0.14),
-        // Stepped, like the stacked view, so the whole site draws production the
-        // same way and gaining a second team changes how many bands there are and
-        // nothing else. A bucket is what was produced during a period, not a sample
-        // of something continuous: a sloped line between two buckets claims output in
-        // the gap, which for an individual is routinely a lie — somebody who banked
-        // everything in two hours on Tuesday got a smooth ramp across days they
-        // folded nothing at all.
-        //
-        // align: 1 holds the value forward from its timestamp, which is what a bucket
-        // labelled by its start means.
-        paths: bucketPaths(self),
-        // No static markers. On a line they showed which points were real among the
-        // interpolation; on a step there is no interpolation — every plateau is an
-        // observation. They also sat at the left edge of their own step rather than on
-        // it, reading as though the value belonged to the boundary.
-        points: { show: false },
+        // A line. One series is a magnitude over time and reads as a shape; the
+        // markers below carry the honesty about which values are real, so stepping it
+        // as well only made it harder to read. Steps and stacking are for composition,
+        // which is a different question — see seriesChart.
+        points: { show: (u, si, i0, i1) => i1 - i0 < 40, size: 8, stroke: t.series[0], fill: t.surface, width: 2 },
       },
     ],
   }));
@@ -412,10 +401,16 @@ export function productionChart(el, label = 'Points') {
  * The single-series chart is stepped for the same reason, so gaining a second team
  * changes how many bands there are and nothing else about how to read the figure.
  */
-export function stackedChart(el) {
+export function seriesChart(el) {
   const chart = new Chart(el, (t, meta, self) => {
     const labels = meta?.labels || [];
-    const paths = bucketPaths(self);
+    const stacked = !!meta?.stacked;
+    const colour = (i) => t.series[i % t.series.length];
+    // Stacked values arrive already accumulated from the caller, so drawing in order
+    // leaves each segment visible between its neighbour and itself. Overlaid values
+    // are each series' own figure and stand alone.
+    const paths = stacked ? bucketPaths(self) : undefined;
+
     return {
       padding: [12, 24, 0, 0],
       tzDate: dateFn(meta?.granularity),
@@ -428,15 +423,17 @@ export function stackedChart(el) {
         { label: 'Time' },
         ...labels.map((label, i) => ({
           label,
-          // Values arrive already accumulated from the top, so drawing in order
-          // leaves each segment visible between its neighbour and itself.
           paths,
-          // A hairline of surface between segments keeps adjacent bands legible
-          // where they meet.
-          stroke: t.surface,
-          width: 1,
-          fill: t.series[i % t.series.length],
-          _swatch: t.series[i % t.series.length],
+          _swatch: colour(i),
+          // Stacked: solid fills that sit on each other, separated by a hairline of
+          // surface so adjacent bands stay legible where they meet.
+          //
+          // Overlaid: a line each and no fill. Filling would hide whichever series is
+          // behind, and this mode exists to compare them — the question is which is
+          // higher, not what they sum to.
+          stroke: stacked ? t.surface : colour(i),
+          width: stacked ? 1 : 2,
+          fill: stacked ? colour(i) : undefined,
           points: { show: false },
         })),
       ],

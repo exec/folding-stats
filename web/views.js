@@ -7,7 +7,7 @@
 import { api, snapshot } from '/api.js';
 import { el, clear, card, cardWith, statTile, pager, segmented, notice, loading, errorView, link } from '/ui.js';
 import { n, short, ago, dateTime, delta, tierName, nameText, plural, span, tzName } from '/format.js';
-import { productionChart, stackedChart, stack, legend, densify, perDayPoints, MAX_STACK_SERIES } from '/charts.js';
+import { productionChart, seriesChart, stack, legend, densify, perDayPoints, MAX_STACK_SERIES } from '/charts.js';
 
 const PER_PAGE = 100;
 
@@ -66,6 +66,20 @@ const RATES = [
   // PPD is what Folding@home calls this and what donors already compare each other
   // by, so the control is labelled in the reader's vocabulary rather than ours.
   { value: 'per-day', label: 'PPD', title: 'Each bucket as points per day' },
+];
+
+/**
+ * How several series are drawn against each other.
+ *
+ * Two different questions, not two skins. Stacked accumulates the series and answers
+ * "what did they add up to, and who made it up". Overlaid draws each on its own and
+ * answers "which of them is ahead". The underlying values differ between the two —
+ * stacking sums them and comparing must not — so this switches the data as well as
+ * the marks.
+ */
+const SHAPES = [
+  { value: 'stacked', label: 'Stacked', title: 'Contributions piled up to the total' },
+  { value: 'lines', label: 'Lines', title: 'Each series on its own, for comparison' },
 ];
 
 /**
@@ -906,6 +920,7 @@ function breakdownCard(donor, teams) {
 
   let granularity = 'hourly';
   let rate = 'total';
+  let shape = 'stacked';
   let selected = 'all';
   let chart = null;
 
@@ -950,11 +965,17 @@ function breakdownCard(donor, teams) {
     }
   }
 
-  function renderControls() {
+  function renderControls(bands) {
     clear(controls).append(
       segmented(GRANULARITIES, granularity, (v) => { granularity = v; load(); }),
       segmented(RATES, rate, (v) => { rate = v; load(); })
     );
+    // Only where there is something to compare. One band stacked and one band
+    // overlaid are the same picture, and a control that changes nothing is worse
+    // than no control at all.
+    if (bands > 1) {
+      controls.append(segmented(SHAPES, shape, (v) => { shape = v; load(); }));
+    }
   }
 
   // The embedded breakdown is capped and ordered by lifetime points, so a donor's
@@ -971,7 +992,7 @@ function breakdownCard(donor, teams) {
 
   async function load() {
     renderTabs();
-    renderControls();
+    renderControls(selected === 'all' ? shown.length : 1);
     noteEl.textContent = chartNote(granularity, rate);
     if (chart) chart.destroy();
     clear(legendEl);
@@ -1075,10 +1096,15 @@ function breakdownCard(donor, teams) {
           }
         }
 
-        chart = stackedChart(plotEl);
+        chart = seriesChart(plotEl);
         legend(legendEl, labels);
         const xs = times.map((t) => Math.floor(new Date(t).getTime() / 1000));
-        chart.render([xs, ...stack(rows)], { granularity, labels, stacked: true, perDay });
+        // Stacked answers "what did they add up to, and who made it up"; overlaid
+        // answers "which of them is ahead". The values differ, not just the marks —
+        // stacking accumulates them and comparing must not.
+        const stacked = shape === 'stacked';
+        chart.render([xs, ...(stacked ? stack(rows) : rows)],
+          { granularity, labels, stacked, perDay });
       } else {
         const res = await api.donorHistory(donor.name, { granularity, team_id: selected });
         const pts = res.data.points || [];
