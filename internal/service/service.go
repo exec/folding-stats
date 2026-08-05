@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
@@ -61,6 +62,11 @@ type Service struct {
 	// the poll schedule and the next_expected_at the API advertises.
 	cadence *cadence
 
+	// purge drops the CDN's cached copies when a new snapshot lands, closing the gap
+	// between a publish and the edge TTL lapsing. Nil when unconfigured, which is a
+	// working no-op — the TTL alone is already correct, just less prompt.
+	purge *purger
+
 	// Month-to-date production, indexed by team slot and member slot. Refreshed on
 	// ingest because that is the only thing that changes it: the rollup tables are
 	// updated inside the cycle's own transaction.
@@ -95,6 +101,13 @@ func New(archive *feed.Archive, st *store.Store, srv *api.Server, log *slog.Logg
 		memberWin: metrics.New(0),
 		teamWin:   metrics.New(0),
 		cadence:   newCadence(),
+		// Credentials come from the environment rather than a flag: a flag is visible
+		// in the process list to every user on the box.
+		purge: newPurger(os.Getenv("FOLDING_CF_ZONE_ID"), os.Getenv("FOLDING_CF_PURGE_TOKEN"),
+			os.Getenv("FOLDING_SITE_URL"), log),
+	}
+	if s.purge == nil {
+		log.Info("cdn cache purging disabled; the edge will expire on Cache-Control alone")
 	}
 	ctx := context.Background()
 	if err := st.LoadIdentity(ctx, s.state); err != nil {
@@ -394,6 +407,9 @@ func (s *Service) publish() {
 	cancelWarm()
 
 	s.Server.Publish(snap)
+	// After publishing, never before: a purge that landed first would have the edge
+	// refetch the snapshot this one replaces.
+	s.purge.Purge(s.state.At)
 	s.Log.Info("published",
 		"at", s.state.At.Format(time.RFC3339),
 		"teams", len(s.state.Teams), "donors", len(tbl.Donors),

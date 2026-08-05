@@ -407,6 +407,42 @@ Behind a reverse proxy, pass the origin's headers through untouched. It sets
 `Cache-Control` deliberately per route and `Vary: Accept-Encoding` with encoding-specific
 ETags; overriding either breaks correctness in ways that only show up hours later.
 
+### Optional: purging a CDN cache on publish
+
+`Cache-Control` already expires a cached copy shortly before the next publish is due —
+`max-age` is time-until-`next_expected_at` minus a 30-second margin, since the cadence
+estimate lands within about ten seconds either way and expiring early costs a `304`
+while expiring late serves superseded data. That is the whole mechanism, and it needs
+no configuration.
+
+Purging is an optional refinement on top, closing the last ~30 seconds. Set all three
+and it turns itself on:
+
+```ini
+Environment=FOLDING_SITE_URL=https://folding.exec.codes
+EnvironmentFile=/etc/folding/cf.env    # 0600: zone id and token
+```
+
+```sh
+# /etc/folding/cf.env
+FOLDING_CF_ZONE_ID=...
+FOLDING_CF_PURGE_TOKEN=...   # Cloudflare API token, Zone → Cache Purge → your zone
+```
+
+Leave any of them unset and purging is silently disabled, which is the intended state
+for a local run or a fork.
+
+It purges **a fixed list of URLs, never `purge_everything`** — see `purgePaths` in
+`internal/service/purge.go`. A zone usually holds more than one service, and
+`purge_everything` would evict all of it every hour, forever. Purge by hostname or
+prefix is the right tool and is Enterprise-only. The consequence is that only the
+listed URLs are purged promptly; everything else expires on its TTL, which was already
+correct.
+
+None of this does anything until the CDN is actually caching the API. Cloudflare
+answers `cf-cache-status: DYNAMIC` for JSON by default — a Cache Rule matching
+`/v1/*` with edge TTL set to respect origin headers is what turns it on.
+
 ### Writing posts
 
 Markdown in `content/posts/`, compiled into the binary:
