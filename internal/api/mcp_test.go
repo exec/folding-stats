@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -228,4 +229,60 @@ func TestMCPGetIsNegotiated(t *testing.T) {
 		t.Errorf("browser request got %d to %q, want 303 to /agents",
 			rec.Code, rec.Header().Get("Location"))
 	}
+}
+
+// TestMCPDonorHistoryScopesToATeam covers the question the first version of this
+// tool could not express: how much has one donor folded *for one team*.
+//
+// A donor on many teams has one total and several stories, and without the scope
+// those are indistinguishable through the tool — the aggregate silently answers a
+// different question from the one asked, which is the worst kind of wrong.
+func TestMCPDonorHistoryScopesToATeam(t *testing.T) {
+	srv := fixture(t)
+
+	// The fixture's DH folds for teams 32 and 51, producing on both.
+	all := mcpText(t, srv, "production_history", `{"scope":"donor","donor":"DH","granularity":"hourly"}`)
+	one := mcpText(t, srv, "production_history",
+		`{"scope":"donor","donor":"DH","team_id":32,"granularity":"hourly"}`)
+
+	if !strings.Contains(one, "on ") {
+		t.Errorf("scoped history does not name the team it is scoped to:\n%s", one)
+	}
+	sumAll, sumOne := totalFromHistory(t, all), totalFromHistory(t, one)
+	if sumOne == 0 {
+		t.Fatalf("scoped history came back empty:\n%s", one)
+	}
+	if sumOne >= sumAll {
+		t.Errorf("one team (%d) is not less than every team (%d); the filter did nothing",
+			sumOne, sumAll)
+	}
+
+	// Asking for a team the donor has no record on is a real answer, not an empty
+	// series that reads as "produced nothing".
+	out := mcpDo(t, srv, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":
+		"production_history","arguments":{"scope":"donor","donor":"DH","team_id":999}}}`)
+	res, _ := out["result"].(map[string]any)
+	if res == nil || res["isError"] != true {
+		t.Error("a donor with no record on the requested team did not report an error")
+	}
+}
+
+// totalFromHistory reads the "N buckets, X points total." line the tool emits.
+func totalFromHistory(t *testing.T, s string) int64 {
+	t.Helper()
+	for _, line := range strings.Split(s, "\n") {
+		if !strings.Contains(line, "points total") {
+			continue
+		}
+		f := strings.Fields(strings.ReplaceAll(line, ",", ""))
+		for i, w := range f {
+			if strings.HasPrefix(w, "points") && i > 0 {
+				var n int64
+				fmt.Sscanf(f[i-1], "%d", &n)
+				return n
+			}
+		}
+	}
+	t.Fatalf("no total line in:\n%s", s)
+	return 0
 }

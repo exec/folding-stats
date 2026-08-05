@@ -274,14 +274,16 @@ func mcpTools() []mcpTool {
 		Name:  "production_history",
 		Title: "Production over time",
 		Description: "How much was produced over time, for the whole project, one team, or " +
-			"one donor. History only exists from 3 August 2026, when collection started — " +
-			"lifetime totals are older but cannot be broken down before that date.",
+			"one donor — and, with scope=donor plus team_id, for one donor on one team, " +
+			"which is a different question from their overall output. History only exists " +
+			"from 3 August 2026, when collection started; lifetime totals are older but " +
+			"cannot be broken down before that date.",
 		InputSchema: map[string]any{
 			"type":     "object",
 			"required": []any{"scope"},
 			"properties": map[string]any{
 				"scope":       map[string]any{"type": "string", "enum": []any{"project", "team", "donor"}, "description": "Whose history."},
-				"team_id":     intSchema("Required when scope is team."),
+				"team_id":     intSchema("Required when scope is team. Optional when scope is donor, to narrow that donor's history to a single team."),
 				"donor":       strSchema("Required when scope is donor."),
 				"granularity": map[string]any{"type": "string", "enum": grans, "description": "Bucket size. Default daily."},
 			},
@@ -606,6 +608,25 @@ func (s *Snapshot) mcpHistory(r *http.Request, scope string, teamID *int32, dono
 		}
 		who = donor
 		members := s.Ranks.DonorMembers(idx)
+		// Scoped to one team when asked. A donor on many teams has one total and
+		// several stories, and "how much have I folded for this team" is a different
+		// question from "how much have I folded" — without this the two are
+		// indistinguishable through the tool, which is how the gap was found.
+		if teamID != nil {
+			var only []int32
+			for _, slot := range members {
+				if s.State.Members[slot].TeamID == *teamID {
+					only = append(only, slot)
+				}
+			}
+			if len(only) == 0 {
+				return "", fmt.Errorf("%q has no record on team %d", donor, *teamID)
+			}
+			members = only
+			if slot, ok := s.State.TeamSlot(*teamID); ok {
+				who = fmt.Sprintf("%s on %s", donor, s.teamView(slot).Name)
+			}
+		}
 		if len(members) > maxHistoryTeams {
 			members = members[:maxHistoryTeams]
 		}
