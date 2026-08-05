@@ -1,10 +1,13 @@
 // Chart layer.
 //
-// One chart type carries almost the whole site: production over time. Every one of
-// them is stepped, because what is plotted is what a bucket produced during a period
+// One chart type carries almost the whole site: production over time. None of them
+// interpolate, because what is plotted is what a bucket produced during a period
 // rather than a sample of something continuous, and a sloped line between two buckets
 // asserts output in the gap between them. A donor who banked everything in two hours
 // on Tuesday should not get a smooth ramp across the days they folded nothing.
+//
+// Whether that is drawn as spaced bars or contiguous steps depends only on how many
+// buckets there are — see bucketPaths.
 //
 // That also means the single-series and stacked forms read the same way: gaining a
 // second team changes how many bands there are and nothing else.
@@ -197,6 +200,32 @@ function axes(t, gran) {
 }
 
 /**
+ * Bars when the buckets are few enough to space apart, steps when they are not.
+ *
+ * Both draw the same thing — a value held across a period — but a 10% gap makes the
+ * periods countable, which matters when there are few of them and a reader is picking
+ * one out. Past about a hundred buckets the gap and the bar are each under a pixel,
+ * and the separation stops reading as structure and starts reading as noise, so the
+ * steps run together into one continuous shape instead.
+ *
+ * align: 1 on both, so a bar starts at its own timestamp rather than straddling it.
+ * A bucket is named by where it begins and the axis ticks sit on those same instants,
+ * so a centred bar would sit half a period off its own label.
+ *
+ * uPlot's bars renderer does not offset by series index — xShift is computed from
+ * alignment and bar width alone — so several bar series draw at the same x and
+ * overlap, which is what the cumulative overpaint in stack() needs. An earlier
+ * comment here ruled bars out on the opposite claim; it is wrong for 1.6.32, checked
+ * against the source.
+ */
+function bucketPaths(chart) {
+  const n = chart.data?.[0]?.length ?? 0;
+  return n > 0 && n < 100
+    ? uPlot.paths.bars({ size: [0.9], align: 1 })
+    : uPlot.paths.stepped({ align: 1 });
+}
+
+/**
  * The bucket the pointer is inside, rather than the boundary it is nearest.
  *
  * uPlot's cursor.idx is always the closest x point, and with stepped paths a bucket
@@ -353,7 +382,7 @@ export function productionChart(el, label = 'Points') {
         //
         // align: 1 holds the value forward from its timestamp, which is what a bucket
         // labelled by its start means.
-        paths: uPlot.paths.stepped({ align: 1 }),
+        paths: bucketPaths(self),
         // No static markers. On a line they showed which points were real among the
         // interpolation; on a step there is no interpolation — every plateau is an
         // observation. They also sat at the left edge of their own step rather than on
@@ -386,15 +415,7 @@ export function productionChart(el, label = 'Points') {
 export function stackedChart(el) {
   const chart = new Chart(el, (t, meta, self) => {
     const labels = meta?.labels || [];
-    // Stepped areas, not bars.
-    //
-    // uPlot's bar renderer distributes multiple bar series side by side within a
-    // bucket rather than overlapping them, so the cumulative-overpaint trick that
-    // produces a stack does not apply — the largest contributor ends up drawn in
-    // the smallest one's colour. Stepped areas fill down to the baseline, so the
-    // overpaint works, while the flat-then-vertical shape still reads as a discrete
-    // per-bucket quantity rather than a continuous ramp between spikes.
-    const stepped = uPlot.paths.stepped({ align: 1 });
+    const paths = bucketPaths(self);
     return {
       padding: [12, 24, 0, 0],
       tzDate: dateFn(meta?.granularity),
@@ -409,7 +430,7 @@ export function stackedChart(el) {
           label,
           // Values arrive already accumulated from the top, so drawing in order
           // leaves each segment visible between its neighbour and itself.
-          paths: stepped,
+          paths,
           // A hairline of surface between segments keeps adjacent bands legible
           // where they meet.
           stroke: t.surface,
