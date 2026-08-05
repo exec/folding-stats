@@ -111,7 +111,7 @@ Every response carries a `snapshot` block describing freshness, then the data.
 | `GET` | `/v1/summary/history` | project production over time |
 | `GET` | `/v1/teams` | team leaderboard, paginated. `?sort=` any numeric column |
 | `GET` | `/v1/teams/{id}` | one team |
-| `GET` | `/v1/teams/{id}/members` | roster, `?active_only=true` |
+| `GET` | `/v1/teams/{id}/members` | roster, `?active_only=true`, `?sort=` any numeric column |
 | `GET` | `/v1/teams/{id}/history` | `?granularity=hourly\|daily\|weekly\|monthly` |
 | `GET` | `/v1/teams/{id}/rivals` | ranking around this team, with projected overtakes. Paginated |
 | `GET` | `/v1/donors` | donor leaderboard, paginated. `?sort=` any numeric column |
@@ -153,8 +153,8 @@ Every response carries a `snapshot` block describing freshness, then the data.
   after midnight, while `points_last_24h` is the rolling figure. Weeks were ISO
   (Monday) before 2026-08-03; they start Sunday now, matching the site most donors
   reconcile against.
-- **Leaderboards order by any numeric column.** `?sort=` on `/v1/teams` and
-  `/v1/donors` takes one of:
+- **Leaderboards order by any numeric column.** `?sort=` on `/v1/teams`,
+  `/v1/donors` and `/v1/teams/{id}/members` takes one of:
 
   | key | column | field |
   |---|---|---|

@@ -672,6 +672,7 @@ export async function teamDetail(view, { id }, nav) {
 async function teamMembersCard(teamID, nav) {
   let page = 1;
   let activeOnly = false;
+  let sort = 'lifetime';
   const body = el('div');
   const controls = el('div.chart-toolbar');
   const node = cardWith('Members', controls, body);
@@ -699,13 +700,20 @@ async function teamMembersCard(teamID, nav) {
     try {
       const res = await api.teamMembers(teamID, {
         page, per_page: PER_PAGE, active_only: activeOnly ? 'true' : undefined,
+        sort: sort === 'lifetime' ? undefined : sort,
       });
       clear(body);
       if (!res.data.length) {
         body.append(el('div.empty', activeOnly ? `No members produced in the last ${activeWindow()}.` : 'No members.'));
         return;
       }
-      body.append(memberTable(res.data));
+      body.append(memberTable(res.data, sort, (key) => {
+        // A new ordering is a new first page: keeping the page number would land the
+        // reader somewhere arbitrary in a list they have just reordered.
+        sort = key;
+        page = 1;
+        load();
+      }));
       body.append(pager(res.page.page, res.page.total_pages, res.page.total_items, (p) => {
         page = p;
         load();
@@ -719,7 +727,18 @@ async function teamMembersCard(teamID, nav) {
   return node;
 }
 
-function memberTable(members) {
+/**
+ * The columns a team's roster can be ordered by, left to right as they appear.
+ *
+ * A subset of COLUMNS rather than a second list: the key is the same string the API
+ * takes, so the heading, the URL and the server's ordering stay one value. Lifetime
+ * points sits last and is the default, because it is the ranking a member's position
+ * in the team is actually derived from.
+ */
+const ROSTER_COLUMNS = COLUMNS.filter((c) =>
+  ['per_day', 'last_24h', 'this_week', 'this_month', 'lifetime'].includes(c.key));
+
+function memberTable(members, sort, onSort) {
   const body = el('tbody');
   for (const m of members) {
     const idle = (m.points_per_day_7d_avg ?? 0) === 0;
@@ -731,9 +750,8 @@ function memberTable(members) {
         { class: idle ? 'dim' : null },
         el('td.rank', n(m.rank_in_team)),
         el('td.left.name-cell', nameLink),
-        el('td.num', { title: n(m.points_per_day_7d_avg) }, short(m.points_per_day_7d_avg)),
-        el('td.num', { title: n(m.points_last_24h) }, short(m.points_last_24h)),
-        el('td.num', { title: n(m.points_total) }, short(m.points_total))
+        ...ROSTER_COLUMNS.map((c) =>
+          el('td.num', { title: n(m[c.field]) }, short(m[c.field])))
       )
     );
   }
@@ -743,11 +761,12 @@ function memberTable(members) {
       'table.data',
       el('thead', el('tr',
         el('th.left', 'In team'), el('th.left', 'Donor'),
-        el('th', 'Per day'), el('th', 'Last 24h'), el('th', 'Points'))),
+        ...ROSTER_COLUMNS.map((c) => sortHeader(c, sort, onSort)))),
       body
     )
   );
 }
+
 
 /* --------------------------------------------------------------- donors --- */
 
@@ -1238,7 +1257,7 @@ export async function apiDocs(view) {
         endpoint('GET', '/v1/summary/history', 'Project-wide production over time'),
         endpoint('GET', '/v1/teams', 'Team leaderboard, paginated. ?sort= any numeric column'),
         endpoint('GET', '/v1/teams/{id}', 'One team'),
-        endpoint('GET', '/v1/teams/{id}/members', 'Team roster, ?active_only=true'),
+        endpoint('GET', '/v1/teams/{id}/members', 'Team roster, ?active_only=true, ?sort= any numeric column'),
         endpoint('GET', '/v1/teams/{id}/history', '?granularity=hourly|daily|weekly|monthly'),
         endpoint('GET', '/v1/teams/{id}/rivals', 'Ranking around this team with projected overtakes; opens on its own page'),
         endpoint('GET', '/v1/donors', 'Donor leaderboard, paginated. ?sort= any numeric column'),

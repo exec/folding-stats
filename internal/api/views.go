@@ -6,6 +6,7 @@ import (
 
 	"folding/internal/metrics"
 	"folding/internal/model"
+	"folding/internal/rank"
 )
 
 // View builders translate internal state into the wire types. They are the only
@@ -240,4 +241,119 @@ func sortSlotsByScoreDesc(slots []int32, members []model.Member) {
 	sort.Slice(slots, func(a, b int) bool {
 		return members[slots[a]].Score > members[slots[b]].Score
 	})
+}
+
+// rosterRanks reports whether a member has anything to rank on this column, using
+// the cheapest test that answers it.
+//
+// This is not the same as computing the value and comparing it to zero, and the
+// difference is the whole cost of the operation. PointsPerDay divides the seven-day
+// total by the span that member has actually been observed for, and that span costs a
+// binary search over the retained cycles — 882,940 of them to partition the largest
+// roster, which measured 12.9ms against 2.3ms for the columns that are a plain array
+// read. It is zero exactly when the seven-day total is zero, so the division is only
+// needed for the members that survive the partition.
+func (s *Snapshot) rosterRanks(slot int32, k rank.SortKey) bool {
+	if k == rank.PerDay {
+		return s.Members.Last7d(slot) > 0
+	}
+	return s.rosterValue(slot, k) > 0
+}
+
+// rosterValue is the figure a member is ranked by for a given column.
+func (s *Snapshot) rosterValue(slot int32, k rank.SortKey) int64 {
+	switch k {
+	case rank.PerDay:
+		return s.Members.PointsPerDay(slot)
+	case rank.Last24h:
+		return s.Members.Last24h(slot)
+	case rank.ThisWeek:
+		return s.Members.ThisWeek(slot)
+	case rank.ThisMonth:
+		return rollup(s.MemberMonth, slot)
+	case rank.WUs:
+		return s.State.Members[slot].WUs
+	}
+	return s.State.Members[slot].Score
+}
+
+// orderRoster returns the slots at positions [lo, hi) of a team's roster ordered by
+// key, and how many members the ordering covers.
+//
+// Sorting a roster outright is not affordable on the largest team: 882,940 members
+// costs 13ms, against a 0.11ms median, on a route anyone can request. But of 2.1M
+// donors only ~6,600 produced anything in the last seven days, so for every column
+// except lifetime almost the entire roster is tied at zero — and a tie needs no
+// sorting. Only the members with something to rank get sorted; the rest keep the
+// order they are already stored in, which is lifetime rank.
+//
+// The zero tail is therefore never materialised. A first page comes entirely from the
+// sorted head and touches nothing else; only a page reaching past it walks the roster,
+// and then only to skip what is already above.
+func (s *Snapshot) orderRoster(slots []int32, k rank.SortKey, activeOnly bool, lo, hi int) []int32 {
+	keep := func(slot int32) bool { return !activeOnly || s.Members.Last7d(slot) > 0 }
+
+	// Lifetime is the order the roster is already stored in.
+	if k == rank.Lifetime {
+		out := make([]int32, 0, hi-lo)
+		seen := 0
+		for _, slot := range slots {
+			if !keep(slot) {
+				continue
+			}
+			if seen >= lo {
+				out = append(out, slot)
+			}
+			if seen++; seen >= hi {
+				break
+			}
+		}
+		return out
+	}
+
+	type scored struct {
+		slot int32
+		v    int64
+	}
+	var head []scored
+	for _, slot := range slots {
+		if !keep(slot) {
+			continue
+		}
+		if s.rosterRanks(slot, k) {
+			head = append(head, scored{slot, s.rosterValue(slot, k)})
+		}
+	}
+	// Stable, so members tied on the column keep lifetime order rather than an
+	// arbitrary one that reshuffles between cycles for no reason.
+	sort.SliceStable(head, func(a, b int) bool { return head[a].v > head[b].v })
+
+	out := make([]int32, 0, hi-lo)
+	for i := lo; i < hi && i < len(head); i++ {
+		out = append(out, head[i].slot)
+	}
+	if hi <= len(head) {
+		return out
+	}
+	// Into the tail: everything left produced nothing on this column, so they are
+	// served in the order they are stored, skipping whatever the head already took.
+	skip := lo - len(head)
+	if skip < 0 {
+		skip = 0
+	}
+	need := hi - len(head) - skip
+	for _, slot := range slots {
+		if !keep(slot) || s.rosterRanks(slot, k) {
+			continue
+		}
+		if skip > 0 {
+			skip--
+			continue
+		}
+		out = append(out, slot)
+		if need--; need <= 0 {
+			break
+		}
+	}
+	return out
 }

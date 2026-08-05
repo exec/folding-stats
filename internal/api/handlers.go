@@ -159,6 +159,15 @@ func (s *Server) teamMembers(snap *Snapshot, r *http.Request) (any, *PageInfo, e
 	// the team rather than to the corpus. Scanning the global 2.7M-entry order on
 	// every request would work, but it would cost the same for a two-person team as
 	// for the largest one.
+	sortKey, err := parseSort(r)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Roster size is a team property, not a member one, so it is not orderable here.
+	if sortKey == rank.Members || sortKey == rank.Teams {
+		sortKey = rank.Lifetime
+	}
+
 	slots := snap.Ranks.TeamMembers(teamID)
 
 	total := len(slots)
@@ -177,29 +186,18 @@ func (s *Server) teamMembers(snap *Snapshot, r *http.Request) (any, *PageInfo, e
 		return nil, nil, err
 	}
 
-	out := make([]Member, 0, hi-lo)
-	if !activeOnly {
+	// Unfiltered and in the stored order is the common case and stays a slice.
+	if !activeOnly && sortKey == rank.Lifetime {
+		out := make([]Member, 0, hi-lo)
 		for _, slot := range slots[lo:hi] {
 			out = append(out, snap.memberView(slot, false))
 		}
 		return out, page, nil
 	}
-	// Walk only as far as the requested window. The roster is in rank order, so the
-	// first page is usually reached in about its own length; the worst case is a team
-	// whose active members are all at the bottom, which is the whole scan this used to
-	// do every time regardless.
-	seen := 0
-	for _, slot := range slots {
-		if snap.Members.Last7d(slot) <= 0 {
-			continue
-		}
-		if seen >= lo {
-			out = append(out, snap.memberView(slot, false))
-		}
-		seen++
-		if seen >= hi {
-			break
-		}
+	ordered := snap.orderRoster(slots, sortKey, activeOnly, lo, hi)
+	out := make([]Member, 0, len(ordered))
+	for _, slot := range ordered {
+		out = append(out, snap.memberView(slot, false))
 	}
 	return out, page, nil
 }

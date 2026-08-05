@@ -2223,3 +2223,110 @@ func TestCappedDonorHistorySelectsTheSameMembers(t *testing.T) {
 		}
 	}
 }
+
+// TestTeamRosterSortsByEveryColumn pins the ordering a team's member table offers.
+//
+// A wrong order here does not fail: it returns the right members with the right
+// numbers in an order that is simply not the one asked for, which nobody notices
+// until they compare two pages. So every column is checked for a monotonically
+// descending sequence, and the paging is checked to concatenate without gaps or
+// repeats — the failure a head/tail split invites.
+func TestTeamRosterSortsByEveryColumn(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	state := model.NewState()
+	memberWin, teamWin := metrics.New(0), metrics.New(0)
+
+	// 30 members on one team. Production is deliberately uncorrelated with lifetime
+	// total, so a sort that silently fell back to the stored order would be caught:
+	// the biggest lifetime scores produce nothing, and the recent producers are at
+	// the bottom of the lifetime ranking.
+	const n = 30
+	rows := func(cycle int) []parse.UserRow {
+		out := make([]parse.UserRow, 0, n)
+		for i := 0; i < n; i++ {
+			score := int64(100000 - i*1000) // lifetime: descending by index
+			if cycle == 2 && i >= n/2 {
+				score += int64((i - n/2 + 1) * 137) // only the lifetime tail produces
+			}
+			out = append(out, u(fmt.Sprintf("m%02d", i), score, 7))
+		}
+		return out
+	}
+	for i, when := range []time.Time{at(1), at(2)} {
+		cy := state.Apply(when, []parse.TeamRow{tr(7, "mixed", 900000)}, rows(i+1))
+		if err := st.WriteCycle(context.Background(), state, cy, store.CycleMeta{
+			TeamSnapshotAt: when, UserSnapshotAt: when}); err != nil {
+			t.Fatal(err)
+		}
+		memberWin.Grow(len(state.Members))
+		memberWin.Push(when, cy.MemberDeltas)
+		teamWin.Grow(len(state.Teams))
+		teamWin.Push(when, cy.TeamDeltas)
+	}
+	tbl := rank.Build(state, at(2), rank.DefaultConfig)
+	tbl.BuildOrders(state, memberWin, teamWin, nil, nil)
+	srv := NewServer()
+	srv.Publish(Build(state, memberWin, teamWin, tbl, st, at(2), at(3), "roster"))
+
+	field := map[string]func(Member) int64{
+		"lifetime":  func(m Member) int64 { return m.PointsTotal },
+		"per_day":   func(m Member) int64 { return m.PointsPerDay7dAvg },
+		"last_24h":  func(m Member) int64 { return m.PointsLast24h },
+		"this_week": func(m Member) int64 { return m.PointsThisWeekUTC },
+		"wus":       func(m Member) int64 { return m.WUsTotal },
+	}
+	for key, value := range field {
+		_, env := get(t, srv, "/v1/teams/7/members?sort="+key+"&per_page=100")
+		rows := decode[[]Member](t, env.Data)
+		if len(rows) != n {
+			t.Fatalf("%s: got %d rows, want %d", key, len(rows), n)
+		}
+		for i := 1; i < len(rows); i++ {
+			if value(rows[i-1]) < value(rows[i]) {
+				t.Errorf("%s: row %d (%s=%d) sorts above row %d (%s=%d)",
+					key, i-1, rows[i-1].Name, value(rows[i-1]), i, rows[i].Name, value(rows[i]))
+				break
+			}
+		}
+		// A rate column must not simply reproduce the lifetime order, or the sort is
+		// doing nothing and this test is proving nothing.
+		if key == "per_day" || key == "last_24h" {
+			same := true
+			_, lenv := get(t, srv, "/v1/teams/7/members?per_page=100")
+			base := decode[[]Member](t, lenv.Data)
+			for i := range rows {
+				if rows[i].Name != base[i].Name {
+					same = false
+					break
+				}
+			}
+			if same {
+				t.Errorf("%s produced the lifetime order unchanged", key)
+			}
+		}
+	}
+
+	// Paging across the head/tail boundary must not drop or repeat anyone. The head
+	// is the members with a non-zero value; everyone else is served from the stored
+	// order, and getting the hand-off wrong is invisible on a single page.
+	seen := map[string]int{}
+	for p := 1; p <= 3; p++ {
+		_, env := get(t, srv, fmt.Sprintf("/v1/teams/7/members?sort=last_24h&per_page=10&page=%d", p))
+		for _, m := range decode[[]Member](t, env.Data) {
+			seen[m.Name]++
+		}
+	}
+	if len(seen) != n {
+		t.Errorf("paging saw %d distinct members across 3 pages of 10, want %d", len(seen), n)
+	}
+	for name, c := range seen {
+		if c != 1 {
+			t.Errorf("%s appeared %d times across the pages", name, c)
+		}
+	}
+}
