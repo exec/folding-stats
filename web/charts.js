@@ -1,9 +1,16 @@
 // Chart layer.
 //
-// One chart type carries almost the whole site: production over time. It is a
-// magnitude-over-time question, so it is a line — and because an HTML chart is
-// interactive by nature, every chart ships a crosshair and tooltip rather than
-// making people squint at gridlines.
+// One chart type carries almost the whole site: production over time. Every one of
+// them is stepped, because what is plotted is what a bucket produced during a period
+// rather than a sample of something continuous, and a sloped line between two buckets
+// asserts output in the gap between them. A donor who banked everything in two hours
+// on Tuesday should not get a smooth ramp across the days they folded nothing.
+//
+// That also means the single-series and stacked forms read the same way: gaining a
+// second team changes how many bands there are and nothing else.
+//
+// Because an HTML chart is interactive by nature, every chart ships a crosshair and
+// tooltip rather than making people squint at gridlines.
 //
 // Colours come from CSS custom properties rather than literals, so the theme
 // toggle repaints charts through the same mechanism as everything else, and the
@@ -190,9 +197,27 @@ function axes(t, gran) {
 }
 
 /** Cursor configuration. */
-function cursor() {
+function cursor(t) {
   return {
-    points: { size: 9 },
+    points: {
+      size: 9,
+      width: 2,
+      // The hover dot has to be the series' own colour, and `stroke` is the wrong
+      // place to read that from: on the stacked chart the stroke is the hairline
+      // drawn *between* bands, which is the surface colour — so the dot came out in
+      // the background colour there and the series colour everywhere else. _swatch
+      // is the identity colour both charts already carry for their legends.
+      stroke: (u, i) => u.series[i]._swatch || u.series[i].stroke,
+      fill: () => t.surface,
+    },
+    // Snap to the bucket the pointer is inside, not the nearest boundary. With
+    // stepped paths a bucket owns [its own timestamp, the next one), so nearest-point
+    // snapping hands the right half of every plateau to the following bucket — the
+    // tooltip names one period while the pointer is over another.
+    dataIdx: (u, seriesIdx, closestIdx, xVal) => {
+      const xs = u.data[0];
+      return closestIdx > 0 && xs[closestIdx] > xVal ? closestIdx - 1 : closestIdx;
+    },
     // A vertical crosshair only: a horizontal one implies reading a value off the
     // y-axis, which the tooltip already does more precisely.
     y: false,
@@ -276,7 +301,7 @@ export function productionChart(el, label = 'Points') {
     padding: [12, 24, 0, 0],
     tzDate: dateFn(meta?.granularity),
     axes: axes(t, meta?.granularity),
-    cursor: cursor(),
+    cursor: cursor(t),
     hooks: tooltipHooks(self, rateLabel(label, meta?.perDay)),
     legend: { show: false },
     scales: { y: { range: (u, min, max) => [0, max === 0 ? 1 : max * 1.08] } },
@@ -288,7 +313,22 @@ export function productionChart(el, label = 'Points') {
         _swatch: t.series[0],
         width: 2,
         fill: fade(t.series[0], 0.14),
-        points: { show: (u, si, i0, i1) => i1 - i0 < 40, size: 8, stroke: t.series[0], fill: t.surface, width: 2 },
+        // Stepped, like the stacked view, so the whole site draws production the
+        // same way and gaining a second team changes how many bands there are and
+        // nothing else. A bucket is what was produced during a period, not a sample
+        // of something continuous: a sloped line between two buckets claims output in
+        // the gap, which for an individual is routinely a lie — somebody who banked
+        // everything in two hours on Tuesday got a smooth ramp across days they
+        // folded nothing at all.
+        //
+        // align: 1 holds the value forward from its timestamp, which is what a bucket
+        // labelled by its start means.
+        paths: uPlot.paths.stepped({ align: 1 }),
+        // No static markers. On a line they showed which points were real among the
+        // interpolation; on a step there is no interpolation — every plateau is an
+        // observation. They also sat at the left edge of their own step rather than on
+        // it, reading as though the value belonged to the boundary.
+        points: { show: false },
       },
     ],
   }));
@@ -303,15 +343,15 @@ export function productionChart(el, label = 'Points') {
  * "Other" rather than generating a ninth hue.
  */
 /**
- * Per-team contribution over time, as stacked bars.
+ * Per-team contribution over time, stacked.
  *
- * Bars rather than areas because each bucket is a discrete quantity, not a sample
- * of something continuous. Production is also spiky and sparse: a donor typically
- * banks points in a handful of hours across a week, and an area chart joins those
- * isolated spikes into triangles that imply steady output between them — and never
- * visibly stacks, because the series rarely coincide in the same bucket.
+ * Stepped rather than sloped because each bucket is a discrete quantity, not a
+ * sample of something continuous. Production is also spiky and sparse: a donor
+ * typically banks points in a handful of hours across a week, and joining those
+ * isolated spikes with sloped lines implies steady output between them.
  *
- * Bars in the same bucket sit on top of each other, which is the whole point.
+ * The single-series chart is stepped for the same reason, so gaining a second team
+ * changes how many bands there are and nothing else about how to read the figure.
  */
 export function stackedChart(el) {
   const chart = new Chart(el, (t, meta, self) => {
@@ -329,7 +369,7 @@ export function stackedChart(el) {
       padding: [12, 24, 0, 0],
       tzDate: dateFn(meta?.granularity),
       axes: axes(t, meta?.granularity),
-      cursor: cursor(),
+      cursor: cursor(t),
       hooks: tooltipHooks(self),
       legend: { show: false },
       scales: { x: { time: true }, y: { range: (u, min, max) => [0, max === 0 ? 1 : max * 1.08] } },
