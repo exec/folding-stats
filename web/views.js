@@ -1482,13 +1482,21 @@ export async function privacyPage(view) {
      'be looked at.']));
 
   view.append(policySection('Getting in touch',
-    ['Questions, corrections, or a request about your own data: open an issue at ',
+    ['Questions, corrections, or a request about your own data: ',
+     el('a', { href: 'mailto:privacy@exec.codes' }, 'privacy@exec.codes'),
+     '. A request about a donor name is easier to act on if it says which name.'],
+    ['Anything that does not need to be private is welcome as an issue at ',
      el('a', {
        href: 'https://github.com/exec/folding-stats/issues',
        target: '_blank', rel: 'noopener noreferrer',
      }, 'github.com/exec/folding-stats'),
-     '. Anything that should not be public can say so and a private route will be ' +
-     'arranged.']));
+     ' instead, where the answer is visible to the next person who wonders the same ' +
+     'thing.'],
+    ['Security problems have their own address — ',
+     el('a', { href: 'mailto:security@exec.codes' }, 'security@exec.codes'),
+     ', also published at ',
+     el('a', { href: '/.well-known/security.txt' }, '/.well-known/security.txt'),
+     '. Please use it rather than a public issue for anything exploitable.']));
 }
 
 export async function disclaimerPage(view) {
@@ -1537,6 +1545,21 @@ export async function disclaimerPage(view) {
      'service or its API.'],
     ['Nothing here is advice of any kind. It is a scoreboard for a distributed ' +
      'computing project.']));
+
+  view.append(policySection('If something here is wrong',
+    ['Report it. A figure that looks wrong usually is, and the ones worth fixing are ' +
+     'found by the people who know what their own numbers should say.'],
+    ['General corrections: ',
+     el('a', {
+       href: 'https://github.com/exec/folding-stats/issues',
+       target: '_blank', rel: 'noopener noreferrer',
+     }, 'an issue on GitHub'),
+     ', or ', el('a', { href: 'mailto:dylan@exec.codes' }, 'dylan@exec.codes'),
+     '. Anything about personal data goes to ',
+     el('a', { href: 'mailto:privacy@exec.codes' }, 'privacy@exec.codes'),
+     ', and anything exploitable to ',
+     el('a', { href: 'mailto:security@exec.codes' }, 'security@exec.codes'),
+     '.']));
 
   view.append(policySection('The software',
     ['The site is open source under the MIT license, which carries its own warranty ' +

@@ -15,6 +15,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"path"
@@ -205,6 +206,13 @@ func Handler() (http.Handler, error) {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clean := path.Clean(r.URL.Path)
 
+		if clean == securityTxtPath {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("Cache-Control", "public, max-age=86400")
+			io.WriteString(w, securityTxt(time.Now(), r))
+			return
+		}
+
 		// Serve it or 404 if it is an asset request, rather than returning the SPA
 		// shell under a JavaScript content type — which fails in the browser in a
 		// thoroughly confusing way.
@@ -270,4 +278,46 @@ func contentType(p string) string {
 	default:
 		return "application/octet-stream"
 	}
+}
+
+// securityTxtPath is where RFC 9116 says to look for a security contact.
+const securityTxtPath = "/.well-known/security.txt"
+
+// securityTxt renders the security contact document.
+//
+// Expires is required by RFC 9116 and is the field that makes these rot: a file whose
+// date has passed is formally invalid, so a researcher's tooling reports "no contact"
+// for a site that has one and simply forgot to edit a constant. Hardcoding a date
+// guarantees that outcome eventually.
+//
+// So it is computed: the first of the current month, plus a year. That is always
+// between eleven and twelve months ahead — inside the year RFC 9116 asks for — and it
+// only changes when the month does, so the document is stable for weeks at a time and
+// caches properly rather than differing on every request.
+//
+// The tradeoff is honest and worth naming: a date that renews itself can never prompt
+// anyone to re-check that the address still works. That prompt is worth less than the
+// alternative, which is a contact silently declared invalid while it was reachable
+// the whole time.
+func securityTxt(now time.Time, r *http.Request) string {
+	u := now.UTC()
+	expires := time.Date(u.Year(), u.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(1, 0, 0)
+
+	scheme := "https"
+	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") == "" && strings.HasPrefix(r.Host, "127.0.0.1") {
+		scheme = "http"
+	}
+	base := scheme + "://" + r.Host
+
+	return "# Security contact for " + r.Host + "\n" +
+		"#\n" +
+		"# This is a statistics mirror with a public, unauthenticated, read-only API.\n" +
+		"# There are no accounts and no user data beyond request logs. Reports about\n" +
+		"# the service itself, its API, or the data it derives are all welcome.\n" +
+		"\n" +
+		"Contact: mailto:security@exec.codes\n" +
+		"Expires: " + expires.Format(time.RFC3339) + "\n" +
+		"Preferred-Languages: en\n" +
+		"Canonical: " + base + securityTxtPath + "\n" +
+		"Policy: " + base + "/disclaimer\n"
 }

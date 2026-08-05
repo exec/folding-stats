@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestPreloadLinkMatchesTheShell holds the Early Hints header to the document it
@@ -202,5 +203,81 @@ func TestDottedRoutesReachTheShell(t *testing.T) {
 			asset(n, "text/javascript")
 			break
 		}
+	}
+}
+
+// TestSecurityTxt covers the document RFC 9116 defines, and in particular the field
+// that makes these go stale.
+//
+// Expires is mandatory, and a file whose date has passed is formally invalid — a
+// researcher's tooling reports "no security contact" for a site that has one and
+// merely forgot to edit a constant. Computing it removes that failure, but only if
+// the computation stays inside the year the RFC asks for and does not change on every
+// request, which would make the document uncacheable.
+func TestSecurityTxt(t *testing.T) {
+	h, err := Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/security.txt", nil)
+	req.Host = "folding.exec.codes"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Errorf("content type %q, want text/plain — scanners fetch this as text", ct)
+	}
+	body := rec.Body.String()
+
+	// The two mandatory fields.
+	if !strings.Contains(body, "Contact: mailto:security@exec.codes") {
+		t.Errorf("no Contact field:\n%s", body)
+	}
+	var expires string
+	for _, line := range strings.Split(body, "\n") {
+		if v, ok := strings.CutPrefix(line, "Expires: "); ok {
+			expires = v
+		}
+	}
+	if expires == "" {
+		t.Fatalf("no Expires field, which makes the document invalid:\n%s", body)
+	}
+	exp, err := time.Parse(time.RFC3339, expires)
+	if err != nil {
+		t.Fatalf("Expires %q is not RFC 3339: %v", expires, err)
+	}
+	if !exp.After(time.Now()) {
+		t.Errorf("Expires %s has already passed", expires)
+	}
+	if exp.After(time.Now().AddDate(1, 0, 0)) {
+		t.Errorf("Expires %s is more than a year out; RFC 9116 asks for less", expires)
+	}
+
+	// Canonical and Policy should point at the host that served it, so a fork is
+	// self-consistent rather than advertising this deployment.
+	for _, want := range []string{
+		"Canonical: https://folding.exec.codes/.well-known/security.txt",
+		"Policy: https://folding.exec.codes/disclaimer",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q:\n%s", want, body)
+		}
+	}
+
+	// Stable within a month: two instants in the same month must render identically,
+	// or the document changes under caches for no reason.
+	a := securityTxt(time.Date(2026, 8, 2, 3, 0, 0, 0, time.UTC), req)
+	b := securityTxt(time.Date(2026, 8, 29, 21, 0, 0, 0, time.UTC), req)
+	if a != b {
+		t.Error("output differs within a single month; it should only move when the month does")
+	}
+	// And it does move, so it can never expire.
+	c := securityTxt(time.Date(2026, 10, 2, 3, 0, 0, 0, time.UTC), req)
+	if a == c {
+		t.Error("output did not change across months; Expires would eventually pass")
 	}
 }
