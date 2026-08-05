@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -335,7 +336,39 @@ func (s *Service) applyCycle(ctx context.Context, p snapshotPair) error {
 		"new_members", len(cycle.NewMembers),
 		"regressions", cycle.Regressions,
 		"took", time.Since(start).Round(time.Millisecond))
+	s.warnRegressions(cycle)
 	return nil
+}
+
+// warnRegressions raises the alarm when a cumulative total went down.
+//
+// Points are only ever awarded, so a lifetime score can only rise. A fall means the
+// feed contradicted itself, or a name was reused for a different entity, or we joined
+// two rows that are not the same donor — and in every one of those cases the deltas
+// derived from that cycle are wrong. It carries the same weight as an ingest failure
+// and reads as one, rather than sitting as a field on a routine line nobody greps.
+func (s *Service) warnRegressions(c *model.Cycle) {
+	if c.Regressions == 0 {
+		return
+	}
+	name := func(id int32, team bool) string {
+		if team {
+			return fmt.Sprintf("team %d", s.state.Teams[id].ID)
+		}
+		m := s.state.Members[id]
+		return fmt.Sprintf("%s on team %d", s.state.Names.Name(m.NameID), m.TeamID)
+	}
+	var who []string
+	for _, d := range c.RegressedMembers {
+		who = append(who, fmt.Sprintf("%s (%d)", name(d.ID, false), d.DScore))
+	}
+	for _, d := range c.RegressedTeams {
+		who = append(who, fmt.Sprintf("%s (%d)", name(d.ID, true), d.DScore))
+	}
+	s.Log.Warn("cumulative scores decreased upstream",
+		"at", c.At.Format(time.RFC3339),
+		"count", c.Regressions,
+		"sample", strings.Join(who, ", "))
 }
 
 // publish rebuilds the ranked view when the corpus has moved, and swaps it in.

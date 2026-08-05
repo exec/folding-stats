@@ -60,7 +60,20 @@ type Cycle struct {
 	// impossible; it indicates a feed glitch or a renamed donor colliding with an
 	// existing row, and is surfaced rather than silently clamped.
 	Regressions int
+
+	// RegressedMembers and RegressedTeams sample the entities behind that count, so
+	// the warning names someone rather than only asserting that something happened.
+	// Capped, because a systemic upstream fault would otherwise log the whole corpus;
+	// the count above is the real measure of scale.
+	//
+	// Recording them costs nothing in the ordinary case: the append sits inside a
+	// branch that, if the feed is behaving, never runs.
+	RegressedMembers []Delta
+	RegressedTeams   []Delta
 }
+
+// maxRegressionSample bounds the entities named in the warning.
+const maxRegressionSample = 5
 
 // State is the corpus as of the most recent applied snapshot.
 type State struct {
@@ -164,6 +177,9 @@ func (s *State) Apply(at time.Time, teams []parse.TeamRow, users []parse.UserRow
 		d, dw := score-m.Score, wus-m.WUs
 		if d < 0 {
 			c.Regressions++
+			if len(c.RegressedMembers) < maxRegressionSample {
+				c.RegressedMembers = append(c.RegressedMembers, Delta{ID: slot, DScore: d, DWUs: dw})
+			}
 		}
 		// A member's first sighting carries its entire pre-existing lifetime total.
 		// Recording that as production would invent an enormous fake spike on the
@@ -189,6 +205,9 @@ func (s *State) Apply(at time.Time, teams []parse.TeamRow, users []parse.UserRow
 		d, dw := t.Score-tm.Score, t.WUs-tm.WUs
 		if d < 0 {
 			c.Regressions++
+			if len(c.RegressedTeams) < maxRegressionSample {
+				c.RegressedTeams = append(c.RegressedTeams, Delta{ID: slot, DScore: d, DWUs: dw})
+			}
 		}
 		if tm.Score != 0 || tm.WUs != 0 {
 			if d != 0 || dw != 0 {

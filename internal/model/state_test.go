@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -136,6 +137,30 @@ func TestScoreRegressionIsCounted(t *testing.T) {
 	}
 	if len(c.MemberDeltas) != 1 || c.MemberDeltas[0].DScore != -100 {
 		t.Errorf("delta = %+v, want the negative delta preserved", c.MemberDeltas)
+	}
+	// The count says something happened; the sample says who, which is the whole
+	// difference between an alarm that can be acted on and one that cannot.
+	if len(c.RegressedMembers) != 1 || c.RegressedMembers[0].DScore != -100 {
+		t.Errorf("RegressedMembers = %+v, want the offending member sampled", c.RegressedMembers)
+	}
+}
+
+func TestRegressionSampleIsCapped(t *testing.T) {
+	// A systemic upstream fault must not log the corpus. The count keeps the scale.
+	s := NewState()
+	var first, second []parse.UserRow
+	for i := range maxRegressionSample + 3 {
+		first = append(first, parse.UserRow{Name: fmt.Sprintf("u%d", i), Score: 500, WUs: 5, TeamID: 1})
+		second = append(second, parse.UserRow{Name: fmt.Sprintf("u%d", i), Score: 400, WUs: 4, TeamID: 1})
+	}
+	s.Apply(t0(), nil, users(first...))
+	c := s.Apply(t0().Add(time.Hour), nil, users(second...))
+
+	if c.Regressions != maxRegressionSample+3 {
+		t.Errorf("Regressions = %d, want %d", c.Regressions, maxRegressionSample+3)
+	}
+	if len(c.RegressedMembers) != maxRegressionSample {
+		t.Errorf("sampled %d, want the cap of %d", len(c.RegressedMembers), maxRegressionSample)
 	}
 }
 
