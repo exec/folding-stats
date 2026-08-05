@@ -95,7 +95,7 @@ Every response carries a `snapshot` block describing freshness, then the data.
     "at": "2026-08-03T06:31:11Z",          // upstream publish time this reflects
     "next_expected_at": "2026-08-03T07:31:20Z",
     "stale": false,
-    "server_time": "2026-08-03T06:42:07Z"  // compare against this, not your own clock
+    "server_time": "2026-08-03T06:42:07Z"  // when this response was built; add Age if cached
     // "warming_up": { ... }               // present only while a figure is converging
   },
   "data": { }
@@ -133,6 +133,14 @@ Every response carries a `snapshot` block describing freshness, then the data.
 - **Compare timestamps against `server_time`**, not your own clock. Unsynced client
   clocks are routinely minutes out, and every relative figure derived from one is wrong
   by exactly that much.
+- **`server_time` is when the response was *built*, not now.** Every route except
+  `/v1/status` is cacheable, and this field rides inside the cached body — so a stored
+  response replays the clock reading it was built with, and taking it as "now" reports
+  whatever freshness that copy happened to capture. HTTP carries the correction:
+  `Age` is how long the response has been held, so **now = `server_time` + `Age`**. If
+  you would rather not do the arithmetic, `/v1/status` is `no-store`, always freshly
+  built, and 289 bytes. `stale` is safe either way: a cached copy always expires more
+  than twenty minutes before it could have become stale.
 - **`points_per_day_7d_avg` divides by the period actually observed.** Seven days once
   seven days of that entity have been watched, and the span since it first appeared
   before then. A team first seen yesterday reports the rate it is really producing at,

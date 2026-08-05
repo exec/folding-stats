@@ -34,11 +34,20 @@ type SnapshotInfo struct {
 	// should be. Not derivable from the timestamps: it allows a grace period for
 	// routine upstream drift that only the server knows about.
 	Stale bool `json:"stale"`
-	// ServerTime is this server's clock at the moment the response was built.
+	// ServerTime is this server's clock at the moment the response was built —
+	// which is not necessarily now.
 	//
 	// Comparing timestamps against this rather than the client's own clock makes any
 	// derived figure depend on elapsed time instead of on two machines agreeing.
 	// Unsynced clients are routinely minutes out.
+	//
+	// But every route except /v1/status is cacheable, and this rides inside the
+	// cached body, so a stored response replays the clock reading it was built with.
+	// A caller taking it as "now" reports whatever freshness its own cached copy
+	// happened to capture. HTTP already carries the correction: Age says how long the
+	// response has been held, so now is ServerTime plus Age. A caller that would
+	// rather not do the arithmetic can read /v1/status, which is no-store and always
+	// freshly built.
 	ServerTime time.Time `json:"server_time"`
 	// WarmingUp is present only while some figure is not yet at full fidelity, and
 	// absent otherwise.

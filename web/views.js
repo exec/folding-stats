@@ -1358,6 +1358,14 @@ export async function apiDocs(view) {
         el('strong', 'Clocks disagree. '), 'Every response includes ', el('code', 'server_time'),
         '. Compare timestamps against that rather than your own clock, and a countdown ' +
         'stays right on a machine whose clock is minutes off.'),
+      el('p',
+        el('strong', 'But it is when the response was built, not now. '),
+        'Every route except ', el('code', '/v1/status'), ' is cacheable, and ',
+        el('code', 'server_time'), ' rides inside the cached body — so a stored copy ' +
+        'replays the reading it was built with. ', el('code', 'Age'),
+        ' says how long it has been held, so now is ', el('code', 'server_time'),
+        ' plus ', el('code', 'Age'), '. Or read ', el('code', '/v1/status'),
+        ', which is never cached.'),
       el('p', { style: 'margin-bottom:0' },
         el('strong', 'Names are raw upstream text. '),
         'They may contain tabs, newlines and non-ASCII; URL-encode them in paths.')),
