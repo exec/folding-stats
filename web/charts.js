@@ -16,7 +16,7 @@
 // toggle repaints charts through the same mechanism as everything else, and the
 // series slots stay in their fixed order.
 
-import uPlot from '/vendor/uPlot.esm.js';
+import uPlot from '/vendor/uPlot.esm.min.js';
 import { short, n } from '/format.js';
 
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();

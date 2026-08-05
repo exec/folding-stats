@@ -25,7 +25,7 @@ func TestServesAssetsAndRoutes(t *testing.T) {
 		// stamp is promised never to change.
 		{"/app.css", 200, "text/css", "no-cache"},
 		{"/app.js", 200, "text/javascript", "no-cache"},
-		{"/vendor/uPlot.esm.js", 200, "text/javascript", "no-cache"},
+		{"/vendor/uPlot.esm.min.js", 200, "text/javascript", "no-cache"},
 		// Client-side routes must deep-link to the shell, not 404.
 		{"/teams", 200, "text/html", "no-cache"},
 		{"/donors/DH", 200, "text/html", "no-cache"},
@@ -57,7 +57,7 @@ func TestVersionedAssetsAreImmutable(t *testing.T) {
 	if build == "" {
 		t.Fatal("Build() is empty")
 	}
-	for _, p := range []string{"/app.js", "/app.css", "/vendor/uPlot.esm.js"} {
+	for _, p := range []string{"/app.js", "/app.css", "/vendor/uPlot.esm.min.js"} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p+"?v="+build, nil))
 		if rec.Code != 200 {
