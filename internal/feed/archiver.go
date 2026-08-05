@@ -137,7 +137,7 @@ func (a *Archiver) Run(ctx context.Context, interval time.Duration) error {
 	// catch the other half. Starting the timer at the idle interval skipped straight
 	// past that window. Observed: a startup fetch eleven seconds before the user feed
 	// published, then ten minutes of waiting with the team half already on disk.
-	t := time.NewTimer(a.nextDelay(interval))
+	t := time.NewTimer(a.schedule(interval))
 	defer t.Stop()
 	for {
 		select {
@@ -146,9 +146,23 @@ func (a *Archiver) Run(ctx context.Context, interval time.Duration) error {
 			return ctx.Err()
 		case <-t.C:
 			a.Once(ctx)
-			t.Reset(a.nextDelay(interval))
+			t.Reset(a.schedule(interval))
 		}
 	}
+}
+
+// schedule picks the next poll and says so.
+//
+// The delay was invisible before, which is the reason a ten-minute gap took twenty
+// minutes to explain: the log showed a fetch, then silence, with no way to tell a
+// scheduled wait from a wedged one. One line per poll is a few dozen a day against a
+// log that is otherwise nearly silent.
+func (a *Archiver) schedule(interval time.Duration) time.Duration {
+	d := a.nextDelay(interval)
+	a.Log.Info("next poll",
+		"in", d.Round(time.Second),
+		"at", time.Now().UTC().Add(d).Format(time.RFC3339))
+	return d
 }
 
 // nextDelay is how long to wait before the next poll, clamped so a misbehaving Delay
