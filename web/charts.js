@@ -240,7 +240,16 @@ function cursor() {
     // A vertical crosshair only: a horizontal one implies reading a value off the
     // y-axis, which the tooltip already does more precisely.
     y: false,
-    focus: { prox: 24 },
+    // No series focus. It highlights a *series*, and on a stacked chart a series is
+    // not the band the reader sees: stack() builds cumulative sums from the last
+    // series backwards, so uPlot draws the full total first and each smaller sum
+    // paints over it. Series 0's area is therefore the entire stack — focusing it
+    // lit the whole chart height, on every bucket, including ones where that team
+    // folded nothing at all.
+    //
+    // The same gap as the hover dots, which marked cumulative totals while the
+    // tooltip beside them reported each band's own contribution. The tooltip is the
+    // only one of the three that ever compensated, so it is the one that stays.
   };
 }
 
