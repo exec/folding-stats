@@ -197,23 +197,27 @@ function axes(t, gran) {
 }
 
 /** Cursor configuration. */
-function cursor(t) {
+function cursor() {
   return {
-    points: {
-      size: 9,
-      width: 2,
-      // The hover dot has to be the series' own colour, and `stroke` is the wrong
-      // place to read that from: on the stacked chart the stroke is the hairline
-      // drawn *between* bands, which is the surface colour — so the dot came out in
-      // the background colour there and the series colour everywhere else. _swatch
-      // is the identity colour both charts already carry for their legends.
-      stroke: (u, i) => u.series[i]._swatch || u.series[i].stroke,
-      fill: () => t.surface,
-    },
-    // Snap to the bucket the pointer is inside, not the nearest boundary. With
-    // stepped paths a bucket owns [its own timestamp, the next one), so nearest-point
-    // snapping hands the right half of every plateau to the following bucket — the
-    // tooltip names one period while the pointer is over another.
+    // No hover dots. They were wrong twice over on a stepped chart.
+    //
+    // Position: a dot is drawn at its data point, and with align: 1 that point is the
+    // left edge of the plateau, not the period the plateau represents — so it read as
+    // though the value belonged to the boundary.
+    //
+    // Meaning: on a stacked chart the y it marks is the *cumulative* total at that
+    // band, so the dot sat at the top of each band while the tooltip beside it
+    // reported that band's own contribution. Two marks disagreeing about what they
+    // measure is worse than one mark fewer.
+    //
+    // What is left says everything the dots did: the crosshair gives the position,
+    // and the tooltip names the bucket and lists each band's own figure against its
+    // colour.
+    points: { show: false },
+    // Snap to the bucket the pointer is inside, not the nearest boundary. A bucket
+    // owns [its own timestamp, the next one), so nearest-point snapping hands the
+    // right half of every plateau to the following bucket — naming one period while
+    // the pointer is over another.
     dataIdx: (u, seriesIdx, closestIdx, xVal) => {
       const xs = u.data[0];
       return closestIdx > 0 && xs[closestIdx] > xVal ? closestIdx - 1 : closestIdx;
@@ -301,7 +305,7 @@ export function productionChart(el, label = 'Points') {
     padding: [12, 24, 0, 0],
     tzDate: dateFn(meta?.granularity),
     axes: axes(t, meta?.granularity),
-    cursor: cursor(t),
+    cursor: cursor(),
     hooks: tooltipHooks(self, rateLabel(label, meta?.perDay)),
     legend: { show: false },
     scales: { y: { range: (u, min, max) => [0, max === 0 ? 1 : max * 1.08] } },
@@ -369,7 +373,7 @@ export function stackedChart(el) {
       padding: [12, 24, 0, 0],
       tzDate: dateFn(meta?.granularity),
       axes: axes(t, meta?.granularity),
-      cursor: cursor(t),
+      cursor: cursor(),
       hooks: tooltipHooks(self),
       legend: { show: false },
       scales: { x: { time: true }, y: { range: (u, min, max) => [0, max === 0 ? 1 : max * 1.08] } },
