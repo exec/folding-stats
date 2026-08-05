@@ -127,7 +127,17 @@ func (a *Archiver) Run(ctx context.Context, interval time.Duration) error {
 	a.Log.Info("archiver started", "interval", interval, "root", a.Archive.Root)
 	a.Once(ctx)
 
-	t := time.NewTimer(interval)
+	// nextDelay, not interval: the wait after the startup fetch has to respect the
+	// adaptive schedule like every other wait does.
+	//
+	// It did not, and a restart therefore blinded the poller for a full interval no
+	// matter how close the next publish was. Upstream publishes the team and user
+	// feeds about a minute apart, so a fetch landing between them archives half a
+	// pair and forms no cycle; the adaptive window exists to retry a minute later and
+	// catch the other half. Starting the timer at the idle interval skipped straight
+	// past that window. Observed: a startup fetch eleven seconds before the user feed
+	// published, then ten minutes of waiting with the team half already on disk.
+	t := time.NewTimer(a.nextDelay(interval))
 	defer t.Stop()
 	for {
 		select {
