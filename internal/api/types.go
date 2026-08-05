@@ -168,6 +168,31 @@ type Production struct {
 	// figures here it is read from the monthly rollup rather than from the rolling
 	// windows, which only span seven days.
 	PointsThisMonthUTC int64 `json:"points_this_month_utc"`
+
+	// PointsPerWU is lifetime points divided by lifetime work units, rounded.
+	//
+	// It is the only signal here about *what* is doing the folding. The points a work
+	// unit is worth vary by orders of magnitude between project classes, and a GPU
+	// running large modern assignments earns a ratio one to two decimal orders above a
+	// CPU chewing through small ones — so the quotient separates hardware classes that
+	// no other field distinguishes.
+	//
+	// It is a career average and reads as one. Somebody who folded on a CPU for a
+	// decade and bought a graphics card last week still reports the decade. Nothing
+	// here claims to identify hardware; it reports a ratio that correlates with it.
+	//
+	// Zero when no work units are recorded, which is the honest answer to a division
+	// with nothing to divide by.
+	PointsPerWU int64 `json:"points_per_wu"`
+}
+
+// perWU is lifetime points per work unit, rounded to nearest, and zero when there is
+// nothing to divide by.
+func perWU(points, wus int64) int64 {
+	if wus <= 0 {
+		return 0
+	}
+	return (points + wus/2) / wus
 }
 
 // Team is one team at collection or detail scope.

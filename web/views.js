@@ -423,8 +423,29 @@ function productionStats(d, extra = []) {
     statTile('Last 24 hours', short(d.points_last_24h),
       complete() ? 'rolling window' : `only ${activeWindow()} collected`),
     statTile('Today', short(d.points_today_utc), 'since 00:00 UTC'),
-    statTile('Work units', short(d.wus_total), n(d.wus_total))
+    // The ratio rides on the tile holding the number it is derived from, rather than
+    // taking a tile of its own: it is a property of the work units, not a sixth
+    // headline figure, and the stats row is already full.
+    statTile('Work units', short(d.wus_total), perWUText(d),
+      'Work units completed, and the average points each one earned')
   );
+}
+
+/**
+ * Points per work unit, as the Work units tile's subtitle.
+ *
+ * This is the only figure on the page that says anything about *what* is folding. A
+ * work unit's value varies by orders of magnitude between project classes, so a GPU on
+ * modern assignments sits one to two decimal orders above a CPU on small ones — which
+ * makes the quotient the closest thing to a hardware reading that the upstream feed
+ * permits. It is stated as a ratio and never as a hardware claim, because it is a
+ * career average: a decade of CPU folding still reads as CPU the week after a new card
+ * arrives.
+ */
+function perWUText(d) {
+  const wus = d.wus_total ?? 0;
+  if (!wus) return n(wus);
+  return `${n(wus)} · ${n(d.points_per_wu)} points each`;
 }
 
 /**
@@ -1468,6 +1489,14 @@ export async function apiDocs(view) {
         el('strong', 'Field names say what they mean. '),
         el('code', 'points_per_day_7d_avg'),
         ' is the last 7 days divided by 7 — the figure other sites label “24hr avg”, which it is not.'),
+      el('p',
+        el('strong', 'Points per work unit is a career average, not a hardware reading. '),
+        el('code', 'points_per_wu'),
+        ' is lifetime points divided by lifetime work units. It is the only field that ' +
+        'separates hardware classes at all — GPU projects pay orders of magnitude more per ' +
+        'unit than CPU ones — but it is averaged over everything the entity has ever folded, ' +
+        'so it describes a history and not a current machine. Zero means no work units are ' +
+        'recorded.'),
       el('p',
         el('strong', 'Calendar buckets are UTC, and weeks start Sunday. '),
         el('code', 'points_today_utc'), ', ', el('code', 'points_this_week_utc'), ' and ',

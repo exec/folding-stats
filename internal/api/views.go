@@ -52,6 +52,7 @@ func (s *Snapshot) teamView(slot int32) Team {
 			PointsThisWeekUTC:  s.Teams.ThisWeek(slot),
 			PointsThisMonthUTC: rollup(s.TeamMonth, slot),
 			PointsPerDay7dAvg:  s.Teams.PointsPerDay(slot),
+			PointsPerWU:        perWU(t.Score, t.WUs),
 		},
 	}
 }
@@ -74,6 +75,7 @@ func (s *Snapshot) memberView(slot int32, withTeamName bool) Member {
 			PointsThisWeekUTC:  s.Members.ThisWeek(slot),
 			PointsThisMonthUTC: rollup(s.MemberMonth, slot),
 			PointsPerDay7dAvg:  s.Members.PointsPerDay(slot),
+			PointsPerWU:        perWU(m.Score, m.WUs),
 		},
 	}
 	// On a donor's breakdown the team name is what identifies each row, but on a
@@ -101,6 +103,7 @@ func (s *Snapshot) donorView(idx int32, withTeams bool) Donor {
 		Production: Production{
 			PointsTotal: d.Score,
 			WUsTotal:    d.WUs,
+			PointsPerWU: perWU(d.Score, d.WUs),
 		},
 	}
 	// Summed across this donor's members when the periods were built, because the

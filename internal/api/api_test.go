@@ -2330,3 +2330,25 @@ func TestTeamRosterSortsByEveryColumn(t *testing.T) {
 		}
 	}
 }
+
+func TestPointsPerWURoundsAndSurvivesZero(t *testing.T) {
+	// A ratio nobody can compute is reported as zero rather than as a panic or an
+	// infinity, and the rounding is to nearest so a figure quoted back at us
+	// reconstructs the totals it came from.
+	for _, c := range []struct {
+		points, wus, want int64
+	}{
+		{0, 0, 0},       // a member seen but never credited
+		{500, 0, 0},     // points without units: no ratio exists
+		{1000, 1, 1000}, // one unit
+		{1000, 3, 333},  // 333.33 rounds down
+		{2000, 3, 667},  // 666.67 rounds up
+		{7, 2, 4},       // 3.5 rounds up, not toward zero
+		// No negative case: these are cumulative lifetime totals, which upstream only
+		// ever adds to. A regression makes a delta negative, never a total.
+	} {
+		if got := perWU(c.points, c.wus); got != c.want {
+			t.Errorf("perWU(%d, %d) = %d, want %d", c.points, c.wus, got, c.want)
+		}
+	}
+}

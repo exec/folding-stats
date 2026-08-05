@@ -432,6 +432,7 @@ func (s *Snapshot) mcpDonor(name string) (string, error) {
 			"unrelated people rather than being one donor. The points are real; the person is not.\n", d.TeamCount)
 	}
 	fmt.Fprintf(&b, "\n  Lifetime      %s points, %s work units\n", fmtInt(d.PointsTotal), fmtInt(d.WUsTotal))
+	b.WriteString(mcpPerWU(d.PointsPerWU))
 	fmt.Fprintf(&b, "  Per day       %s   (seven-day average)\n", fmtInt(d.PointsPerDay7dAvg))
 	fmt.Fprintf(&b, "  Last 24h      %s\n", fmtInt(d.PointsLast24h))
 	fmt.Fprintf(&b, "  Today (UTC)   %s\n", fmtInt(d.PointsTodayUTC))
@@ -470,6 +471,7 @@ func (s *Snapshot) mcpTeam(id *int32, members int) (string, error) {
 	fmt.Fprintf(&b, "%s — team %d, rank #%s of %s\n", t.Name, t.TeamID,
 		fmtInt(int64(t.Rank)), fmtInt(int64(s.Totals.Teams)))
 	fmt.Fprintf(&b, "\n  Lifetime      %s points, %s work units\n", fmtInt(t.PointsTotal), fmtInt(t.WUsTotal))
+	b.WriteString(mcpPerWU(t.PointsPerWU))
 	fmt.Fprintf(&b, "  Per day       %s   (seven-day average)\n", fmtInt(t.PointsPerDay7dAvg))
 	fmt.Fprintf(&b, "  Last 24h      %s\n", fmtInt(t.PointsLast24h))
 	fmt.Fprintf(&b, "  Today (UTC)   %s\n", fmtInt(t.PointsTodayUTC))
@@ -772,6 +774,22 @@ func (s *Snapshot) mcpFooter() string {
 		f += "The expected update has not arrived — this data is older than it should be.\n"
 	}
 	return f
+}
+
+// mcpPerWU reports points per work unit with the one caveat that stops a model
+// turning a ratio into a hardware diagnosis.
+//
+// The figure is worth having: work units differ in value by orders of magnitude
+// between project classes, so it is the only signal in the feed that separates a GPU
+// from a CPU at all. But it is a lifetime average, and a model told "high means GPU"
+// without being told "averaged over everything they have ever folded" will confidently
+// describe last decade's hardware.
+func mcpPerWU(ratio int64) string {
+	if ratio == 0 {
+		return ""
+	}
+	return fmt.Sprintf("  Per WU        %s points   (lifetime average; a rough proxy for hardware "+
+		"class,\n                since GPU projects pay far more per unit than CPU ones)\n", fmtInt(ratio))
 }
 
 func mcpMovement(label string, change *int32) string {

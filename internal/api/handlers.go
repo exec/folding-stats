@@ -43,6 +43,7 @@ func (s *Server) summary(snap *Snapshot, _ *http.Request) (any, *PageInfo, error
 			// divisor is the period the retained deltas cover.
 			PointsPerDay7dAvg:  metrics.PerDay(t.PointsLast7d, snap.Teams.CoveredSpan()),
 			PointsThisMonthUTC: t.PointsThisMonth,
+			PointsPerWU:        perWU(t.PointsTotal, t.WUsTotal),
 		},
 	}, nil, nil
 }
