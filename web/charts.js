@@ -405,10 +405,9 @@ export function seriesChart(el) {
   const chart = new Chart(el, (t, meta, self) => {
     const labels = meta?.labels || [];
     const stacked = !!meta?.stacked;
-    const colour = (i) => t.series[i % t.series.length];
-    // Stacked values arrive already accumulated from the caller, so drawing in order
-    // leaves each segment visible between its neighbour and itself. Overlaid values
-    // are each series' own figure and stand alone.
+    // Colours arrive with the data. A series' colour identifies the team or member it
+    // stands for, so it must not move when a neighbour is hidden.
+    const colours = meta?.colors || labels.map((_, i) => t.series[i % t.series.length]);
     const paths = stacked ? bucketPaths(self) : undefined;
 
     return {
@@ -424,16 +423,16 @@ export function seriesChart(el) {
         ...labels.map((label, i) => ({
           label,
           paths,
-          _swatch: colour(i),
+          _swatch: colours[i],
           // Stacked: solid fills that sit on each other, separated by a hairline of
           // surface so adjacent bands stay legible where they meet.
           //
           // Overlaid: a line each and no fill. Filling would hide whichever series is
           // behind, and this mode exists to compare them — the question is which is
           // higher, not what they sum to.
-          stroke: stacked ? t.surface : colour(i),
+          stroke: stacked ? t.surface : colours[i],
           width: stacked ? 1 : 2,
-          fill: stacked ? colour(i) : undefined,
+          fill: stacked ? colours[i] : undefined,
           points: { show: false },
         })),
       ],
@@ -443,6 +442,11 @@ export function seriesChart(el) {
 }
 
 export const MAX_STACK_SERIES = 6;
+
+/** The series palette, in fixed order, so callers can pin a colour to an entity. */
+export function palette() {
+  return theme().series;
+}
 
 /**
  * Convert per-series values into the cumulative form a stacked chart needs.
@@ -466,17 +470,27 @@ export function stack(seriesValues) {
 }
 
 /** Legend markup for a stacked chart. Always present when there are ≥2 series. */
-export function legend(container, labels) {
+export function legend(container, items, onToggle) {
   container.innerHTML = '';
-  const t = theme();
-  labels.forEach((label, i) => {
-    const item = document.createElement('div');
-    item.className = 'legend-item';
+  items.forEach((it) => {
+    // A button, not a div, when it does something: keyboard reachable, and it
+    // announces its state rather than only looking different.
+    const el = document.createElement(onToggle ? 'button' : 'div');
+    el.className = 'legend-item' + (it.hidden ? ' off' : '');
+    if (onToggle) {
+      el.type = 'button';
+      el.setAttribute('aria-pressed', it.hidden ? 'false' : 'true');
+      el.title = it.hidden ? `Show ${it.label}` : `Hide ${it.label}`;
+      el.addEventListener('click', () => onToggle(it.label));
+    }
     const sw = document.createElement('span');
     sw.className = 'swatch';
-    sw.style.background = t.series[i % t.series.length];
-    item.append(sw, document.createTextNode(label));
-    container.appendChild(item);
+    // The colour belongs to the entity, so it is passed in rather than taken from
+    // this loop's index. Deriving it here would repaint every survivor whenever one
+    // was hidden, which is the one thing a legend must never do.
+    sw.style.background = it.color;
+    el.append(sw, document.createTextNode(it.label));
+    container.appendChild(el);
   });
 }
 

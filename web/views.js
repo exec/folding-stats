@@ -7,7 +7,7 @@
 import { api, snapshot } from '/api.js';
 import { el, clear, card, cardWith, statTile, pager, segmented, notice, loading, errorView, link } from '/ui.js';
 import { n, short, ago, dateTime, delta, tierName, nameText, plural, span, tzName } from '/format.js';
-import { productionChart, seriesChart, stack, legend, densify, perDayPoints, MAX_STACK_SERIES } from '/charts.js';
+import { productionChart, seriesChart, stack, legend, palette, densify, perDayPoints, MAX_STACK_SERIES } from '/charts.js';
 
 const PER_PAGE = 100;
 
@@ -995,6 +995,41 @@ function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyD
     }
   }
 
+  // Labels the reader has switched off, and the last multi-series result to redraw
+  // from. Kept as labels rather than indices because the set outlives a reorder.
+  const hidden = new Set();
+  let drawn = null;
+
+  function draw() {
+    if (!drawn) return;
+    const keep = drawn.labels.map((l) => !hidden.has(l));
+    // Never hide everything: an empty chart is not a view of anything, and the way
+    // back is the legend that just disappeared with it.
+    if (!keep.some(Boolean)) {
+      hidden.clear();
+      keep.fill(true);
+    }
+    const labels = drawn.labels.filter((_, i) => keep[i]);
+    const rows = drawn.rows.filter((_, i) => keep[i]);
+    const colors = drawn.colors.filter((_, i) => keep[i]);
+
+    legend(legendEl,
+      drawn.labels.map((label, i) => ({ label, color: drawn.colors[i], hidden: !keep[i] })),
+      (label) => {
+        hidden.has(label) ? hidden.delete(label) : hidden.add(label);
+        draw();
+      });
+
+    if (chart) chart.destroy();
+    chart = seriesChart(plotEl);
+    // Re-stacked from the visible rows, not merely hidden. The stored values are
+    // cumulative, so dropping a middle band from a finished stack would leave every
+    // band above it still carrying its contribution.
+    const stacked = shape === 'stacked';
+    chart.render([drawn.xs, ...(stacked ? stack(rows) : rows)],
+      { granularity: drawn.granularity, labels, colors, stacked, perDay: drawn.perDay });
+  }
+
   const one = (pts, label, perDay, rescaled) => {
     chart = productionChart(plotEl, label);
     if (!pts.length) {
@@ -1014,6 +1049,7 @@ function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyD
     noteEl.textContent = chartNote(granularity, rate);
     if (chart) chart.destroy();
     clear(legendEl);
+    drawn = null;
 
     const perDay = rate === 'per-day';
     const win = chartSpan();
@@ -1091,15 +1127,20 @@ function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyD
           }
         }
 
-        chart = seriesChart(plotEl);
-        legend(legendEl, labels);
-        const xs = times.map((t) => Math.floor(new Date(t).getTime() / 1000));
-        // Stacked answers "what did they add up to, and who made it up"; overlaid
-        // answers "which of them is ahead". The values differ, not just the marks —
-        // stacking accumulates them and comparing must not.
-        const stacked = shape === 'stacked';
-        chart.render([xs, ...(stacked ? stack(rows) : rows)],
-          { granularity, labels, stacked, perDay });
+        const colours = palette();
+        // Held so a legend click redraws from what is already fetched. Hiding a band
+        // is a question about the same data, not a different one.
+        drawn = {
+          xs: times.map((t) => Math.floor(new Date(t).getTime() / 1000)),
+          rows,
+          labels,
+          // Pinned by position in the full set, so a colour stays with its team or
+          // member however many of its neighbours are hidden.
+          colors: labels.map((_, i) => colours[i % colours.length]),
+          perDay,
+          granularity,
+        };
+        draw();
       } else {
         const res = await fetchFor(selected, { granularity });
         one(res.data.points || [], undefined, perDay, false);
