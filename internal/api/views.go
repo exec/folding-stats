@@ -1,6 +1,7 @@
 package api
 
 import (
+	"math"
 	"sort"
 	"time"
 
@@ -88,9 +89,24 @@ func (s *Snapshot) memberView(slot int32, withTeamName bool) Member {
 	return out
 }
 
+// teamDetailView is teamView plus the figures only a team's own page needs.
+//
+// Separate from teamView rather than a flag on it, because teamView also builds every
+// row of every listing and of the rivals neighbourhood — and standings cost a search
+// over the month ordering, which is worth paying once for the subject and never fifty
+// times for a page.
+func (s *Snapshot) teamDetailView(slot int32) Team {
+	t := s.teamView(slot)
+	t.Standing = s.teamStandings(slot, t.Rank)
+	return t
+}
+
 // donorView aggregates a name across its teams. Rates are summed on demand because a
 // donor is a read-time view over member state (R1), never stored identity.
-func (s *Snapshot) donorView(idx int32, withTeams bool) Donor {
+//
+// detail selects the donor's own page: the per-team breakdown and the standings, both
+// of which cost more than a listing row should and neither of which a listing shows.
+func (s *Snapshot) donorView(idx int32, detail bool) Donor {
 	d := s.Ranks.Donors[idx]
 	members := s.Ranks.DonorMembers(idx)
 
@@ -142,10 +158,69 @@ func (s *Snapshot) donorView(idx int32, withTeams bool) Donor {
 		out.PointsPerDay7dAvg = metrics.PerDay(out.PointsLast7d, observed)
 	}
 
-	if withTeams {
+	if detail {
 		out.Teams, out.TeamsTruncated = s.breakdown(members, maxEmbeddedTeams)
+		out.Standing = s.donorStandings(idx)
 	}
 	return out
+}
+
+/* ------------------------------------------------------------- standings --- */
+
+// shareOf turns a position and a field size into a top-N percentage.
+//
+// Rounded to four decimals rather than left at full float precision: the input is an
+// integer over an integer, and printing 0.5800000000000001 would suggest a measurement
+// far finer than counting two million donors supports.
+func shareOf(rank, of int) *Standing {
+	if rank <= 0 || of <= 0 {
+		return nil
+	}
+	p := float64(rank) / float64(of) * 100
+	return &Standing{TopPercent: math.Round(p*10000) / 10000, Of: of}
+}
+
+// monthStanding places an entity within the month-to-date ordering.
+//
+// The ordering is best-first, so both questions it answers are binary searches rather
+// than scans: the first position whose production falls below the subject's is the
+// count ahead of it, and the first position at zero is where the field stops. That
+// matters — the donor ordering is 2.1M long, and a linear pass over it to answer "top
+// what percent" would cost more than every other figure on the page combined.
+//
+// The field deliberately excludes everyone who produced nothing this month. Counting
+// them would put anyone with a single point in the top few percent of donors, which is
+// arithmetic rather than standing.
+func monthStanding(order []int32, val func(int32) int64, self int64) *Standing {
+	if self <= 0 || len(order) == 0 {
+		return nil
+	}
+	// Strictly greater, not "not less": entities tied with the subject are level with
+	// it, not ahead of it, and counting them as ahead would rank three donors on the
+	// same points differently according to where the sort happened to put them.
+	ahead := sort.Search(len(order), func(i int) bool { return val(order[i]) <= self })
+	of := sort.Search(len(order), func(i int) bool { return val(order[i]) <= 0 })
+	return shareOf(ahead+1, of)
+}
+
+// teamStandings is a team's position by lifetime points and by this month's.
+func (s *Snapshot) teamStandings(slot, pos int32) *Standings {
+	return &Standings{
+		// Lifetime needs no search: the rank is already known and the field is every
+		// team tracked.
+		Lifetime: shareOf(int(pos), s.Totals.Teams),
+		ThisMonth: monthStanding(s.Ranks.TeamOrderFor(rank.ThisMonth),
+			func(i int32) int64 { return rollup(s.TeamMonth, i) }, rollup(s.TeamMonth, slot)),
+	}
+}
+
+// donorStandings is a donor's position by lifetime points and by this month's.
+func (s *Snapshot) donorStandings(idx int32) *Standings {
+	return &Standings{
+		Lifetime: shareOf(int(idx)+1, s.Totals.Donors),
+		ThisMonth: monthStanding(s.Ranks.DonorOrderFor(rank.ThisMonth),
+			s.Ranks.DonorMonth, s.Ranks.DonorMonth(idx)),
+	}
 }
 
 // maxEmbeddedTeams caps the breakdown carried inline on a donor. Real people fold

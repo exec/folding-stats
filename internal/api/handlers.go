@@ -139,7 +139,7 @@ func (s *Server) team(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
 	if !ok {
 		return nil, nil, notFound("no team with id %d", id)
 	}
-	return snap.teamView(slot), nil, nil
+	return snap.teamDetailView(slot), nil, nil
 }
 
 func (s *Server) teamMembers(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {

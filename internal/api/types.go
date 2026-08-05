@@ -123,6 +123,38 @@ type Rival struct {
 	OvertakeAt   *time.Time `json:"overtake_at"`
 }
 
+// Standing is where an entity sits within one ordering, as a share rather than as a
+// position.
+//
+// Rank #48,213 tells a person almost nothing; "top 2.3%" tells them where they are.
+// Both are reported, because the two answer different questions and a rank alone has
+// no scale attached to it.
+type Standing struct {
+	// TopPercent is the share of the field at or above this entity, so smaller is
+	// better and the leader is as close to zero as the field size allows. Named for
+	// what it is rather than "percentile", which conventionally counts the other way
+	// and would invert every reading of it.
+	TopPercent float64 `json:"top_percent"`
+	// Of is the size of the field this share is taken against, which differs by basis
+	// and is the whole reason the number means anything. Lifetime counts everyone
+	// tracked; this_month counts only those who produced this month, because a share
+	// of a field that mostly did nothing flatters everyone who did anything.
+	Of int `json:"of"`
+}
+
+// Standings is one entity's position on each basis, present on detail responses only.
+//
+// Collections omit it deliberately: a percentile within a page of the top fifty is
+// the same number fifty times over, and computing it per row would put a search over
+// two million donors on the listing path to say so.
+type Standings struct {
+	Lifetime *Standing `json:"lifetime,omitempty"`
+	// ThisMonth is absent for an entity that produced nothing this month. That is not
+	// last place — it is not being in the field at all, and reporting "bottom" for it
+	// would be a measurement of something that did not happen.
+	ThisMonth *Standing `json:"this_month,omitempty"`
+}
+
 // PageInfo describes a paginated collection.
 type PageInfo struct {
 	Page       int `json:"page"`
@@ -213,6 +245,9 @@ type Team struct {
 	MembersTotal  int32 `json:"members_total"`
 	MembersActive int32 `json:"members_active"`
 
+	// Standing is present on the detail endpoint only; see Standings.
+	Standing *Standings `json:"standing,omitempty"`
+
 	Production
 }
 
@@ -254,6 +289,9 @@ type Donor struct {
 	// points are real; the single identity is not. Such entries are flagged rather
 	// than hidden so totals still reconcile.
 	LikelyNotAPerson bool `json:"likely_not_a_person"`
+
+	// Standing is present on the detail endpoint only; see Standings.
+	Standing *Standings `json:"standing,omitempty"`
 
 	Production
 

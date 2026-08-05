@@ -439,6 +439,7 @@ func (s *Snapshot) mcpDonor(name string) (string, error) {
 	fmt.Fprintf(&b, "  This week     %s   (weeks start Sunday, UTC)\n", fmtInt(d.PointsThisWeekUTC))
 	fmt.Fprintf(&b, "  This month    %s\n", fmtInt(d.PointsThisMonthUTC))
 	b.WriteString(mcpMovement("  Rank moved    ", d.RankChange24h))
+	b.WriteString(mcpStanding(d.Standing, "donors"))
 
 	fmt.Fprintf(&b, "\nFolds for %d team(s)", d.TeamCount)
 	if len(d.Teams) > 0 {
@@ -464,7 +465,7 @@ func (s *Snapshot) mcpTeam(id *int32, members int) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("no team numbered %d", *id)
 	}
-	t := s.teamView(slot)
+	t := s.teamDetailView(slot)
 	members = clampInt(members, 5, 0, 25)
 
 	var b strings.Builder
@@ -479,6 +480,7 @@ func (s *Snapshot) mcpTeam(id *int32, members int) (string, error) {
 	fmt.Fprintf(&b, "  Members       %s total, %s produced in the last 7 days\n",
 		fmtInt(int64(t.MembersTotal)), fmtInt(int64(t.MembersActive)))
 	b.WriteString(mcpMovement("  Rank moved    ", t.RankChange24h))
+	b.WriteString(mcpStanding(t.Standing, "teams"))
 
 	if members > 0 {
 		roster := s.Ranks.TeamMembers(t.TeamID)
@@ -774,6 +776,47 @@ func (s *Snapshot) mcpFooter() string {
 		f += "The expected update has not arrived — this data is older than it should be.\n"
 	}
 	return f
+}
+
+// mcpStanding states position as a share of the field.
+//
+// A rank on its own has no scale: "#48,213" is meaningless until you know whether the
+// field is fifty thousand or two million, and a model relaying it to someone will
+// either guess or omit the context entirely. The share carries its own denominator, so
+// it cannot be quoted without it.
+func mcpStanding(st *Standings, noun string) string {
+	if st == nil {
+		return ""
+	}
+	var b strings.Builder
+	if s := st.Lifetime; s != nil {
+		fmt.Fprintf(&b, "  Standing      top %s of all %s %s by lifetime points\n",
+			fmtPercent(s.TopPercent), fmtInt(int64(s.Of)), noun)
+	}
+	// Absent means no production this month, which is not last place — it is not being
+	// in the field. Saying so beats leaving a model to infer it from a missing line.
+	if s := st.ThisMonth; s != nil {
+		fmt.Fprintf(&b, "                top %s of the %s %s that produced this month\n",
+			fmtPercent(s.TopPercent), fmtInt(int64(s.Of)), noun)
+	} else if st.Lifetime != nil {
+		fmt.Fprintf(&b, "                nothing produced this month, so no standing among this month's %s\n", noun)
+	}
+	return b.String()
+}
+
+// fmtPercent keeps a share legible across the five orders of magnitude it spans, from
+// a leader at 0.00005%% to the tail at 90%%. A fixed precision would print either
+// "0.00%" for the best in the world or "12.3456%" for somebody mid-table.
+func fmtPercent(p float64) string {
+	switch {
+	case p >= 10:
+		return strconv.FormatFloat(p, 'f', 0, 64) + "%"
+	case p >= 1:
+		return strconv.FormatFloat(p, 'f', 1, 64) + "%"
+	case p >= 0.01:
+		return strconv.FormatFloat(p, 'f', 2, 64) + "%"
+	}
+	return strconv.FormatFloat(p, 'g', 2, 64) + "%"
 }
 
 // mcpPerWU reports points per work unit with the one caveat that stops a model

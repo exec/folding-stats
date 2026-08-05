@@ -2352,3 +2352,55 @@ func TestPointsPerWURoundsAndSurvivesZero(t *testing.T) {
 		}
 	}
 }
+
+func TestMonthStandingMatchesCountingTheFieldByHand(t *testing.T) {
+	// The binary searches are the whole point — a linear pass over 2.1M donors to
+	// answer "top what percent" would cost more than the rest of the page. So they
+	// are checked against the linear pass they replace, over an ordering with ties,
+	// a zero tail, and entities that produced nothing.
+	vals := []int64{900, 500, 500, 500, 120, 40, 40, 7, 0, 0, 0, 0}
+	order := make([]int32, len(vals))
+	for i := range order {
+		order[i] = int32(i)
+	}
+	val := func(i int32) int64 { return vals[i] }
+
+	// The field is everyone who produced, which is where the zeros stop.
+	producers := 0
+	for _, v := range vals {
+		if v > 0 {
+			producers++
+		}
+	}
+
+	for i, v := range vals {
+		got := monthStanding(order, val, v)
+		if v <= 0 {
+			if got != nil {
+				t.Errorf("value %d at %d: got %+v, want no standing for a non-producer", v, i, got)
+			}
+			continue
+		}
+		ahead := 0
+		for _, o := range vals {
+			if o > v {
+				ahead++
+			}
+		}
+		want := shareOf(ahead+1, producers)
+		if got == nil || *got != *want {
+			t.Errorf("value %d at %d: got %+v, want %+v", v, i, got, want)
+		}
+	}
+
+	// Ties share a standing rather than being split by their position in the order:
+	// three donors on 500 points are equally placed, and the ordering between them is
+	// an artefact of the sort, not a fact about them.
+	a, b := monthStanding(order, val, 500), monthStanding(order, val, 500)
+	if *a != *b {
+		t.Errorf("tied entities got different standings: %+v vs %+v", a, b)
+	}
+	if a.TopPercent <= 0 || a.Of != producers {
+		t.Errorf("standing = %+v, want a share of the %d producers", a, producers)
+	}
+}

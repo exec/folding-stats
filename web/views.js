@@ -409,6 +409,67 @@ function rankMovement(change, fallback) {
   return el('span.stat-move', delta(change), ' in 24h');
 }
 
+/** The two bases the Percentile tile can be read on. */
+const BASES = [
+  { value: 'lifetime', label: 'Lifetime', title: 'Share of every team or donor tracked, by lifetime points' },
+  { value: 'this_month', label: 'This month', title: 'Share of those that produced this month' },
+];
+
+/**
+ * A share of the field, formatted across the five orders of magnitude it spans.
+ *
+ * The leader of two million donors is 0.00005% and somebody mid-table is 43%. One
+ * fixed precision cannot serve both: it prints either "0.00%" for the best in the
+ * world, or "43.0000%" for everybody else.
+ */
+function pct(p) {
+  if (p >= 10) return `${p.toFixed(0)}%`;
+  if (p >= 1) return `${p.toFixed(1)}%`;
+  if (p >= 0.01) return `${p.toFixed(2)}%`;
+  return `${Number(p.toPrecision(2))}%`;
+}
+
+/**
+ * Where the entity sits in the field, which is the question a rank only half answers.
+ *
+ * "#48,213" means nothing without knowing whether the field is fifty thousand or two
+ * million, and most people cannot hold that denominator in their head while reading a
+ * page. The share carries it.
+ */
+function standingTile(standing, basis) {
+  const s = standing?.[basis];
+  const hint = 'The share of the field at or above this entity — smaller is better';
+  // Absent on this month is not last place: it is not being in the field at all, and
+  // a percentage would be a measurement of something that did not happen.
+  if (!s) return statTile('Percentile', '—', 'nothing produced this month', hint);
+  return statTile('Percentile', `Top ${pct(s.top_percent)}`,
+    basis === 'lifetime'
+      ? `of ${n(s.of)} tracked, by lifetime points`
+      : `of ${n(s.of)} that produced this month`,
+    hint);
+}
+
+/**
+ * The stats row for an entity's own page, with the basis switch its Percentile tile
+ * needs.
+ *
+ * The switch sits above the grid rather than inside the tile: a tile is 180px at its
+ * narrowest and a two-way control inside one would crowd out the figure it qualifies.
+ * The tile names its own basis in the subtitle, so the pairing survives the distance.
+ */
+function detailStats(d, extra = []) {
+  if (!d.standing) return el('section.section', productionStats(d, extra));
+  let basis = 'lifetime';
+  const bar = el('div.stats-bar');
+  const host = el('div');
+  function draw() {
+    clear(bar).append(segmented(BASES, basis, (v) => { basis = v; draw(); }));
+    clear(host).append(productionStats(d, [...extra, standingTile(d.standing, basis)]));
+  }
+  draw();
+  return el('section.section', bar, host);
+}
+
 /** The production figures every entity shares, as a row of stat tiles. */
 function productionStats(d, extra = []) {
   return el(
@@ -680,11 +741,11 @@ export async function teamDetail(view, { id }, nav) {
           `${n(t.members_active)} active in the last ${activeWindow()}`))
     );
 
-    view.append(el('section.section', productionStats(t, [
+    view.append(detailStats(t, [
       statTile('Rank', `#${n(t.rank)}`,
         rankMovement(t.rank_change_24h, 'by lifetime points'),
         'Rank by lifetime points, and places moved over the last 24 hours'),
-    ])));
+    ]));
 
     const hist = historyCard('Production', (p) => api.teamHistory(t.team_id, p));
     cleanups.push(hist.destroy);
@@ -903,11 +964,11 @@ export async function donorDetail(view, { name }, nav) {
         `rather than one person's record.`)));
     }
 
-    view.append(el('section.section', productionStats(d, [
+    view.append(detailStats(d, [
       statTile('Rank', `#${n(d.rank)}`,
         rankMovement(d.rank_change_24h, 'across all donors'),
         'Rank across all donors, and places moved over the last 24 hours'),
-    ])));
+    ]));
 
     const teams = d.teams || [];
     if (teams.length > 1) {
@@ -1489,6 +1550,16 @@ export async function apiDocs(view) {
         el('strong', 'Field names say what they mean. '),
         el('code', 'points_per_day_7d_avg'),
         ' is the last 7 days divided by 7 — the figure other sites label “24hr avg”, which it is not.'),
+      el('p',
+        el('strong', 'Standing is a share of the field, and only on detail responses. '),
+        el('code', 'standing.lifetime.top_percent'), ' and ',
+        el('code', 'standing.this_month.top_percent'),
+        ' count downward — smaller is better — and each carries the ', el('code', 'of'),
+        ' it was taken against, because the two denominators differ: lifetime is every ' +
+        'entity tracked, while this month is only those that produced this month. ',
+        el('code', 'this_month'), ' is absent for an entity that produced nothing, which ' +
+        'is not last place. Collections omit ', el('code', 'standing'),
+        ' entirely: within a page of the top fifty it is the same number fifty times.'),
       el('p',
         el('strong', 'Points per work unit is a career average, not a hardware reading. '),
         el('code', 'points_per_wu'),

@@ -353,6 +353,15 @@ main { max-width: var(--wide); margin: 0 auto; padding: var(--s6) var(--s5) var(
   border-radius: var(--radius);
   overflow: hidden;
 }
+/* The basis switch for the Percentile tile. It sits above the grid because a tile is
+   180px at its narrowest, and a two-way control inside one would crowd out the figure
+   it qualifies. Right-aligned so it reads as a control over the block rather than as a
+   heading for it. */
+.stats-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--s3);
+}
 .stat { background: var(--surface); padding: var(--s4) var(--s5); }
 .stat-label {
   font-size: 11px;
