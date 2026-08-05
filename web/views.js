@@ -1387,3 +1387,164 @@ export async function apiDocs(view) {
         }, JSON.stringify(snap, null, 2))))));
   }
 }
+
+/* -------------------------------------------------------------- policies --- */
+
+// The policy pages describe what this site actually does, verified against the
+// running system rather than adapted from a template: nginx's log_format and its
+// logrotate retention, fail2ban's dbpurgeage, the absence of any request logging at
+// the origin, and the absence of cookies, third-party scripts and analytics. A policy
+// that overstates collection is as wrong as one that understates it, and this one is
+// unusually easy to keep honest because there is so little to describe.
+const POLICY_UPDATED = '5 August 2026';
+
+/** A titled block of prose paragraphs. */
+function policySection(title, ...paras) {
+  return el('section.section', card(title,
+    el('div.card-body', { style: 'padding-bottom:var(--s4)' },
+      ...paras.map((p, i) => el('p', { style: i === 0 ? 'margin-top:0' : null },
+        ...(Array.isArray(p) ? p : [p]))))));
+}
+
+function policyHead(view, title, sub) {
+  clear(view);
+  view.append(el('div.page-head',
+    el('h1.page-title', title),
+    el('p.page-sub', sub),
+    el('p.page-sub', { style: 'font-size:12px' }, `Last updated ${POLICY_UPDATED}.`)));
+}
+
+export async function privacyPage(view) {
+  policyHead(view, 'Privacy',
+    'What this site collects, why, and for how long. It is a short list.');
+
+  view.append(policySection('The short version',
+    'There are no accounts, no cookies, no tracking scripts, no analytics and no ' +
+    'third-party requests of any kind. Your browser talks to this site and to ' +
+    'nothing else. The only personal data handled is what any web server ' +
+    'unavoidably sees: the address your request came from.'));
+
+  view.append(policySection('What is logged',
+    ['The reverse proxy in front of this site writes one line per request, ' +
+     'containing your IP address, the time, the hostname and path requested, the ' +
+     'response status and size, the referring page if your browser sent one, your ' +
+     'browser’s user-agent string, and an approximate location.'],
+    ['That location is looked up from your IP address in a local database — country, ' +
+     'region, city and the city’s coordinates. It is not read from your device, ' +
+     'it is not GPS, and it is about as precise as the city you appear to be in, ' +
+     'which for many people is not the one they are actually in.'],
+    ['The application itself logs no requests at all. It records only its own ' +
+     'operation: when it fetched from Folding@home, how long a cycle took, how many ' +
+     'rows changed. Nothing in those lines relates to a visitor.']));
+
+  view.append(policySection('How long it is kept',
+    ['Request logs are rotated daily and deleted after 14 days. There is no archive ' +
+     'and no backup of them anywhere else.'],
+    ['Addresses that trip an abuse rule are recorded separately by the blocking ' +
+     'service and discarded after one day.']));
+
+  view.append(policySection('What it is used for',
+    ['Understanding traffic: how much there is, where it comes from, which endpoints ' +
+     'get used, whether something is broken. Deciding whether a rate limit ever ' +
+     'becomes necessary — see the ',
+     link('/api', 'API page'),
+     ' for the position on that, which is that there is none and adding one is a last ' +
+     'resort. And blocking abuse when something hammers the service hard enough to ' +
+     'degrade it for other people.'],
+    ['That is the complete list. The logs are not sold, shared, published, or used to ' +
+     'build a profile of anyone, and no advertising or marketing exists here to use ' +
+     'them for.']));
+
+  view.append(policySection('Cloudflare',
+    ['This site sits behind Cloudflare, which serves it, caches it and absorbs ' +
+     'attacks. Every request therefore passes through their network before reaching ' +
+     'this server, and they process it under their own terms and retention.'],
+    ['That is not an arrangement this site can see inside of or speak for. ',
+     el('a', {
+       href: 'https://www.cloudflare.com/privacypolicy/',
+       target: '_blank', rel: 'noopener noreferrer',
+     }, 'Cloudflare’s privacy policy'),
+     ' covers what they do with it.']));
+
+  view.append(policySection('What is stored in your browser',
+    ['One thing: whether you chose the light or dark theme. It stays on your device, ' +
+     'is never sent anywhere, and clearing your site data removes it.'],
+    ['No cookies are set by this site, so there is no cookie banner to dismiss.']));
+
+  view.append(policySection('Donor and team names',
+    ['The names and statistics shown here come from the public statistics feeds that ' +
+     'Folding@home publishes. This site mirrors that data and derives rates and ' +
+     'rankings from it; it does not create it, and it has no way to identify the ' +
+     'person behind a donor name.'],
+    ['If you want a name changed or removed, that has to happen at Folding@home — ' +
+     'their feed is the source, and anything removed there stops appearing here at ' +
+     'the next update. If that is not working for you, get in touch anyway and it can ' +
+     'be looked at.']));
+
+  view.append(policySection('Getting in touch',
+    ['Questions, corrections, or a request about your own data: open an issue at ',
+     el('a', {
+       href: 'https://github.com/exec/folding-stats/issues',
+       target: '_blank', rel: 'noopener noreferrer',
+     }, 'github.com/exec/folding-stats'),
+     '. Anything that should not be public can say so and a private route will be ' +
+     'arranged.']));
+}
+
+export async function disclaimerPage(view) {
+  policyHead(view, 'Disclaimer',
+    'What this site is, what it is not, and what it does not promise.');
+
+  view.append(policySection('Not affiliated with anyone',
+    ['This site is not run by, endorsed by, or connected to the Folding@home project ' +
+     '— today based at the University of Pennsylvania, after Stanford and Washington ' +
+     'University in St. Louis before it — nor to ExtremeOverclocking, nor to any team ' +
+     'listed on it.'],
+    ['It is an independent mirror of the statistics Folding@home publishes. The ' +
+     'underlying data is theirs and they give it away; the derived figures, the ' +
+     'rankings and the mistakes in them are this site’s own.']));
+
+  view.append(policySection('The data is provided as is',
+    ['Everything here is offered without warranty of any kind — no guarantee that it ' +
+     'is accurate, current, complete, or fit for any purpose you have in mind.'],
+    ['Folding@home publishes cumulative totals. Every rate, ranking, delta and ' +
+     'projection on this site is derived by comparing one published snapshot against ' +
+     'the next, which means an upstream error, a missed publish or an outage here ' +
+     'propagates into the derived figures. Where a figure is not yet reliable the ' +
+     'site says so rather than presenting it as settled.'],
+    ['History begins on 3 August 2026, when collection started. Lifetime totals come ' +
+     'from upstream and go back to the beginning; anything requiring a comparison ' +
+     'between two moments only exists from that date onward.']));
+
+  view.append(policySection('Projections are guesses',
+    ['Where the site says when one team or donor might overtake another, it is ' +
+     'assuming both hold their current rate forever. Nobody does. It is a guess ' +
+     'presented as a date, it is rounded to admit that, and it should not be treated ' +
+     'as a forecast of anything.']));
+
+  view.append(policySection('No guarantee of availability',
+    ['This is a free service run by one person on hardware that is not a data centre. ' +
+     'It may be slow, unavailable, or discontinued, with or without notice. The API ' +
+     'may change; breaking changes will be avoided where reasonably possible, but ' +
+     'nothing here is a commitment to a stable interface forever.'],
+    ['If you build something on it, build it to tolerate the site being down.']));
+
+  view.append(policySection('Limitation of liability',
+    ['To the fullest extent permitted by law, the operator of this site accepts no ' +
+     'liability for any loss or damage arising from use of it or reliance on anything ' +
+     'it shows — including decisions made on the basis of a figure that turns out to ' +
+     'be wrong, and including any interruption, error, or discontinuation of the ' +
+     'service or its API.'],
+    ['Nothing here is advice of any kind. It is a scoreboard for a distributed ' +
+     'computing project.']));
+
+  view.append(policySection('The software',
+    ['The site is open source under the MIT license, which carries its own warranty ' +
+     'disclaimer covering the code itself. That is a separate thing from this page, ' +
+     'which is about the service and the data. ',
+     el('a', {
+       href: 'https://github.com/exec/folding-stats',
+       target: '_blank', rel: 'noopener noreferrer',
+     }, 'github.com/exec/folding-stats'),
+     '.']));
+}

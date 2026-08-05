@@ -131,6 +131,8 @@ const routes = [
   [/^\/donors\/(.+?)\/?$/, (m) => views.donorDetail(view, { name: decodeURIComponent(m[1]) }, navigate)],
   [/^\/search\/?$/, (m, q) => views.searchPage(view, { q: q.get('q') || '' }, navigate)],
   [/^\/api\/?$/, () => views.apiDocs(view)],
+  [/^\/privacy\/?$/, () => views.privacyPage(view)],
+  [/^\/disclaimer\/?$/, () => views.disclaimerPage(view)],
 ];
 
 let rendering = false;
