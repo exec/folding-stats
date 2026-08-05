@@ -206,6 +206,13 @@ func Handler() (http.Handler, error) {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clean := path.Clean(r.URL.Path)
 
+		if clean == robotsPath {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("Cache-Control", "public, max-age=86400")
+			io.WriteString(w, robotsTxt())
+			return
+		}
+
 		if clean == securityTxtPath {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.Header().Set("Cache-Control", "public, max-age=86400")
@@ -320,4 +327,49 @@ func securityTxt(now time.Time, r *http.Request) string {
 		"Preferred-Languages: en\n" +
 		"Canonical: " + base + securityTxtPath + "\n" +
 		"Policy: " + base + "/disclaimer\n"
+}
+
+// robotsPath is the crawler policy, which for this site is an invitation.
+const robotsPath = "/robots.txt"
+
+// robotsTxt states the policy the project was founded on.
+//
+// The appetite for programmatic Folding@home statistics is what put pressure on the
+// site this one exists to relieve. Automated clients are therefore the point here,
+// not a problem to be managed, and the policy says so in the two places a machine
+// reads: an unrestricted Allow, and a Content-Signal granting search and AI input.
+//
+// The named crawlers are listed explicitly and redundantly. A bare "User-agent: *"
+// already permits them, but a CDN or a future intermediary that injects its own
+// managed policy will list those names with Disallow — being explicit means the
+// disagreement is visible in one file rather than silently resolved against us.
+//
+// ai-train is deliberately absent. Under the Content Signals policy an omitted
+// signal neither grants nor restricts, which is the honest position for a decision
+// nobody has actually made: "reachable by AI agents" and "licensed for model
+// training" are different questions, and only the first one has been answered.
+func robotsTxt() string {
+	agents := []string{
+		"ClaudeBot", "Claude-User", "Claude-SearchBot", "GPTBot", "OAI-SearchBot",
+		"CCBot", "Google-Extended", "Applebot-Extended", "Amazonbot", "Bytespider",
+		"meta-externalagent", "PerplexityBot", "cohere-ai",
+	}
+	var b strings.Builder
+	b.WriteString("# Automated clients are welcome here. That is the point of the site.\n")
+	b.WriteString("#\n")
+	b.WriteString("# Before crawling these pages: there is a free, unauthenticated JSON API at\n")
+	b.WriteString("# /api covering everything the HTML shows. No key, no sign-up, no challenge\n")
+	b.WriteString("# page. It is cheaper for you and for us than parsing rendered pages, and it\n")
+	b.WriteString("# is the interface that will not change shape under you.\n")
+	b.WriteString("#\n")
+	b.WriteString("# Please read /v1/status and cache against next_expected_at rather than\n")
+	b.WriteString("# polling: the data changes once an hour and not otherwise.\n")
+	b.WriteString("\n")
+	b.WriteString("User-agent: *\n")
+	b.WriteString("Content-Signal: search=yes, ai-input=yes\n")
+	b.WriteString("Allow: /\n")
+	for _, a := range agents {
+		b.WriteString("\nUser-agent: " + a + "\nAllow: /\n")
+	}
+	return b.String()
 }

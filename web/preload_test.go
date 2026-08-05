@@ -281,3 +281,50 @@ func TestSecurityTxt(t *testing.T) {
 		t.Error("output did not change across months; Expires would eventually pass")
 	}
 }
+
+// TestRobotsTxt pins the crawler policy, which for this site is an invitation rather
+// than a restriction.
+//
+// The failure that matters is silent: /robots.txt previously fell through to the SPA
+// shell and returned an HTML document under a 200, so a crawler parsing it found no
+// directives at all and every rule here was simply absent.
+func TestRobotsTxt(t *testing.T) {
+	h, err := Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/robots.txt", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Errorf("content type %q, want text/plain", ct)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "<!doctype") || strings.Contains(body, "<html") {
+		t.Fatal("robots.txt is serving the HTML shell; a crawler sees no directives at all")
+	}
+	if strings.Contains(body, "Disallow:") {
+		t.Errorf("robots.txt contains a Disallow; this site allows everything:\n%s", body)
+	}
+	if !strings.Contains(body, "User-agent: *") || !strings.Contains(body, "Allow: /") {
+		t.Errorf("no blanket allow:\n%s", body)
+	}
+	// The named AI agents are listed explicitly, so a CDN injecting its own managed
+	// policy disagrees with us visibly rather than quietly winning.
+	for _, a := range []string{"ClaudeBot", "GPTBot", "CCBot", "Google-Extended", "PerplexityBot"} {
+		if !strings.Contains(body, "User-agent: "+a) {
+			t.Errorf("%s is not explicitly allowed", a)
+		}
+	}
+	// Access was asked for; training was not. An omitted signal grants nothing and
+	// restricts nothing, which is the honest state of a decision not yet made.
+	if !strings.Contains(body, "ai-input=yes") || !strings.Contains(body, "search=yes") {
+		t.Errorf("content signals do not grant search and ai-input:\n%s", body)
+	}
+	if strings.Contains(body, "ai-train") {
+		t.Error("ai-train is stated; it was deliberately left unspecified")
+	}
+}
