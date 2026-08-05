@@ -1644,11 +1644,11 @@ export async function agentsPage(view) {
     rows.append(el('tr',
       el('td.left', el('code', name)),
       el('td.left.muted', el('code', args)),
-      el('td.left', what)));
+      el('td.left.wrap', what)));
   }
   view.append(el('section.section', card('The tools',
     el('div.table-wrap', el('table.data',
-      el('thead', el('tr', el('th.left', 'Tool'), el('th.left', 'Arguments'), el('th.left', ''))),
+      el('thead', el('tr', el('th.left', 'Tool'), el('th.left', 'Arguments'), el('th.left.wrap', 'Answers'))),
       rows)))));
 
   view.append(el('section.section', card('Why these and not the REST routes',

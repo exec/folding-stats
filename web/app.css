@@ -493,6 +493,13 @@ table.data tbody tr { transition: background 90ms ease; }
 table.data tbody tr:hover { background: var(--surface-hover); }
 table.data tbody tr:last-child td { border-bottom: 0; }
 
+/* Prose inside a data table. The nowrap above is right for a leaderboard — a number
+   broken across lines is unreadable, and every other table here is numbers — but
+   wrong for a column of sentences, which is what the tool list on /agents is. Opt in
+   per cell rather than relaxing the default. */
+table.data td.wrap, table.data th.wrap { white-space: normal; }
+table.data td.wrap { min-width: 24ch; }
+
 .rank { color: var(--ink-muted); font-size: 13px; width: 1%; }
 .name-cell {
   max-width: 34ch;
