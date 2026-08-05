@@ -674,11 +674,22 @@ table.data td.wrap { min-width: 24ch; }
  * line already shows the position, so if it does not draw there is nothing left
  * pointing at anything.
  */
-.u-hz .u-cursor-x {
+.u-cursor-x {
+  /* Not `.u-hz .u-cursor-x` like uPlot's own rule. Its height and its border both
+     come from that descendant selector and nowhere else, so if the orientation class
+     is ever missing the element still exists — positioned, zero-sized, borderless,
+     and invisible. Setting both here means the line does not depend on a class we do
+     not control. */
+  height: 100% !important;
   border-right: 2px solid var(--ink-muted) !important;
 }
 /* The horizontal half is off in cursor(); belt and braces if that ever changes. */
-.u-hz .u-cursor-y { border-bottom: 0 !important; }
+.u-cursor-y { border-bottom: 0 !important; }
+
+/* The plot responds to the pointer, so the pointer should say so. uPlot sets no
+   cursor style on the hit area, which leaves an arrow over a chart that has a
+   crosshair and a tooltip waiting behind it. */
+.u-over { cursor: crosshair; }
 
 .u-tooltip {
   position: absolute;
