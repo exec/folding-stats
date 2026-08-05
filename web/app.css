@@ -655,6 +655,31 @@ table.data td.wrap { min-width: 24ch; }
 .legend-item { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-secondary); }
 .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
 
+/* The crosshair, restyled.
+ *
+ * uPlot ships it as `1px dashed #607D8B` from its own stylesheet — one hard-coded
+ * blue-grey for both themes, and a hairline dashed border landing on fractional
+ * device pixels, which is the kind of thing browsers disagree about rendering at all.
+ * Reported invisible in Safari.
+ *
+ * So it is ours: solid rather than dashed, 2px so no rounding can drop it, and in a
+ * theme variable rather than one hex for both.
+ *
+ * --ink-muted, chosen by measuring rather than by name: it clears 3:1 against both
+ * surfaces (4.85:1 dark, 3.50:1 light) without the 9.7:1 of --ink-secondary, which
+ * would put a crosshair louder than the data it points at. --line-strong was the
+ * obvious-sounding pick and is 1.48:1 — fainter than the uPlot default it replaces.
+ *
+ * It matters more than it looks: the hover dots were removed on the grounds that this
+ * line already shows the position, so if it does not draw there is nothing left
+ * pointing at anything.
+ */
+.u-hz .u-cursor-x {
+  border-right: 2px solid var(--ink-muted) !important;
+}
+/* The horizontal half is off in cursor(); belt and braces if that ever changes. */
+.u-hz .u-cursor-y { border-bottom: 0 !important; }
+
 .u-tooltip {
   position: absolute;
   z-index: 20;
