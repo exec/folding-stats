@@ -196,6 +196,24 @@ Every response carries a `snapshot` block describing freshness, then the data.
 - Responses over 1 KB are gzipped and `Vary: Accept-Encoding`. The ETag differs by
   encoding.
 
+### MCP
+
+There is a Model Context Protocol server at `/mcp` — JSON-RPC 2.0 over POST, no key,
+no session, permissive CORS. It offers seven tools: `search`, `get_donor`, `get_team`,
+`leaderboard`, `production_history`, `compare` and `project_status`.
+
+They are deliberately **not** a wrapper over the routes above. Exposing each endpoint
+as a tool would make "is my team catching up to theirs?" cost five round trips — find
+an id, page a leaderboard, fetch two entities, pull two histories, do the arithmetic —
+with five chances to get the join wrong. `compare` answers it in one call and states
+the projection's assumption in the same breath. Every tool returns prose with the
+numbers already formatted and the age of the data attached, because a model quoting a
+figure without knowing how old it is is the failure this endpoint would otherwise
+invite.
+
+If you are writing a program rather than an agent, use the REST API: it is cheaper,
+paginated, and returns structured JSON rather than text meant to be read.
+
 ### Rate limits
 
 There are none, and adding one is a last resort rather than a plan. The applications

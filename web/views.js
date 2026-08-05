@@ -1249,6 +1249,27 @@ export async function apiDocs(view) {
         endpoint('GET', '/v1/search', '?q= name prefix, exact name, or team ID')
       ))))));
 
+  view.append(el('section.section', card('MCP — for AI agents',
+    el('div.card-body', { style: 'padding-bottom:0' },
+      el('p', { style: 'margin-top:0' },
+        'There is a Model Context Protocol server at ', el('code', '/mcp'),
+        ' — JSON-RPC over POST, no key, no session. Point an MCP client at ',
+        el('code', 'https://folding.exec.codes/mcp'), ' and it gets seven tools: ',
+        el('code', 'search'), ', ', el('code', 'get_donor'), ', ', el('code', 'get_team'), ', ',
+        el('code', 'leaderboard'), ', ', el('code', 'production_history'), ', ',
+        el('code', 'compare'), ' and ', el('code', 'project_status'), '.'),
+      el('p',
+        'The tools are shaped like questions rather than like the routes above. ',
+        el('code', 'compare'),
+        ' answers "is my team catching them?" in one call — the gap, who is gaining, ' +
+        'and when one would pass the other — instead of making a model fetch two ' +
+        'entities and do the arithmetic. Every answer carries the age of the data it ' +
+        'came from.'),
+      el('p', { style: 'margin-bottom:0' },
+        'If you are writing a program rather than an agent, the REST API above is the ' +
+        'better interface. This one exists because a model asking a question should ' +
+        'not have to page a leaderboard to get an answer.')))));
+
   view.append(el('section.section', card('Rate limits',
     el('div.card-body', { style: 'padding-bottom:0' },
       el('p', { style: 'margin-top:0' },

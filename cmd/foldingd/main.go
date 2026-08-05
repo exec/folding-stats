@@ -81,6 +81,8 @@ func run(dir, addr, ua string, poll, compactAfter, keepDaily, keepRaw time.Durat
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", srv)
+	// Model Context Protocol, for clients that want an answer rather than data.
+	mux.Handle("/mcp", srv.MCPHandler())
 	mux.Handle("/", site)
 
 	// Catch up on anything archived while we were down before accepting traffic,
