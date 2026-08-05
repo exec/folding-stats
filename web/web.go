@@ -47,6 +47,8 @@ type site struct {
 	files map[string][]byte
 	index []byte
 	build string
+	// preload is the shell's render-blocking assets, as a Link header.
+	preload string
 }
 
 func newSite() (*site, error) {
@@ -90,7 +92,52 @@ func newSite() (*site, error) {
 	if s.index == nil {
 		return nil, fmt.Errorf("web: index.html missing from embedded assets")
 	}
+	s.preload = preloadLink(s.index)
 	return s, nil
+}
+
+// shellStyle and shellScript find what the shell needs before it can paint.
+var (
+	shellStyle  = regexp.MustCompile(`<link[^>]+rel="stylesheet"[^>]+href="([^"]+)"`)
+	shellScript = regexp.MustCompile(`<script[^>]+src="([^"]+)"`)
+)
+
+// preloadLink builds the Link header advertising the shell's render-blocking assets.
+//
+// The point of it is Early Hints: a CDN caches these headers and replays them as a
+// 103 before the origin has answered, so the browser can start fetching the CSS and
+// the module while the shell itself is still in flight. That matters here because the
+// shell is deliberately no-cache — every single load revalidates it before the
+// browser learns that any of this exists.
+//
+// Read out of index.html rather than listed by hand. A hint is a claim about a
+// document made before that document arrives, so a hardcoded list that drifted would
+// preload files the page no longer uses and stay silent about the ones it does —
+// and it would do so invisibly, because a wrong preload still renders correctly, just
+// slower than before. Parsing the shell keeps the claim and the document identical by
+// construction.
+//
+// Stylesheets first: they block rendering, the module does not.
+func preloadLink(index []byte) string {
+	var parts []string
+	add := func(href, as string) {
+		// Inline data: URIs are already present — the favicon is one — and there is
+		// nothing to fetch.
+		if href == "" || strings.HasPrefix(href, "data:") {
+			return
+		}
+		parts = append(parts, fmt.Sprintf("<%s>; rel=preload; as=%s", href, as))
+	}
+	for _, m := range shellStyle.FindAllSubmatch(index, -1) {
+		add(string(m[1]), "style")
+	}
+	for _, m := range shellScript.FindAllSubmatch(index, -1) {
+		// as=script rather than rel=modulepreload: Cloudflare only commits to
+		// caching preload and preconnect, and a hint it drops is worth less than a
+		// slightly less precise one it keeps.
+		add(string(m[1]), "script")
+	}
+	return strings.Join(parts, ", ")
 }
 
 func sortStrings(s []string) {
@@ -131,6 +178,12 @@ func Handler() (http.Handler, error) {
 		// The shell is the one thing that must never be cached: it carries the
 		// version stamp that invalidates everything else.
 		w.Header().Set("Cache-Control", "no-cache")
+		// Sent on the real response so a CDN can cache it and replay it as a 103
+		// Early Hint ahead of the next one. Harmless where nothing does: browsers
+		// treat it as an ordinary preload directive.
+		if s.preload != "" {
+			w.Header().Set("Link", s.preload)
+		}
 		http.ServeContent(w, r, "index.html", time.Time{}, strings.NewReader(string(s.index)))
 	}), nil
 }
