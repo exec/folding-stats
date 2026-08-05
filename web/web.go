@@ -49,6 +49,39 @@ type site struct {
 	build string
 	// preload is the shell's render-blocking assets, as a Link header.
 	preload string
+	// The shape of the embedded tree: extensions that appear at its root, and the
+	// directories it occupies. Together they say which paths are asset requests.
+	assetExts map[string]bool
+	assetDirs map[string]bool
+}
+
+// isAsset reports whether a path addresses the embedded asset tree rather than a
+// client-side route.
+//
+// "Has an extension" is the obvious test and it is wrong, because a donor name is a
+// path segment and 57,039 of them contain a dot. /donors/Mr.Hello has the extension
+// ".Hello", so the obvious test sent every one of those to 404 on direct load — the
+// page worked when clicked through in the app and broke the moment anyone shared the
+// link, which is the one thing a stats page is for.
+//
+// The asset tree is shallow and known: files at the root, plus whatever directories
+// it embeds. So an asset request is one that names a file we have, or that sits at
+// the root carrying an extension the tree actually uses, or that lives under one of
+// its directories. Anything deeper belongs to the router, which is where every client
+// route with a user-supplied segment lives.
+func (s *site) isAsset(clean string) bool {
+	if _, ok := s.files[clean]; ok {
+		return true
+	}
+	rest := strings.TrimPrefix(clean, "/")
+	if dir, _, nested := strings.Cut(rest, "/"); nested {
+		// Under an embedded directory, a miss is a miss — a stale /vendor/ import
+		// must not resolve to HTML.
+		return s.assetDirs[dir]
+	}
+	// At the root, an extension the tree uses means a missing module or stylesheet,
+	// which has to 404 rather than quietly return the shell.
+	return s.assetExts[path.Ext(clean)]
 }
 
 func newSite() (*site, error) {
@@ -93,6 +126,19 @@ func newSite() (*site, error) {
 		return nil, fmt.Errorf("web: index.html missing from embedded assets")
 	}
 	s.preload = preloadLink(s.index)
+
+	s.assetExts = map[string]bool{}
+	s.assetDirs = map[string]bool{}
+	for n := range s.files {
+		rest := strings.TrimPrefix(n, "/")
+		if dir, _, nested := strings.Cut(rest, "/"); nested {
+			s.assetDirs[dir] = true
+			continue
+		}
+		if e := path.Ext(n); e != "" {
+			s.assetExts[e] = true
+		}
+	}
 	return s, nil
 }
 
@@ -159,10 +205,10 @@ func Handler() (http.Handler, error) {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clean := path.Clean(r.URL.Path)
 
-		// A path with an extension is an asset request: serve it or 404, rather
-		// than returning the SPA shell under a JavaScript content type — which
-		// fails in the browser in a thoroughly confusing way.
-		if path.Ext(clean) != "" {
+		// Serve it or 404 if it is an asset request, rather than returning the SPA
+		// shell under a JavaScript content type — which fails in the browser in a
+		// thoroughly confusing way.
+		if s.isAsset(clean) {
 			body, ok := s.files[clean]
 			if !ok {
 				http.NotFound(w, r)

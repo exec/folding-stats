@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -113,5 +114,93 @@ func TestShellResponseCarriesTheLinkHeader(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/app.css?v="+s.build, nil))
 	if got := rec.Header().Get("Link"); got != "" {
 		t.Errorf("asset response carries a preload header: %q", got)
+	}
+}
+
+// TestDottedRoutesReachTheShell covers the split between an asset request and a
+// client route.
+//
+// A donor name is a path segment, and 2.69% of them — 57,039 people — contain a dot.
+// Treating "has an extension" as "is an asset" sent every one of those to 404 on
+// direct load: the page worked when clicked through inside the app and broke the
+// instant anyone pasted the link, which is the entire purpose of a stats page.
+func TestDottedRoutesReachTheShell(t *testing.T) {
+	h, err := Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := newSite()
+
+	shell := func(path string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s: status %d, want 200 — a shared link to this page is dead", path, rec.Code)
+			return
+		}
+		if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+			t.Errorf("%s: content type %q, want html", path, ct)
+		}
+	}
+	missing := func(path string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s: status %d, want 404 — a missing asset must not resolve to the shell",
+				path, rec.Code)
+		}
+	}
+	asset := func(path, wantType string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s: status %d, want 200", path, rec.Code)
+			return
+		}
+		if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, wantType) {
+			t.Errorf("%s: content type %q, want %s", path, ct, wantType)
+		}
+	}
+
+	// Real donor names from the production corpus.
+	for _, name := range []string{
+		"Mr.Hello", "Patrick.Paquet", "g.l", "45363.pinzgauer",
+		"tnt.uni-hannover.de", "[Zebulon.fr]_Gtevoone82",
+		"PantyShot(www.overclockers.com)",
+		// A name that looks exactly like an asset is still a donor at this depth.
+		"app.js", "index.html",
+	} {
+		shell("/donors/" + url.PathEscape(name))
+	}
+	shell("/teams")
+	shell("/donors")
+	shell("/overview")
+	shell("/posts/some.slug.with.dots")
+
+	// The protection this replaced must survive: a missing module at the root, and a
+	// stale import under an embedded directory, both have to 404 rather than hand
+	// back HTML under a JavaScript content type.
+	missing("/nonexistent.js")
+	missing("/nonexistent.css")
+	missing("/vendor/gone.js")
+	missing("/vendor/nested/deep.css")
+
+	// An extension the asset tree does not use cannot be a missing module, so it
+	// falls through to the shell and the client router renders its own not-found.
+	// That is the same fallback that makes a dotted donor name work at all.
+	shell("/app.notanext")
+
+	// And real assets still serve.
+	asset("/app.js", "text/javascript")
+	asset("/app.css", "text/css")
+	asset("/app.js?v="+s.build, "text/javascript")
+	for n := range s.files {
+		if strings.HasPrefix(n, "/vendor/") && strings.HasSuffix(n, ".js") {
+			asset(n, "text/javascript")
+			break
+		}
 	}
 }
