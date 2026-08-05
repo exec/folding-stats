@@ -116,7 +116,7 @@ func (f *Fetcher) Fetch(ctx context.Context, k Kind, prev Validator, sink io.Wri
 		LastModified: resp.Header.Get("Last-Modified"),
 		ETag:         resp.Header.Get("ETag"),
 	}
-	meta.SnapshotAt = snapshotTime(meta.LastModified, meta.FetchedAt)
+	meta.SnapshotAt = snapshotTime(meta.LastModified, meta.FetchedAt, meta.FetchedAt)
 
 	// Count what crossed the wire before anything decompresses it.
 	wire := &countingReader{r: resp.Body}
@@ -176,12 +176,36 @@ func indexByte(b []byte, c byte) int {
 	return -1
 }
 
+// futureSkewGrace is how far ahead of our own clock a Last-Modified may sit before it
+// is treated as wrong rather than as news.
+//
+// Sized to absorb ordinary disagreement between two machines — a minute or two of NTP
+// drift either way — while staying far below the hourly publish interval, so a header
+// that is wrong by enough to matter can never be mistaken for one that is merely
+// early.
+const futureSkewGrace = 5 * time.Minute
+
 // snapshotTime prefers upstream's Last-Modified, which identifies the publish rather
 // than our discovery of it. Two archivers polling at different times must agree on a
 // snapshot's identity, so falling back to fetch time is a last resort.
-func snapshotTime(lastModified string, fallback time.Time) time.Time {
+//
+// A header dated in the future is refused. Snapshot instants become state.At, which is
+// restored from MAX(ts) at startup, and ingest only accepts snapshots newer than it —
+// so one bad timestamp does not cause a wrong reading, it stops ingest dead. Every
+// subsequent real publish looks older than the future date and is skipped, silently,
+// with no error and no recovery on restart, until wall clock catches up to whatever
+// the header claimed. An origin two hours fast would cost two hours of history; a
+// header with the wrong year would cost the site.
+//
+// Falling back to fetch time is right rather than merely safe: fetch time is what the
+// field means when upstream does not say, and it is within seconds of the truth for a
+// publish we polled for.
+func snapshotTime(lastModified string, fallback time.Time, now time.Time) time.Time {
 	if lastModified != "" {
 		if t, err := http.ParseTime(lastModified); err == nil {
+			if t.After(now.Add(futureSkewGrace)) {
+				return fallback.UTC()
+			}
 			return t.UTC()
 		}
 	}
