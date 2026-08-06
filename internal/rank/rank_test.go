@@ -523,3 +523,61 @@ func TestDonorMembersAreInRankOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestNewSince24hCountsArrivalsNotMemberships(t *testing.T) {
+	// Arrivals are read from the same baselines rank movement uses, so they cost
+	// nothing — but the three counts are not interchangeable. A donor already here
+	// joining a second team creates a membership and no donor; a genuinely new name
+	// creates both.
+	st := model.NewState()
+	mw, tw := metrics.New(0), metrics.New(0)
+
+	t0 := now()
+	applyCycle(st, mw, tw, t0, []parse.TeamRow{{ID: 1, Name: "one", Score: 300, WUs: 3}},
+		[]parse.UserRow{u("a", 100, 1), u("b", 200, 1)})
+
+	t1 := t0.Add(25 * time.Hour)
+	applyCycle(st, mw, tw, t1,
+		[]parse.TeamRow{{ID: 1, Name: "one", Score: 400, WUs: 4}, {ID: 2, Name: "two", Score: 50, WUs: 1}},
+		[]parse.UserRow{
+			u("a", 150, 1), u("b", 200, 1),
+			u("a", 30, 2), // an existing donor on a new team: a membership, not a donor
+			u("c", 20, 2), // a new name: both
+		})
+
+	tbl := Build(st, t1, DefaultConfig)
+	tbl.BuildChange24h(st, mw, tw)
+
+	donors, teams, members, ok := tbl.NewSince24h(len(st.Members), len(st.Teams))
+	if !ok {
+		t.Fatal("no arrivals reported after a day was observed")
+	}
+	if donors != 1 {
+		t.Errorf("new donors = %d, want 1 — only c is a name we had not seen", donors)
+	}
+	if teams != 1 {
+		t.Errorf("new teams = %d, want 1", teams)
+	}
+	if members != 2 {
+		t.Errorf("new members = %d, want 2 — a's second team and c's first", members)
+	}
+}
+
+func TestNewSince24hIsUnavailableBeforeADayHasPassed(t *testing.T) {
+	// Nobody is new when there is nothing to be new since. Reporting zero would be a
+	// measurement never taken, the same trap rank_change_24h avoids.
+	st := model.NewState()
+	mw, tw := metrics.New(0), metrics.New(0)
+
+	t0 := now()
+	applyCycle(st, mw, tw, t0, []parse.TeamRow{{ID: 1, Name: "one", Score: 100, WUs: 1}}, []parse.UserRow{u("a", 100, 1)})
+	applyCycle(st, mw, tw, t0.Add(time.Hour), []parse.TeamRow{{ID: 1, Name: "one", Score: 200, WUs: 2}},
+		[]parse.UserRow{u("a", 200, 2)})
+
+	tbl := Build(st, t0.Add(time.Hour), DefaultConfig)
+	tbl.BuildChange24h(st, mw, tw)
+
+	if _, _, _, ok := tbl.NewSince24h(len(st.Members), len(st.Teams)); ok {
+		t.Error("arrivals reported after one hour; want none until 24h is observed")
+	}
+}

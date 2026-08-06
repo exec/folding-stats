@@ -317,6 +317,20 @@ type Summary struct {
 	// donors on several teams contribute one member row per team.
 	MembersTotal int `json:"members_total"`
 
+	// NewDonors24h, NewTeams24h and NewMembers24h count arrivals over the last 24
+	// hours — the same baseline rank_change_24h is measured against.
+	//
+	// New means first seen in the feed, which is not quite the same as newly created:
+	// a donor who renames themselves arrives here as a new name and departs as an old
+	// one. Memberships exceed donors because an existing donor joining another team
+	// creates a member row without creating a donor.
+	//
+	// Pointers, because absent and zero differ: absent means less than a day has been
+	// observed and nobody can be called new yet.
+	NewDonors24h  *int `json:"new_donors_24h,omitempty"`
+	NewTeams24h   *int `json:"new_teams_24h,omitempty"`
+	NewMembers24h *int `json:"new_members_24h,omitempty"`
+
 	Production
 }
 

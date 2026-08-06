@@ -755,6 +755,12 @@ func (s *Snapshot) mcpStatus() string {
 	fmt.Fprintf(&b, "  Teams           %s total, %s producing\n",
 		fmtInt(int64(s.Totals.Teams)), fmtInt(int64(s.Totals.TeamsActive)))
 	fmt.Fprintf(&b, "  Members         %s   (a member is one donor on one team)\n", fmtInt(int64(s.Totals.Members)))
+	if d, t, m, ok := s.Ranks.NewSince24h(s.Totals.Members, s.Totals.Teams); ok {
+		fmt.Fprintf(&b, "\n  Arrived in 24h  %s donors, %s teams, %s memberships\n",
+			fmtInt(int64(d)), fmtInt(int64(t)), fmtInt(int64(m)))
+		b.WriteString("                  A donor already here joining another team makes a membership\n" +
+			"                  but not a donor, which is why the two differ.\n")
+	}
 
 	if w := warmingUp(s); w != nil && w.HistorySpanSec > 0 {
 		fmt.Fprintf(&b, "\n  Still warming up: only %s of history has been collected, so seven-day\n"+

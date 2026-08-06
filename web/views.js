@@ -583,6 +583,26 @@ function historyCard(title, fetcher) {
   return { node, destroy: () => chart.destroy() };
 }
 
+/**
+ * Who turned up in the last day.
+ *
+ * Every other figure on the overview is about how much is being produced. This is the
+ * only one about the project still gaining people, which is a different question and
+ * the one that says whether Folding@home is alive.
+ *
+ * Absent is not zero: before a full day has been observed there is no baseline to be
+ * new since, and printing "0 new donors" then would report a measurement never taken.
+ */
+function arrivalsTile(d) {
+  if (d.new_donors_24h === undefined || d.new_donors_24h === null) {
+    return statTile('New donors', '—', `nothing to compare against yet`,
+      'Donors seen for the first time in the last 24 hours');
+  }
+  return statTile('New donors', short(d.new_donors_24h),
+    `in 24h · ${n(d.new_teams_24h)} new teams`,
+    'Donors and teams seen for the first time in the last 24 hours');
+}
+
 /* ------------------------------------------------------------- overview --- */
 
 export async function overview(view) {
@@ -622,7 +642,8 @@ export async function overview(view) {
             `of ${n(d.donors_total)} — produced in the last ${activeWindow()}`),
           statTile('Active teams', short(d.teams_active), `of ${n(d.teams_total)}`),
           statTile('Last 24 hours', short(d.points_last_24h), 'points across the project'),
-          statTile('Work units', short(d.wus_total), n(d.wus_total))
+          statTile('Work units', short(d.wus_total), n(d.wus_total)),
+          arrivalsTile(d)
         )
       )
     );

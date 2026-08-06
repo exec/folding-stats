@@ -101,6 +101,7 @@ type Table struct {
 	donorChange    []int32
 	memberBaseline int32
 	teamBaseline   int32
+	donorBaseline  int32
 	donorKnown     []bool
 
 	// Period orders for the leaderboard tabs, best-first, parallel to TeamOrder and
@@ -726,6 +727,27 @@ func (t *Table) donorChange24h(st *model.State, w *metrics.Window) {
 		change[d] = int32(pos) + 1 - (d + 1)
 	}
 	t.donorChange, t.donorKnown = change, known
+	t.donorBaseline = int32(len(idx))
+}
+
+// NewSince24h reports how many donors, teams and members have appeared since the
+// baseline the rank movement is measured against.
+//
+// It costs nothing to answer, because the baselines already exist: slots are assigned
+// in first-sighting order, so "did not exist a day ago" is a comparison against a
+// count rather than a timestamp, and that count is what rank movement is computed from.
+// Reading it here is the difference between arrivals being knowable and needing an
+// index over 2.7M first_seen values to ask.
+//
+// ok is false before a full day has been observed, matching rank movement: nobody is
+// new when there is nothing to be new since.
+func (t *Table) NewSince24h(members, teams int) (newDonors, newTeams, newMembers int, ok bool) {
+	if t.donorChange == nil || t.memberBaseline == 0 || t.teamBaseline == 0 {
+		return 0, 0, 0, false
+	}
+	return max(len(t.Donors)-int(t.donorBaseline), 0),
+		max(teams-int(t.teamBaseline), 0),
+		max(members-int(t.memberBaseline), 0), true
 }
 
 // MemberChange24h reports a member's rank movement over the last 24 hours, positive

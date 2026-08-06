@@ -25,7 +25,7 @@ func (s *Server) status(snap *Snapshot, _ *http.Request) (any, *PageInfo, error)
 
 func (s *Server) summary(snap *Snapshot, _ *http.Request) (any, *PageInfo, error) {
 	t := snap.Totals
-	return Summary{
+	out := Summary{
 		TeamsTotal:   t.Teams,
 		TeamsActive:  t.TeamsActive,
 		DonorsTotal:  t.Donors,
@@ -45,7 +45,11 @@ func (s *Server) summary(snap *Snapshot, _ *http.Request) (any, *PageInfo, error
 			PointsThisMonthUTC: t.PointsThisMonth,
 			PointsPerWU:        perWU(t.PointsTotal, t.WUsTotal),
 		},
-	}, nil, nil
+	}
+	if d, tm, m, ok := snap.Ranks.NewSince24h(t.Members, t.Teams); ok {
+		out.NewDonors24h, out.NewTeams24h, out.NewMembers24h = &d, &tm, &m
+	}
+	return out, nil, nil
 }
 
 // posts lists published articles, newest first.
