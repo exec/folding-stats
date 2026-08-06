@@ -981,8 +981,19 @@ func (s *Snapshot) mcpGoal(kind, who string, targetRank int, targetPoints int64,
 			s.mcpFooter(), nil
 	}
 
+	// Already ahead, but being caught. This is a different question with the same
+	// arithmetic behind it, and asking it as "what would it take to overtake" produces
+	// a negative gap and a negative rate — both technically the right numbers for a
+	// question nobody asked. Reframed, the same figures answer the real one: how long
+	// the lead lasts, and what it would take to keep it.
+	holding := self.score >= goal.score
+
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s → %s\n\n", self.name, what)
+	if holding {
+		fmt.Fprintf(&b, "%s is already ahead of %s — but losing ground\n\n", self.name, goal.name)
+	} else {
+		fmt.Fprintf(&b, "%s → %s\n\n", self.name, what)
+	}
 	fmt.Fprintf(&b, "  Now           %s points, %s/day\n", fmtInt(self.score), fmtInt(self.rate))
 	if goal.rate > 0 {
 		fmt.Fprintf(&b, "  Target        %s points, %s/day — and still climbing\n",
@@ -990,7 +1001,12 @@ func (s *Snapshot) mcpGoal(kind, who string, targetRank int, targetPoints int64,
 	} else {
 		fmt.Fprintf(&b, "  Target        %s points\n", fmtInt(goal.score))
 	}
-	fmt.Fprintf(&b, "  Gap today     %s points\n", fmtInt(goal.score-self.score))
+	if holding {
+		fmt.Fprintf(&b, "  Lead today    %s points, shrinking by %s a day\n",
+			fmtInt(self.score-goal.score), fmtInt(goal.rate-self.rate))
+	} else {
+		fmt.Fprintf(&b, "  Gap today     %s points\n", fmtInt(goal.score-self.score))
+	}
 
 	needed := func(days float64) int64 {
 		// The target moves too, so the finish line is where it will be, not where it
@@ -1009,13 +1025,25 @@ func (s *Snapshot) mcpGoal(kind, who string, targetRank int, targetPoints int64,
 			return "", fmt.Errorf("%s is not in the future", by)
 		}
 		rate := needed(days)
-		fmt.Fprintf(&b, "\n  By %s (%s away) it would take %s points a day.\n",
-			when.Format("2 January 2006"), humanDays(days), fmtInt(rate))
-		switch {
-		case self.rate <= 0:
+		date, away := when.Format("2 January 2006"), humanDays(days)
+		verb := "it would take"
+		if holding {
+			verb = "staying ahead would take"
+		}
+		// A non-positive requirement is not a rate, it is the answer "nothing": the
+		// target is still behind on that date whatever happens. Printing the negative
+		// number instead is how the first version of this reported that the way to
+		// overtake somebody was to lose six billion points a day.
+		if rate <= 0 {
+			fmt.Fprintf(&b, "\n  Nothing is needed by %s (%s away): the target is still behind\n"+
+				"  on that date even at a standstill.\n", date, away)
+			return b.String() + goalCaveat(goal) + s.mcpFooter(), nil
+		}
+		fmt.Fprintf(&b, "\n  By %s (%s away) %s %s points a day.\n", date, away, verb, fmtInt(rate))
+		if self.rate <= 0 {
 			b.WriteString("  There is no current rate to compare that against — nothing has been\n" +
 				"  produced in the last seven days.\n")
-		default:
+		} else {
 			fmt.Fprintf(&b, "  That is %.1f× the current %s/day.\n",
 				float64(rate)/float64(self.rate), fmtInt(self.rate))
 		}
@@ -1026,19 +1054,42 @@ func (s *Snapshot) mcpGoal(kind, who string, targetRank int, targetPoints int64,
 	// would each cost, since "how long" and "how much faster" are the same question
 	// asked from either end.
 	_, days, at := projectOvertake(time.Now().UTC(), self.score, self.rate, goal.score, goal.rate)
-	if days == nil {
+	switch {
+	case days == nil && holding:
+		b.WriteString("\n  The lead holds for now: at these rates it would take longer than a decade\n" +
+			"  to be caught.\n")
+	case days == nil:
 		b.WriteString("\n  At the current rate this never happens: the gap is widening, or would take\n" +
 			"  longer than a decade to close.\n")
-	} else {
+	case holding:
+		// projectOvertake is symmetric — it reports when the two swap, whichever side
+		// is doing the catching. Said as "you arrive in 16 months" when the mover is
+		// the other party, it means the opposite of the truth.
+		fmt.Fprintf(&b, "\n  At these rates the lead is gone in about %s, around %s.\n",
+			humanDays(*days), at.Format("2 January 2006"))
+	default:
 		fmt.Fprintf(&b, "\n  At the current rate: about %s, around %s.\n",
 			humanDays(*days), at.Format("2 January 2006"))
 	}
-	b.WriteString("\n  To do it sooner:\n")
+
+	title, wrote := "\n  To do it sooner:\n", false
+	if holding {
+		title = "\n  To still be ahead:\n"
+	}
 	for _, h := range []struct {
 		days  float64
 		label string
 	}{{30, "30 days"}, {90, "90 days"}, {365, "a year"}} {
 		rate := needed(h.days)
+		// Skip the horizons that ask for nothing rather than quoting a negative rate;
+		// see the note on the dated branch.
+		if rate <= 0 {
+			continue
+		}
+		if !wrote {
+			b.WriteString(title)
+			wrote = true
+		}
 		line := fmt.Sprintf("    in %-9s %s points a day", h.label, fmtInt(rate))
 		if self.rate > 0 {
 			line += fmt.Sprintf("   (%.1f× the current rate)", float64(rate)/float64(self.rate))

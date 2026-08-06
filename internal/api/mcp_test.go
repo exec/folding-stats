@@ -537,3 +537,76 @@ func extractRate(t *testing.T, text, marker string) int64 {
 	}
 	return v
 }
+
+func TestGoalNeverAsksForANegativeRate(t *testing.T) {
+	// Being ahead of somebody who is producing faster is a real position, and asking
+	// "what would it take to overtake them" from there is the wrong question with a
+	// negative answer. The first version printed it: a gap of -226 billion, and a plan
+	// to overtake by losing six billion points a day.
+	//
+	// The same arithmetic answers the question that was meant — how long the lead
+	// lasts, and what holding it costs — so the output is reframed rather than refused.
+	srv := aheadButCaughtFixture(t)
+	for _, args := range []string{
+		`{"kind":"donors","who":"leader","overtake":"chaser"}`,
+		`{"kind":"donors","who":"leader","overtake":"chaser","by":"2026-08-20"}`,
+	} {
+		got := mcpText(t, srv, "what_would_it_take", args)
+		if strings.Contains(got, "-") && strings.Contains(got, "points a day") {
+			for _, line := range strings.Split(got, "\n") {
+				if strings.Contains(line, "points a day") && strings.Contains(line, "-") {
+					t.Errorf("%s produced a negative rate: %q", args, strings.TrimSpace(line))
+				}
+			}
+		}
+		if strings.Contains(got, "Gap today     -") {
+			t.Errorf("%s reported a negative gap:\n%s", args, got)
+		}
+		if !strings.Contains(got, "already ahead") {
+			t.Errorf("%s did not reframe as holding a lead:\n%s", args, got)
+		}
+	}
+}
+
+// aheadButCaughtFixture builds a donor who leads on points and trails on rate.
+func aheadButCaughtFixture(t *testing.T) *Server {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "ahead.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	state := model.NewState()
+	memberWin, teamWin := metrics.New(0), metrics.New(0)
+	ctx := context.Background()
+
+	cycles := []struct {
+		when  time.Time
+		users []parse.UserRow
+	}{
+		{at(1), []parse.UserRow{u("leader", 100000, 32), u("chaser", 10000, 32)}},
+		// The chaser produces ten times as much over the same period, and is still
+		// well behind on the total.
+		{at(1).Add(30 * time.Hour), []parse.UserRow{u("leader", 101000, 32), u("chaser", 20000, 32)}},
+	}
+	var last time.Time
+	for _, c := range cycles {
+		cy := state.Apply(c.when, []parse.TeamRow{tr(32, "team", 121000)}, c.users)
+		if err := st.WriteCycle(ctx, state, cy, store.CycleMeta{
+			TeamSnapshotAt: c.when, UserSnapshotAt: c.when}); err != nil {
+			t.Fatal(err)
+		}
+		memberWin.Grow(len(state.Members))
+		memberWin.Push(c.when, cy.MemberDeltas)
+		teamWin.Grow(len(state.Teams))
+		teamWin.Push(c.when, cy.TeamDeltas)
+		last = c.when
+	}
+
+	tbl := rank.Build(state, last, rank.DefaultConfig)
+	tbl.BuildOrders(state, memberWin, teamWin, nil, nil)
+	srv := NewServer()
+	srv.Publish(Build(state, memberWin, teamWin, tbl, st, last, last.Add(time.Hour), "ahead-etag"))
+	return srv
+}
