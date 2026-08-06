@@ -63,7 +63,7 @@ func Commands() []*discordgo.ApplicationCommand {
 		}
 	}
 
-	return []*discordgo.ApplicationCommand{
+	return anywhere([]*discordgo.ApplicationCommand{
 		{Name: "me", Description: "Your own folding stats (after /link)"},
 		{
 			Name: "link", Description: "Remember which donor name is yours, so /me works",
@@ -117,10 +117,42 @@ func Commands() []*discordgo.ApplicationCommand {
 			},
 		},
 		{Name: "status", Description: "Project totals and how fresh the data is"},
-	}
+	})
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// anywhere makes a command available however the app was installed.
+//
+// Nothing this bot does needs a guild: every command is a read against a public API
+// and the only state it keeps is keyed by Discord user id, which exists in a DM as
+// readily as in a channel. So it is installable to a user as well as to a server, and
+// usable in DMs, group DMs, and servers the app was never added to.
+//
+// Without these two fields a command defaults to guild-install only, which is the
+// quiet failure here: the app advertises user installation, the install succeeds, and
+// then no commands appear.
+//
+// One consequence worth knowing rather than working around: used in a server where
+// only the *user* installed it, Discord makes the reply ephemeral — visible to the
+// person who ran it and nobody else. That is right for /me and wrong for /top, which
+// is why installing to the server as well is still worth doing.
+func anywhere(cmds []*discordgo.ApplicationCommand) []*discordgo.ApplicationCommand {
+	types := []discordgo.ApplicationIntegrationType{
+		discordgo.ApplicationIntegrationGuildInstall,
+		discordgo.ApplicationIntegrationUserInstall,
+	}
+	contexts := []discordgo.InteractionContextType{
+		discordgo.InteractionContextGuild,
+		discordgo.InteractionContextBotDM,
+		discordgo.InteractionContextPrivateChannel,
+	}
+	for _, c := range cmds {
+		c.IntegrationTypes = &types
+		c.Contexts = &contexts
+	}
+	return cmds
+}
 
 /* ------------------------------------------------------------- dispatch --- */
 

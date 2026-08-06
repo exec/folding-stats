@@ -280,3 +280,50 @@ func TestCommandsAreValidForDiscord(t *testing.T) {
 		}
 	}
 }
+
+// TestCommandsAreInstallableAnywhere pins the user-app configuration.
+//
+// A command with no integration_types defaults to guild-install only, and the failure
+// is silent in the worst way: the app offers user installation, the install succeeds,
+// and then the user has no commands and nothing says why.
+func TestCommandsAreInstallableAnywhere(t *testing.T) {
+	for _, c := range Commands() {
+		if c.IntegrationTypes == nil || len(*c.IntegrationTypes) != 2 {
+			t.Errorf("%s: expected both guild and user install", c.Name)
+			continue
+		}
+		var user, guild bool
+		for _, it := range *c.IntegrationTypes {
+			user = user || it == discordgo.ApplicationIntegrationUserInstall
+			guild = guild || it == discordgo.ApplicationIntegrationGuildInstall
+		}
+		if !user || !guild {
+			t.Errorf("%s: integration types = %v", c.Name, *c.IntegrationTypes)
+		}
+		// Usable in a DM is the whole point of a user install; a command restricted
+		// to guilds would install and then be unreachable.
+		if c.Contexts == nil || len(*c.Contexts) != 3 {
+			t.Errorf("%s: expected guild, bot DM and private channel contexts", c.Name)
+		}
+	}
+}
+
+// TestUserIDResolvesOutsideAGuild covers the context a user install mostly runs in.
+//
+// In a guild the invoker is Interaction.Member.User; in a DM, Member is nil and the
+// invoker is Interaction.User. Reading only the first would make every /me in a DM
+// look like an unlinked account.
+func TestUserIDResolvesOutsideAGuild(t *testing.T) {
+	inGuild := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		Member: &discordgo.Member{User: &discordgo.User{ID: "guild-user"}},
+	}}
+	inDM := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		User: &discordgo.User{ID: "dm-user"},
+	}}
+	if got := userID(inGuild); got != "guild-user" {
+		t.Errorf("in a guild userID = %q", got)
+	}
+	if got := userID(inDM); got != "dm-user" {
+		t.Errorf("in a DM userID = %q", got)
+	}
+}
