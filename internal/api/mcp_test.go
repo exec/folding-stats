@@ -412,3 +412,51 @@ func TestTeamActivitySeparatesStoppedFromSurgingFromNew(t *testing.T) {
 		t.Errorf("joiners reported without the first-sighting caveat:\n%s", got)
 	}
 }
+
+func TestMoversSeparatesClimbersFromFallers(t *testing.T) {
+	// What is actually load-bearing here is the sign guard, not the sort: it is what
+	// keeps an entity out of the section its movement contradicts. A climber listed
+	// under "Fell" reads as plausible on real data and would survive a glance, so it is
+	// asserted line by line rather than by spot-checking one name.
+	//
+	// The ordering within a section is not exercised — this fixture has a single mover,
+	// so there is nothing to order.
+	got := mcpText(t, rankChangeFixture(t), "movers", `{"kind":"donors","within":100}`)
+
+	climbed, fell := section(got, "Climbed"), section(got, "Fell")
+	if climbed == "" && fell == "" {
+		t.Fatalf("no movement reported at all:\n%s", got)
+	}
+	// faller drops two places as climber and a newcomer land above it.
+	if !strings.Contains(fell, "faller") {
+		t.Errorf("faller is not among the fallers:\n%s", got)
+	}
+	if strings.Contains(climbed, "faller") {
+		t.Errorf("faller is listed as a climber:\n%s", got)
+	}
+	// Every line in a section must agree with its heading's sign.
+	for _, c := range []struct {
+		body string
+		want bool // true when the sign should be positive
+	}{{climbed, true}, {fell, false}} {
+		for _, line := range strings.Split(c.body, "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "-") {
+				continue
+			}
+			if got := strings.HasPrefix(line, "+"); got != c.want {
+				t.Errorf("line %q is in the wrong section", line)
+			}
+		}
+	}
+}
+
+// section returns the body of one titled block of a tool's output.
+func section(text, title string) string {
+	for _, part := range strings.Split(text, "\n\n") {
+		if strings.HasPrefix(part, title+":") {
+			return part
+		}
+	}
+	return ""
+}

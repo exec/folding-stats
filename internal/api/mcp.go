@@ -309,6 +309,23 @@ func mcpTools() []mcpTool {
 			},
 		},
 	}, {
+		Name:  "movers",
+		Title: "Who climbed and who fell",
+		Description: "The biggest rank movements over the last 24 hours, within the top of " +
+			"a ranking. Bounded to the top on purpose: further down, thousands of entities " +
+			"are separated by a handful of points, so the largest movements there are ties " +
+			"reshuffling and say nothing about anybody.",
+		InputSchema: map[string]any{
+			"type":     "object",
+			"required": []any{"kind"},
+			"properties": map[string]any{
+				"kind":      map[string]any{"type": "string", "enum": []any{"teams", "donors"}, "description": "Which ranking."},
+				"direction": map[string]any{"type": "string", "enum": []any{"up", "down", "both"}, "description": "Climbers, fallers, or both. Default both."},
+				"within":    intSchema("How far down the ranking to look. Default 1000, max 10000."),
+				"limit":     intSchema("How many to list per direction. Default 10, max 25."),
+			},
+		},
+	}, {
 		Name:  "team_activity",
 		Title: "What changed on a team",
 		Description: "What is different about a team's roster today: members who were " +
@@ -363,6 +380,8 @@ func (s *Server) mcpCall(r *http.Request, snap *Snapshot, name string, raw json.
 		A           string `json:"a"`
 		B           string `json:"b"`
 		Who         string `json:"who"`
+		Direction   string `json:"direction"`
+		Within      int    `json:"within"`
 		TeamID      *int32 `json:"team_id"`
 		Limit       int    `json:"limit"`
 		Members     int    `json:"members"`
@@ -396,6 +415,8 @@ func (s *Server) mcpCall(r *http.Request, snap *Snapshot, name string, raw json.
 		return snap.mcpRivals(a.Kind, a.Who, a.Span)
 	case "team_activity":
 		return snap.mcpTeamActivity(a.TeamID, a.Limit)
+	case "movers":
+		return snap.mcpMovers(a.Kind, a.Direction, a.Within, a.Limit)
 	case "project_status":
 		return snap.mcpStatus(), nil
 	}
@@ -832,6 +853,104 @@ func (s *Snapshot) mcpCompare(kind, aRef, bRef string) (string, error) {
 		b.WriteString("\n  That is a projection, not a forecast: it assumes both sides hold today's\n" +
 			"  seven-day average forever, which nobody with a job or a power bill does.\n")
 	}
+	return b.String() + s.mcpFooter(), nil
+}
+
+// mcpMovers reports the biggest rank movements near the top of a ranking.
+//
+// Bounded to the top deliberately, and the bound is the whole design. Rank movement is
+// largest exactly where it means least: past a few thousand places down, entities are
+// separated by a handful of points, so a single work unit vaults somebody twenty
+// thousand places and an unbounded "biggest movers" list is a readout of who happened
+// to break a tie. Near the top, the same movement takes real production.
+func (s *Snapshot) mcpMovers(kind, direction string, within, limit int) (string, error) {
+	if direction == "" {
+		direction = "both"
+	}
+	if direction != "up" && direction != "down" && direction != "both" {
+		return "", fmt.Errorf("direction must be \"up\", \"down\" or \"both\"")
+	}
+	within = clampInt(within, 1000, 10, 10000)
+	limit = clampInt(limit, 10, 1, 25)
+
+	type mover struct {
+		name   string
+		rank   int32
+		change int32
+		rate   int64
+	}
+	var all []mover
+	var field int
+
+	switch kind {
+	case "teams":
+		order := s.Ranks.TeamOrder
+		field = len(order)
+		for _, slot := range order[:min(within, len(order))] {
+			c, ok := s.Ranks.TeamChange24h(slot)
+			if !ok || c == 0 {
+				continue
+			}
+			v := s.teamView(slot)
+			all = append(all, mover{fmt.Sprintf("%s (team %d)", v.Name, v.TeamID), v.Rank, c, v.PointsPerDay7dAvg})
+		}
+	case "donors":
+		field = len(s.Ranks.Donors)
+		for i := 0; i < min(within, field); i++ {
+			c, ok := s.Ranks.DonorChange24h(int32(i))
+			if !ok || c == 0 {
+				continue
+			}
+			v := s.donorView(int32(i), false)
+			all = append(all, mover{v.Name, v.Rank, c, v.PointsPerDay7dAvg})
+		}
+	default:
+		return "", fmt.Errorf("kind must be \"teams\" or \"donors\"")
+	}
+
+	if len(all) == 0 {
+		return fmt.Sprintf("Nothing in the top %s %s moved in the last 24 hours — or less "+
+			"than a day of history has been observed, in which case there is no earlier "+
+			"ranking to compare against.", fmtInt(int64(within)), kind), nil
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Biggest 24-hour rank movements in the top %s of %s %s\n",
+		fmtInt(int64(within)), fmtInt(int64(field)), kind)
+
+	show := func(title string, up bool) {
+		sort.Slice(all, func(i, j int) bool {
+			if up {
+				return all[i].change > all[j].change
+			}
+			return all[i].change < all[j].change
+		})
+		var shown int
+		var body strings.Builder
+		for _, m := range all {
+			if shown == limit || (up && m.change <= 0) || (!up && m.change >= 0) {
+				break
+			}
+			fmt.Fprintf(&body, "  %+5d  #%-8s %-36s %12s/day\n",
+				m.change, fmtInt(int64(m.rank)), truncate(m.name, 36), fmtInt(m.rate))
+			shown++
+		}
+		if shown == 0 {
+			return
+		}
+		fmt.Fprintf(&b, "\n%s:\n%s", title, body.String())
+	}
+
+	if direction != "down" {
+		show("Climbed", true)
+	}
+	if direction != "up" {
+		show("Fell", false)
+	}
+
+	b.WriteString("\nMovement is places gained or lost since 24 hours ago, and is measured against\n" +
+		"the corpus as it stood then — an entity that did not exist a day ago has no\n" +
+		"earlier rank and is not listed.\n")
 	return b.String() + s.mcpFooter(), nil
 }
 
