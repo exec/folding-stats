@@ -1589,8 +1589,8 @@ export async function apiDocs(view) {
       ))))));
 
   view.append(el('section.section', card('MCP — for AI agents',
-    el('div.card-body', { style: 'padding-bottom:0' },
-      el('p', { style: 'margin-top:0' },
+    el('div.card-body',
+      el('p',
         'There is a Model Context Protocol server at ', el('code', '/mcp'),
         // Counted, not stated. This sentence said "seven" for as long as there were
         // eleven — the same drift the note above MCP_TOOLS describes, in the one
@@ -1598,14 +1598,14 @@ export async function apiDocs(view) {
         ` — ${MCP_TOOLS.length} tools shaped like questions rather than like the routes ` +
         'above, so an agent can ask "is my team catching them?" in one call instead of five. ',
         link('/agents', 'How to connect →')),
-      el('p', { style: 'margin-bottom:0' },
+      el('p',
         'If you are writing a program rather than an agent, the REST API on this page ' +
         'is the better interface: cheaper, paginated, and structured JSON rather than ' +
         'text meant to be read.')))));
 
   view.append(el('section.section', card('Discord bot',
-    el('div.card-body', { style: 'padding-bottom:0' },
-      el('p', { style: 'margin-top:0' },
+    el('div.card-body',
+      el('p',
         'The same data as slash commands: ', el('code', '/donor'), ', ', el('code', '/team'),
         ', ', el('code', '/top'), ', ', el('code', '/compare'), ', ', el('code', '/rivals'),
         ', ', el('code', '/movers'), ', ', el('code', '/goal'), ' — and ', el('code', '/link'),
@@ -1613,7 +1613,7 @@ export async function apiDocs(view) {
         ' answers without typing it. ',
         el('a', { href: DISCORD_INVITE, target: '_blank', rel: 'noopener noreferrer' },
           'Add it to a server or to your account →')),
-      el('p', { style: 'margin-bottom:0' },
+      el('p',
         'Installable either way: to a server, where everyone can use it, or to your ' +
         'own account, where the commands follow you into any server and any DM without ' +
         'the server having to add anything. It reads this API like any other client, ' +
@@ -1621,8 +1621,8 @@ export async function apiDocs(view) {
         'one request an hour.')))));
 
   view.append(el('section.section', card('Rate limits',
-    el('div.card-body', { style: 'padding-bottom:0' },
-      el('p', { style: 'margin-top:0' },
+    el('div.card-body',
+      el('p',
         'There are none, and adding one is a last resort rather than a plan. ' +
         'Applications that call this heavily are often the most useful ones to the ' +
         'community, and a limit set defensively would break them before they were ' +
@@ -1648,8 +1648,8 @@ export async function apiDocs(view) {
         ', so you can cache precisely instead of polling.')))));
 
   view.append(el('section.section', card('Sorting leaderboards',
-    el('div.card-body', { style: 'padding-bottom:0' },
-      el('p', { style: 'margin-top:0' },
+    el('div.card-body',
+      el('p',
         el('code', '?sort='), ' on ', el('code', '/v1/teams'), ' and ', el('code', '/v1/donors'),
         ' orders by any numeric column, descending, defaulting to ', el('code', 'lifetime'),
         '. Every key names the field it sorts by, so the column you see and the key you ' +
@@ -1682,7 +1682,7 @@ export async function apiDocs(view) {
 
   view.append(el('section.section', card('Notes',
     el('div.card-body',
-      el('p', { style: 'margin-top:0' },
+      el('p',
         el('strong', 'Every response carries a '), el('code', 'snapshot'),
         ' block with the upstream publish time and when the next one is due. ' +
         'Cache against it rather than polling.'),
@@ -1783,7 +1783,7 @@ export async function apiDocs(view) {
         ' says how long it has been held, so now is ', el('code', 'server_time'),
         ' plus ', el('code', 'Age'), '. Or read ', el('code', '/v1/status'),
         ', which is never cached.'),
-      el('p', { style: 'margin-bottom:0' },
+      el('p',
         el('strong', 'Names are raw upstream text. '),
         'They may contain tabs, newlines and non-ASCII; URL-encode them in paths.')),
       el('div.card-body', { style: 'border-top:1px solid var(--line)' },
@@ -1818,8 +1818,8 @@ const POLICY_UPDATED = '5 August 2026';
 /** A titled block of prose paragraphs. */
 function policySection(title, ...paras) {
   return el('section.section', card(title,
-    el('div.card-body', { style: 'padding-bottom:var(--s4)' },
-      ...paras.map((p, i) => el('p', { style: i === 0 ? 'margin-top:0' : null },
+    el('div.card-body',
+      ...paras.map((p) => el('p',
         ...(Array.isArray(p) ? p : [p]))))));
 }
 
@@ -2170,12 +2170,12 @@ export async function agentsPage(view) {
       steps.append(el('p', { style: i === 0 ? 'margin-top:var(--s3)' : undefined }, s.text));
       if (s.code) steps.append(el('pre.code-block', el('code', s.code)));
     });
-    steps.append(el('p.muted', { style: 'margin-bottom:0' }, ...c.note));
+    steps.append(el('p.muted', ...c.note));
   }
   drawConnect();
 
   view.append(el('section.section', card('Connect',
-    el('div.card-body', { style: 'padding-bottom:var(--s4)' }, tabHost, steps))));
+    el('div.card-body', tabHost, steps))));
 
   const rows = el('tbody');
   for (const [name, args, what] of MCP_TOOLS) {
@@ -2190,8 +2190,8 @@ export async function agentsPage(view) {
       rows)))));
 
   view.append(el('section.section', card('Why these and not the REST routes',
-    el('div.card-body', { style: 'padding-bottom:var(--s4)' },
-      el('p', { style: 'margin-top:0' },
+    el('div.card-body',
+      el('p',
         'The obvious design is one tool per endpoint. It is also the wrong one. Asking ' +
         '"is my team catching up to theirs?" that way costs five round trips — find an ' +
         'id, page a leaderboard, fetch two entities, pull two histories, do the ' +
@@ -2201,27 +2201,27 @@ export async function agentsPage(view) {
         'the same breath as the number: the projection holds both sides at their ' +
         'current seven-day average forever, which nobody does. A caveat that travels ' +
         'separately from the figure it qualifies is a caveat nobody repeats.'),
-      el('p', { style: 'margin-bottom:0' },
+      el('p',
         'Every answer also carries the age of the data it came from. A model quoting a ' +
         'figure without knowing how old it is is the failure an endpoint like this ' +
         'invites, and nothing downstream can catch it.')))));
 
   view.append(el('section.section', card('A worked call',
-    el('div.card-body', { style: 'padding-bottom:var(--s4)' },
+    el('div.card-body',
       el('pre.code-block', el('code',
         `curl -X POST ${origin}/mcp \\\n` +
         `  -H 'content-type: application/json' \\\n` +
         `  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",\n` +
         `       "params":{"name":"compare","arguments":\n` +
         `         {"kind":"teams","a":"51","b":"32"}}}'`)),
-      el('p', { style: 'margin-bottom:0' },
+      el('p',
         'Tool failures come back as results with ', el('code', 'isError'),
         ' rather than as protocol errors, so a wrong name tells you how to find the ' +
         'right one instead of looking like the server is down.')))));
 
   view.append(el('section.section', card('Crawling instead',
-    el('div.card-body', { style: 'padding-bottom:0' },
-      el('p', { style: 'margin-top:0' },
+    el('div.card-body',
+      el('p',
         'Automated clients are welcome here generally — see ',
         el('a', { href: '/robots.txt' }, 'robots.txt'),
         ', which allows everything and names the AI agents explicitly. There are no ' +
@@ -2231,7 +2231,7 @@ export async function agentsPage(view) {
         ' has everything the HTML shows, costs us both less, and will not change shape ' +
         'under you. Cache against ', el('code', 'next_expected_at'),
         ' rather than polling — the data changes once an hour and not otherwise.'),
-      el('p', { style: 'margin-bottom:0' },
+      el('p',
         'And if you want to mirror the whole corpus, ',
         el('a', { href: '/api' }, el('code', '/v1/changes')),
         ' exists for exactly that. Roughly 550 teams and 1,800 donors move in a given ' +

@@ -335,6 +335,32 @@ main { max-width: var(--wide); margin: 0 auto; padding: var(--s6) var(--s5) var(
 .card-title { font-weight: 600; font-size: 14px; }
 .card-body { padding: var(--s5); }
 
+/* Paragraphs keep the browser's 1em margins, so every card holding prose cancelled
+   them by hand: padding-bottom:0 on the body, margin-top:0 on the first paragraph,
+   margin-bottom:0 on the last, repeated at twenty call sites. What that produced was
+   a box padded 24px along the top and nothing along the bottom — the text sat on the
+   border, and it read as though the card had been cut off mid-sentence. Collapsing
+   the outer margins here restores symmetric padding everywhere at once, and a card
+   that wants a different bottom gap can still say so. */
+.card-body > :first-child { margin-top: 0; }
+.card-body > :last-child { margin-bottom: 0; }
+
+/* A link inside a paragraph has to look like one.
+   The global rule is `color: inherit; text-decoration: none`, which is right for a
+   leaderboard — a column of donor names is obviously clickable from context, and
+   painting it accent-blue would be noise. In prose it is wrong: the link becomes
+   indistinguishable from the sentence around it, revealed only on hover, which a
+   touchscreen does not have. Anchors carrying a class keep their own styling. */
+.card-body a:not([class]) {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Same reasoning: the footer mixes plain spans with links, so with no underline the
+   two are the same text at the same weight in the same colour. */
+footer a { text-decoration: underline; text-underline-offset: 2px; }
+
 .section { margin-bottom: var(--s6); }
 .section-head {
   display: flex;
