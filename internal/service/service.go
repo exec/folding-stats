@@ -408,7 +408,13 @@ func (s *Service) publish() {
 	rebuilt := s.tbl == nil || !s.tblAt.Equal(s.state.At)
 	var memBefore, memBuilt memSample
 	if rebuilt {
-		memBefore = readMem()
+		// Collected, so it is comparable with the peak that follows. An uncollected
+		// baseline carries an hour of accumulated request garbage, which made
+		// table_cost come out *negative* — the build appeared to free memory,
+		// because the collection that ran during it swept more than the new table
+		// added. Collecting first also hands the build a clean heap to allocate
+		// into, which lowers the peak rather than only describing it.
+		memBefore = readMemSettled()
 		tbl := rank.Build(s.state, s.state.At, rank.DefaultConfig)
 		tbl.BuildChange24h(s.state, s.memberWin, s.teamWin)
 		tbl.BuildOrders(s.state, s.memberWin, s.teamWin, s.teamMonth, s.memberMonth)

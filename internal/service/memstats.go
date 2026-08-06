@@ -83,7 +83,12 @@ func logMemory(log *slog.Logger, before, built, after memSample, donors, members
 		"live_before_mb", before.liveMB,
 		"live_at_peak_mb", built.liveMB,
 		"live_after_mb", after.liveMB,
-		"table_cost_mb", int64(built.liveMB)-int64(before.liveMB),
+		// An upper bound, not a measurement: before is collected and built is not,
+		// so this carries the build's own discards along with the second table. Erring
+		// high is the right direction for a peak. It is only meaningful because both
+		// ends now start from a known state — comparing two uncollected samples
+		// produced a negative number.
+		"table_cost_mb_max", int64(built.liveMB)-int64(before.liveMB),
 		"heap_held_mb", after.heapMB,
 		"sys_total_mb", after.sysMB,
 		"released_mb", after.releasedMB,
