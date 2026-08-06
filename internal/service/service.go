@@ -403,10 +403,16 @@ func (s *Service) publish() {
 	s.guard.RLock()
 	defer s.guard.RUnlock()
 
-	if s.tbl == nil || !s.tblAt.Equal(s.state.At) {
+	// Bracket the build: the old table is still referenced by s.tbl throughout, so
+	// this is the one window where two of them are reachable at once.
+	rebuilt := s.tbl == nil || !s.tblAt.Equal(s.state.At)
+	var memBefore, memBuilt memSample
+	if rebuilt {
+		memBefore = readMem()
 		tbl := rank.Build(s.state, s.state.At, rank.DefaultConfig)
 		tbl.BuildChange24h(s.state, s.memberWin, s.teamWin)
 		tbl.BuildOrders(s.state, s.memberWin, s.teamWin, s.teamMonth, s.memberMonth)
+		memBuilt = readMem()
 		s.tbl, s.tblAt = tbl, s.state.At
 	}
 	tbl := s.tbl
@@ -465,6 +471,13 @@ func (s *Service) publish() {
 		"teams", len(s.state.Teams), "donors", len(tbl.Donors),
 		"stale_after", snap.StaleAfter.Format(time.RFC3339),
 		"took", time.Since(start).Round(time.Millisecond))
+
+	// Only on a rebuild: a republish without one says nothing about the cost of the
+	// table, and logging it anyway would put figures in the series that are not
+	// comparable with the rest.
+	if rebuilt {
+		logMemory(s.Log, memBefore, memBuilt, readMem(), len(tbl.Donors), len(s.state.Members))
+	}
 }
 
 func readTeams(s feed.Snapshot) ([]parse.TeamRow, parse.Stats, error) {
