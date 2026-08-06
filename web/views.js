@@ -11,6 +11,16 @@ import { productionChart, seriesChart, stack, legend, palette, densify, perDayPo
 
 const PER_PAGE = 100;
 
+/**
+ * Where the Discord bot installs from.
+ *
+ * The bare authorize URL rather than one carrying scopes: the application declares
+ * both install contexts, so Discord's own dialog offers the choice between adding it
+ * to a server and adding it to an account. Pinning scopes here would pick one for the
+ * reader and quietly drop the other.
+ */
+const DISCORD_INVITE = 'https://discord.com/oauth2/authorize?client_id=1534970793283293255';
+
 /** Newest snapshot time in ms — the point past which no bucket can exist yet. */
 /** How much history the "active" counts actually cover. */
 function activeWindow() {
@@ -1582,13 +1592,33 @@ export async function apiDocs(view) {
     el('div.card-body', { style: 'padding-bottom:0' },
       el('p', { style: 'margin-top:0' },
         'There is a Model Context Protocol server at ', el('code', '/mcp'),
-        ' — seven tools shaped like questions rather than like the routes above, so ' +
-        'an agent can ask "is my team catching them?" in one call instead of five. ',
+        // Counted, not stated. This sentence said "seven" for as long as there were
+        // eleven — the same drift the note above MCP_TOOLS describes, in the one
+        // place that fix did not reach.
+        ` — ${MCP_TOOLS.length} tools shaped like questions rather than like the routes ` +
+        'above, so an agent can ask "is my team catching them?" in one call instead of five. ',
         link('/agents', 'How to connect →')),
       el('p', { style: 'margin-bottom:0' },
         'If you are writing a program rather than an agent, the REST API on this page ' +
         'is the better interface: cheaper, paginated, and structured JSON rather than ' +
         'text meant to be read.')))));
+
+  view.append(el('section.section', card('Discord bot',
+    el('div.card-body', { style: 'padding-bottom:0' },
+      el('p', { style: 'margin-top:0' },
+        'The same data as slash commands: ', el('code', '/donor'), ', ', el('code', '/team'),
+        ', ', el('code', '/top'), ', ', el('code', '/compare'), ', ', el('code', '/rivals'),
+        ', ', el('code', '/movers'), ', ', el('code', '/goal'), ' — and ', el('code', '/link'),
+        ' to bind your Discord account to a donor name so ', el('code', '/me'),
+        ' answers without typing it. ',
+        el('a', { href: DISCORD_INVITE, target: '_blank', rel: 'noopener noreferrer' },
+          'Add it to a server or to your account →')),
+      el('p', { style: 'margin-bottom:0' },
+        'Installable either way: to a server, where everyone can use it, or to your ' +
+        'own account, where the commands follow you into any server and any DM without ' +
+        'the server having to add anything. It reads this API like any other client, ' +
+        'and caches against the snapshot rather than polling — a busy channel costs ' +
+        'one request an hour.')))));
 
   view.append(el('section.section', card('Rate limits',
     el('div.card-body', { style: 'padding-bottom:0' },

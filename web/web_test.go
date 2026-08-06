@@ -26,6 +26,7 @@ func TestServesAssetsAndRoutes(t *testing.T) {
 		{"/app.css", 200, "text/css", "no-cache"},
 		{"/app.js", 200, "text/javascript", "no-cache"},
 		{"/vendor/uPlot.esm.min.js", 200, "text/javascript", "no-cache"},
+		{"/icon.svg", 200, "image/svg+xml", "no-cache"},
 		// Client-side routes must deep-link to the shell, not 404.
 		{"/teams", 200, "text/html", "no-cache"},
 		{"/donors/DH", 200, "text/html", "no-cache"},
@@ -138,7 +139,7 @@ func TestEveryAssetIsEmbedded(t *testing.T) {
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".js") && !strings.HasSuffix(name, ".css") &&
-			!strings.HasSuffix(name, ".html") {
+			!strings.HasSuffix(name, ".html") && !strings.HasSuffix(name, ".svg") {
 			continue
 		}
 		if strings.HasSuffix(name, "_test.js") {
@@ -219,5 +220,49 @@ func TestClientRoutesComeFromAppJS(t *testing.T) {
 	// worse outcome than refusing to boot.
 	if _, err := clientRoutes([]byte("const routes = [];")); err == nil {
 		t.Error("clientRoutes accepted a table with no routes")
+	}
+}
+
+// TestIconIsFingerprintedAndReal covers the favicon end to end.
+//
+// It is the one asset referenced from a link rather than imported by a module, so it
+// sits outside the graph everything else is in: nothing would have failed if the
+// go:embed line, the reference rewriter and the shell had disagreed about it. The
+// symptom would have been a missing tab icon, which nobody files a bug about.
+func TestIconIsFingerprintedAndReal(t *testing.T) {
+	h, err := Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	shell := rec.Body.String()
+
+	want := "/icon.svg?v=" + Build()
+	if !strings.Contains(shell, want) {
+		t.Errorf("the shell does not reference %s", want)
+	}
+	// The old mark was a DNA double helix, the wrong molecule for a project about
+	// proteins folding. Nothing should put it back.
+	if strings.Contains(shell, "\U0001f9ec") {
+		t.Error("the DNA emoji is back in the shell")
+	}
+
+	icon := httptest.NewRecorder()
+	h.ServeHTTP(icon, httptest.NewRequest(http.MethodGet, want, nil))
+	if icon.Code != http.StatusOK {
+		t.Fatalf("versioned icon: status %d", icon.Code)
+	}
+	if cc := icon.Header().Get("Cache-Control"); !strings.Contains(cc, "immutable") {
+		t.Errorf("versioned icon is not immutable: %q", cc)
+	}
+	body := icon.Body.String()
+	if !strings.HasPrefix(body, "<svg") || !strings.Contains(body, "</svg>") {
+		t.Error("icon body is not an SVG document")
+	}
+	// The mark is drawn in the site accent; another colour means the asset and the
+	// stylesheet have drifted apart.
+	if !strings.Contains(body, "#3987e5") {
+		t.Error("icon does not use the site accent")
 	}
 }

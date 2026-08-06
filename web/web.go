@@ -24,13 +24,14 @@ import (
 	"time"
 )
 
-//go:embed index.html app.css app.js api.js ui.js views.js charts.js countdown.js clock.js format.js vendor
+//go:embed index.html icon.svg app.css app.js api.js ui.js views.js charts.js countdown.js clock.js format.js vendor
 var assets embed.FS
 
 // assetRef matches a same-origin asset path in a quoted string: an ES module
-// specifier, a stylesheet href, a script src. Only paths carrying a .js or .css
-// extension match, so API paths and client-side routes are left alone.
-var assetRef = regexp.MustCompile(`(["'])(/[A-Za-z0-9_./-]+\.(?:js|css))(["'])`)
+// specifier, a stylesheet href, a script src, the icon link. Only paths carrying a
+// .js, .css or .svg extension match, so API paths and client-side routes are left
+// alone.
+var assetRef = regexp.MustCompile(`(["'])(/[A-Za-z0-9_./-]+\.(?:js|css|svg))(["'])`)
 
 // build is a fingerprint of the whole asset set, stamped onto every internal
 // reference at startup.
@@ -217,8 +218,10 @@ var (
 func preloadLink(index []byte) string {
 	var parts []string
 	add := func(href, as string) {
-		// Inline data: URIs are already present — the favicon is one — and there is
-		// nothing to fetch.
+		// A data: URI carries its own bytes, so there is nothing to fetch and a
+		// preload for one is pure waste. None are left in the shell today, but the
+		// guard is cheap and the alternative is a hint that costs a header and
+		// delivers nothing.
 		if href == "" || strings.HasPrefix(href, "data:") {
 			return
 		}
