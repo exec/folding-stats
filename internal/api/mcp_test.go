@@ -1,12 +1,21 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"folding/internal/metrics"
+	"folding/internal/model"
+	"folding/internal/parse"
+	"folding/internal/rank"
+	"folding/internal/store"
 )
 
 func mcpDo(t *testing.T, srv *Server, body string) map[string]any {
@@ -285,4 +294,121 @@ func totalFromHistory(t *testing.T, s string) int64 {
 	}
 	t.Fatalf("no total line in:\n%s", s)
 	return 0
+}
+
+// activityFixture builds a roster where each member has stopped, surged, or just
+// arrived, so the three classifications can be told apart by name.
+func activityFixture(t *testing.T) *Server {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "act.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	state := model.NewState()
+	memberWin, teamWin := metrics.New(0), metrics.New(0)
+	ctx := context.Background()
+
+	// t0, +30h, +60h. Only the last cycle is inside 24 hours of the snapshot, which is
+	// what makes "produced this week, nothing today" expressible at all: the +30h
+	// production sits inside the 7-day window and outside the 24-hour one.
+	base := at(1)
+	cycles := []struct {
+		when  time.Time
+		teams []parse.TeamRow
+		users []parse.UserRow
+	}{{
+		base,
+		[]parse.TeamRow{tr(32, "overclockers", 1000)},
+		[]parse.UserRow{u("quitter", 500, 32), u("steady", 300, 32), u("spiker", 200, 32)},
+	}, {
+		// Inside the 7-day window but outside 24 hours: this is the production that
+		// makes quitter look busy all week and idle today.
+		base.Add(30 * time.Hour),
+		[]parse.TeamRow{tr(32, "overclockers", 9000)},
+		[]parse.UserRow{u("quitter", 5000, 32), u("steady", 2000, 32), u("spiker", 2000, 32)},
+	}, {
+		base.Add(60 * time.Hour),
+		[]parse.TeamRow{tr(32, "overclockers", 60000)},
+		[]parse.UserRow{
+			u("quitter", 5000, 32), // nothing since: stopped
+			u("steady", 2100, 32),  // a trickle: neither stopped nor surging
+			u("spiker", 50000, 32), // far above its own average: surging
+			u("fresh", 900, 32),    // never seen before: joined
+		},
+	}}
+
+	var last time.Time
+	for _, c := range cycles {
+		cy := state.Apply(c.when, c.teams, c.users)
+		if err := st.WriteCycle(ctx, state, cy, store.CycleMeta{
+			TeamSnapshotAt: c.when, UserSnapshotAt: c.when}); err != nil {
+			t.Fatal(err)
+		}
+		memberWin.Grow(len(state.Members))
+		memberWin.Push(c.when, cy.MemberDeltas)
+		teamWin.Grow(len(state.Teams))
+		teamWin.Push(c.when, cy.TeamDeltas)
+		last = c.when
+	}
+
+	tbl := rank.Build(state, last, rank.DefaultConfig)
+	tbl.BuildChange24h(state, memberWin, teamWin)
+	tbl.BuildOrders(state, memberWin, teamWin, nil, nil)
+
+	srv := NewServer()
+	srv.Publish(Build(state, memberWin, teamWin, tbl, st, last, last.Add(time.Hour), "act-etag"))
+	return srv
+}
+
+func TestTeamActivitySeparatesStoppedFromSurgingFromNew(t *testing.T) {
+	// The whole value of this tool is the classification, and every branch of it is a
+	// judgement that could be one comparison away from reporting the opposite.
+	got := mcpText(t, activityFixture(t), "team_activity", `{"team_id":32}`)
+
+	sections := map[string]string{}
+	for _, part := range strings.Split(got, "\n\n") {
+		switch {
+		case strings.HasPrefix(part, "Stopped"):
+			sections["stopped"] = part
+		case strings.HasPrefix(part, "Producing above"):
+			sections["surging"] = part
+		case strings.HasPrefix(part, "Joined"):
+			sections["joined"] = part
+		}
+	}
+
+	for _, c := range []struct{ section, want, notWant string }{
+		// Produced all week, nothing in the last 24 hours.
+		{"stopped", "quitter", "spiker"},
+		// 48,000 points in 24h against a much smaller average.
+		{"surging", "spiker", "quitter"},
+		// First seen in the final cycle.
+		{"joined", "fresh", "steady"},
+	} {
+		body, ok := sections[c.section]
+		if !ok {
+			t.Errorf("no %s section in:\n%s", c.section, got)
+			continue
+		}
+		if !strings.Contains(body, c.want) {
+			t.Errorf("%s section does not name %q:\n%s", c.section, c.want, body)
+		}
+		if strings.Contains(body, c.notWant) {
+			t.Errorf("%s section wrongly names %q:\n%s", c.section, c.notWant, body)
+		}
+	}
+
+	// A member who kept producing, at their usual rate, is not news and must not
+	// appear anywhere: a tool that reports everybody reports nothing.
+	if strings.Count(got, "steady") != 0 {
+		t.Errorf("steady was reported as a change:\n%s", got)
+	}
+
+	// A joiner's lifetime total predates us, and left unqualified a model reads it as
+	// production we observed.
+	if !strings.Contains(got, "earned before we first saw them") {
+		t.Errorf("joiners reported without the first-sighting caveat:\n%s", got)
+	}
 }

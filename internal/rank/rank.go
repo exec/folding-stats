@@ -750,6 +750,18 @@ func (t *Table) NewSince24h(members, teams int) (newDonors, newTeams, newMembers
 		max(members-int(t.memberBaseline), 0), true
 }
 
+// MemberArrivedSince24h reports whether a member did not exist a day ago.
+//
+// Slots are assigned in first-sighting order, so this is a comparison against the same
+// baseline rank movement uses rather than a timestamp lookup. ok is false before a full
+// day has been observed, when nobody can be called new.
+func (t *Table) MemberArrivedSince24h(slot int32) (bool, bool) {
+	if t.memberBaseline == 0 {
+		return false, false
+	}
+	return slot >= t.memberBaseline, true
+}
+
 // MemberChange24h reports a member's rank movement over the last 24 hours, positive
 // meaning improved. ok is false when there is no earlier ranking to compare against —
 // either the window has not yet covered a day, or the member did not exist then.
