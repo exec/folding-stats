@@ -47,7 +47,6 @@ func liveBot(t *testing.T) *Bot {
 		links:  links,
 		alerts: alerts,
 		log:    slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
-		mcpURL: base + "/mcp",
 	}
 }
 
@@ -122,28 +121,87 @@ func TestLiveCommands(t *testing.T) {
 		nonEmpty(t, "top donors", e, err)
 	})
 
-	for _, tc := range []struct {
-		name string
-		tool string
-		args map[string]any
-	}{
-		{"rivals", "rivals", map[string]any{"kind": "teams", "who": "51"}},
-		{"compare", "compare", map[string]any{"kind": "teams", "a": "51", "b": "32"}},
-		{"movers", "movers", map[string]any{"kind": "teams", "limit": 5}},
-		{"goal", "what_would_it_take", map[string]any{"kind": "teams", "who": "51", "target_rank": 5}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			e, err := b.mcpEmbed(ctx, tc.tool, tc.args, tc.name, "")
-			nonEmpty(t, tc.name, e, err)
-			// The MCP tools append their own "Data as of" line; the embed footer
-			// already says it, and printing it twice reads like a bug.
-			if strings.Contains(e.Description, "Data as of") {
-				t.Errorf("%s: duplicate freshness line left in the body", tc.name)
+	// The composed answers, which used to come back as MCP prose in a code block.
+	t.Run("rivals", func(t *testing.T) {
+		e, err := b.cmdRivals(ctx, "teams", "51")
+		nonEmpty(t, "rivals", e, err)
+		mustNotBeACodeBlock(t, "rivals", e)
+		// Whichever side has neighbours, at least one has to be there.
+		if len(e.Fields) == 0 && e.Description == "" {
+			t.Error("rivals returned nothing at all")
+		}
+		mustCaveat(t, "rivals", e, "7-day average")
+	})
+
+	t.Run("compare", func(t *testing.T) {
+		e, err := b.cmdCompare(ctx, "teams", "51", "32")
+		nonEmpty(t, "compare", e, err)
+		mustNotBeACodeBlock(t, "compare", e)
+		if len(e.Fields) < 3 {
+			t.Errorf("compare should show both sides and the gap, got %d fields", len(e.Fields))
+		}
+		if e.Description == "" {
+			t.Error("compare drew no conclusion")
+		}
+	})
+
+	t.Run("movers", func(t *testing.T) {
+		for _, dir := range []string{"", "up", "down"} {
+			e, err := b.cmdMovers(ctx, "teams", dir)
+			nonEmpty(t, "movers "+dir, e, err)
+			mustNotBeACodeBlock(t, "movers", e)
+			want := 2
+			if dir != "" {
+				want = 1
 			}
-			if e.Footer == nil || !strings.Contains(e.Footer.Text, "data from") {
-				t.Errorf("%s: no freshness footer", tc.name)
+			if len(e.Fields) != want {
+				t.Errorf("movers %q: %d fields, want %d", dir, len(e.Fields), want)
 			}
-		})
+		}
+	})
+
+	t.Run("goal", func(t *testing.T) {
+		e, err := b.cmdGoal(ctx, "teams", "51", 5)
+		nonEmpty(t, "goal", e, err)
+		mustNotBeACodeBlock(t, "goal", e)
+		if e.Description == "" {
+			t.Error("goal did not say what it would take")
+		}
+		// Already past the target is a different, shorter answer.
+		if e2, err := b.cmdGoal(ctx, "teams", "51", 100000); err != nil {
+			t.Fatal(err)
+		} else if !strings.Contains(e2.Title, "already") {
+			t.Errorf("goal past the target read as %q", e2.Title)
+		}
+	})
+}
+
+// mustNotBeACodeBlock is the regression this set exists for.
+//
+// These four answers used to be rendered by asking the MCP endpoint and wrapping its
+// reply in triple backticks. That text is written for a model — fixed-width, wide, and
+// full of prose — and inside an embed it does not wrap, scrolls sideways on a phone,
+// and reads as debug output beside every other command.
+func mustNotBeACodeBlock(t *testing.T, name string, e *discordgo.MessageEmbed) {
+	t.Helper()
+	if strings.Contains(e.Description, "```") {
+		t.Errorf("%s is still a code block:\n%s", name, e.Description)
+	}
+}
+
+// mustCaveat keeps the assumption attached to the figure.
+//
+// The reason these went through MCP in the first place was that those tools state what
+// a projection assumes. Composing the answer here means carrying that sentence too —
+// a caveat that travels separately from the number is one nobody repeats.
+func mustCaveat(t *testing.T, name string, e *discordgo.MessageEmbed, want string) {
+	t.Helper()
+	var text string
+	if e.Footer != nil {
+		text = e.Footer.Text
+	}
+	if !strings.Contains(text+e.Description, want) {
+		t.Errorf("%s lost its %q caveat: footer=%q", name, want, text)
 	}
 }
 

@@ -351,6 +351,37 @@ func (c *Client) Summary(ctx context.Context) (Summary, Snapshot, error) {
 	return s, snap, err
 }
 
+// Rivals is the ranking either side of one entity, with projected overtakes.
+type Rivals struct {
+	Rank        int64   `json:"rank"`
+	Name        string  `json:"name"`
+	HorizonDays float64 `json:"horizon_days"`
+	Rivals      []Rival `json:"rivals"`
+}
+
+type Rival struct {
+	Rank         int64  `json:"rank"`
+	Name         string `json:"name"`
+	TeamID       int64  `json:"team_id,omitempty"`
+	PointsTotal  int64  `json:"points_total"`
+	PointsPerDay int64  `json:"points_per_day_7d_avg"`
+	// PointsGap is unsigned: the distance between the two, whichever is ahead.
+	PointsGap int64 `json:"points_gap"`
+	// OvertakeDays is absent when no crossing is projected inside the horizon —
+	// which is most of them, because most of the field is not producing at all.
+	OvertakeDays *float64 `json:"overtake_days"`
+}
+
+func (c *Client) Rivals(ctx context.Context, kind, id string) (Rivals, Snapshot, error) {
+	var r Rivals
+	path := "/v1/donors/" + esc(id) + "/rivals"
+	if kind == "teams" {
+		path = "/v1/teams/" + esc(id) + "/rivals"
+	}
+	snap, err := c.Get(ctx, path, &r)
+	return r, snap, err
+}
+
 func (c *Client) TopTeams(ctx context.Context, sort string, limit int) ([]Team, Snapshot, error) {
 	var t []Team
 	snap, err := c.Get(ctx, fmt.Sprintf("/v1/teams?per_page=%d&sort=%s", limit, url.QueryEscape(sort)), &t)

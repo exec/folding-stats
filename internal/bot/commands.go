@@ -240,21 +240,13 @@ func (b *Bot) run(ctx context.Context, i *discordgo.InteractionCreate, name stri
 	case "top":
 		return b.cmdTop(ctx, str("kind"), str("sort"), int(num("limit", 10)))
 	case "rivals":
-		return b.mcpEmbed(ctx, "rivals", map[string]any{"kind": str("kind"), "who": str("who")},
-			"Rivals", "")
+		return b.cmdRivals(ctx, str("kind"), str("who"))
 	case "compare":
-		return b.mcpEmbed(ctx, "compare", map[string]any{"kind": str("kind"), "a": str("a"), "b": str("b")},
-			"Head to head", "")
+		return b.cmdCompare(ctx, str("kind"), str("a"), str("b"))
 	case "movers":
-		args := map[string]any{"kind": str("kind"), "limit": 5}
-		if d := str("direction"); d != "" {
-			args["direction"] = d
-		}
-		return b.mcpEmbed(ctx, "movers", args, "Biggest 24-hour movements", "")
+		return b.cmdMovers(ctx, str("kind"), str("direction"))
 	case "goal":
-		return b.mcpEmbed(ctx, "what_would_it_take",
-			map[string]any{"kind": str("kind"), "who": str("who"), "target_rank": num("rank", 1)},
-			"What it would take", "")
+		return b.cmdGoal(ctx, str("kind"), str("who"), num("rank", 1))
 	}
 	return nil, fmt.Errorf("unknown command %q", name)
 }
