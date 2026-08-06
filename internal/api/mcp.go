@@ -306,6 +306,23 @@ func mcpTools() []mcpTool {
 			},
 		},
 	}, {
+		Name:  "rivals",
+		Title: "Who is just ahead and just behind",
+		Description: "The immediate neighbourhood in the rankings around one team or donor: " +
+			"who is directly ahead, who is directly behind, the gap to each, and when the " +
+			"order would swap at current rates. This is the tool for \"who am I about to " +
+			"pass\" — compare answers the same question but requires already knowing who " +
+			"the rival is, which is usually the part being asked.",
+		InputSchema: map[string]any{
+			"type":     "object",
+			"required": []any{"kind", "who"},
+			"properties": map[string]any{
+				"kind": map[string]any{"type": "string", "enum": []any{"teams", "donors"}, "description": "Which ranking."},
+				"who":  strSchema("A team number, or an exact donor name."),
+				"span": intSchema("How many to show on each side. Default 5, max 15."),
+			},
+		},
+	}, {
 		Name:  "project_status",
 		Title: "The project right now",
 		Description: "Project-wide totals and how fresh the data is: how many donors and teams " +
@@ -326,9 +343,11 @@ func (s *Server) mcpCall(r *http.Request, snap *Snapshot, name string, raw json.
 		Granularity string `json:"granularity"`
 		A           string `json:"a"`
 		B           string `json:"b"`
+		Who         string `json:"who"`
 		TeamID      *int32 `json:"team_id"`
 		Limit       int    `json:"limit"`
 		Members     int    `json:"members"`
+		Span        int    `json:"span"`
 	}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &a); err != nil {
@@ -354,6 +373,8 @@ func (s *Server) mcpCall(r *http.Request, snap *Snapshot, name string, raw json.
 		return snap.mcpHistory(r, a.Scope, a.TeamID, a.Donor, a.Granularity)
 	case "compare":
 		return snap.mcpCompare(a.Kind, a.A, a.B)
+	case "rivals":
+		return snap.mcpRivals(a.Kind, a.Who, a.Span)
 	case "project_status":
 		return snap.mcpStatus(), nil
 	}
@@ -744,6 +765,110 @@ func (s *Snapshot) mcpCompare(kind, aRef, bRef string) (string, error) {
 			"  seven-day average forever, which nobody with a job or a power bill does.\n")
 	}
 	return b.String() + s.mcpFooter(), nil
+}
+
+// mcpRivals is the neighbourhood around one entity.
+//
+// compare already answers "when do I pass them", but only once you know who "them" is
+// — and a model asked "who is my team about to overtake" would otherwise have to page a
+// leaderboard, find the subject in it, and read off its neighbours by hand, which is
+// three chances to get an off-by-one wrong in service of a question the ordering
+// answers directly.
+func (s *Snapshot) mcpRivals(kind, who string, span int) (string, error) {
+	span = clampInt(span, 5, 1, 15)
+
+	type row struct {
+		rank        int32
+		name        string
+		score, rate int64
+		self        bool
+	}
+	var rows []row
+	var subject row
+
+	switch kind {
+	case "teams":
+		id, err := strconv.ParseInt(strings.TrimSpace(who), 10, 32)
+		if err != nil {
+			return "", fmt.Errorf("%q is not a team number — rivals with kind \"teams\" takes numbers", who)
+		}
+		slot, ok := s.State.TeamSlot(int32(id))
+		if !ok {
+			return "", fmt.Errorf("no team numbered %d", id)
+		}
+		order := s.Ranks.TeamOrder
+		self := s.teamView(slot)
+		lo, hi := window(int(self.Rank)-1, span, len(order))
+		for _, near := range order[lo:hi] {
+			v := s.teamView(near)
+			rows = append(rows, row{v.Rank, fmt.Sprintf("%s (team %d)", v.Name, v.TeamID),
+				v.PointsTotal, v.PointsPerDay7dAvg, near == slot})
+		}
+	case "donors":
+		idx, ok := s.donorIndexByName(who)
+		if !ok {
+			return "", fmt.Errorf("no donor named %q — use search first", who)
+		}
+		// Donors are stored in rank order, so the neighbourhood is a slice.
+		lo, hi := window(int(idx), span, len(s.Ranks.Donors))
+		for i := lo; i < hi; i++ {
+			v := s.donorView(int32(i), false)
+			rows = append(rows, row{v.Rank, v.Name, v.PointsTotal, v.PointsPerDay7dAvg, int32(i) == idx})
+		}
+	default:
+		return "", fmt.Errorf("kind must be \"teams\" or \"donors\"")
+	}
+	for _, r := range rows {
+		if r.self {
+			subject = r
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Around %s — rank #%s of %s %s\n\n",
+		subject.name, fmtInt(int64(subject.rank)),
+		fmtInt(int64(map[string]int{"teams": s.Totals.Teams, "donors": s.Totals.Donors}[kind])), kind)
+
+	now := time.Now().UTC()
+	for _, r := range rows {
+		mark := "  "
+		if r.self {
+			mark = "> "
+		}
+		fmt.Fprintf(&b, "%s#%-8s %-34s %16s   %12s/day",
+			mark, fmtInt(int64(r.rank)), truncate(r.name, 34), fmtInt(r.score), fmtInt(r.rate))
+		if r.self {
+			b.WriteString("   ← this one\n")
+			continue
+		}
+		// "Swap" rather than naming who overtakes whom: the rows are in rank order, so
+		// the direction is already on the page, and a sentence about it would have to
+		// get the subject's side right on every line to add nothing.
+		gap, days, _ := projectOvertake(now, subject.score, subject.rate, r.score, r.rate)
+		if days == nil {
+			fmt.Fprintf(&b, "   %s apart, not converging\n", fmtShort(gap))
+		} else {
+			fmt.Fprintf(&b, "   %s apart, swap in %s\n", fmtShort(gap), humanDays(*days))
+		}
+	}
+
+	b.WriteString("\nGaps are lifetime points. The times are projections that assume both sides hold\n" +
+		"today's seven-day average forever, which nobody does; \"not converging\" means the\n" +
+		"gap is widening or would take longer than a decade to close.\n")
+	return b.String() + s.mcpFooter(), nil
+}
+
+// window centres a span of 2n+1 positions on i, clamped to the ends of the ordering so
+// the leader still gets a neighbourhood rather than half of one.
+func window(i, span, n int) (lo, hi int) {
+	lo, hi = i-span, i+span+1
+	if lo < 0 {
+		hi, lo = min(hi-lo, n), 0
+	}
+	if hi > n {
+		lo, hi = max(0, lo-(hi-n)), n
+	}
+	return lo, hi
 }
 
 func (s *Snapshot) mcpStatus() string {

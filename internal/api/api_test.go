@@ -2404,3 +2404,37 @@ func TestMonthStandingMatchesCountingTheFieldByHand(t *testing.T) {
 		t.Errorf("standing = %+v, want a share of the %d producers", a, producers)
 	}
 }
+
+func TestRivalWindowStaysInsideTheOrdering(t *testing.T) {
+	// The leader has nobody above them and the last place has nobody below, but both
+	// should still get a full neighbourhood rather than half of one — and neither may
+	// index outside the ordering doing it.
+	const n = 20
+	for _, c := range []struct{ i, span, lo, hi int }{
+		{i: 10, span: 3, lo: 7, hi: 14},  // room on both sides
+		{i: 0, span: 3, lo: 0, hi: 7},    // the leader: the window slides down
+		{i: 19, span: 3, lo: 13, hi: 20}, // last place: it slides up
+		{i: 1, span: 5, lo: 0, hi: 11},
+		{i: 18, span: 5, lo: 9, hi: 20},
+		{i: 0, span: 50, lo: 0, hi: 20}, // a span wider than the field clamps to it
+	} {
+		lo, hi := window(c.i, c.span, n)
+		if lo != c.lo || hi != c.hi {
+			t.Errorf("window(%d, %d, %d) = [%d,%d), want [%d,%d)", c.i, c.span, n, lo, hi, c.lo, c.hi)
+		}
+		if lo < 0 || hi > n || lo > hi {
+			t.Errorf("window(%d, %d, %d) = [%d,%d) is not a valid slice", c.i, c.span, n, lo, hi)
+		}
+		if c.i < lo || c.i >= hi {
+			t.Errorf("window(%d, %d, %d) = [%d,%d) excludes the subject", c.i, c.span, n, lo, hi)
+		}
+	}
+
+	// A field smaller than the window must not produce a negative bound.
+	for _, small := range []int{1, 2, 3} {
+		lo, hi := window(0, 5, small)
+		if lo != 0 || hi != small {
+			t.Errorf("window(0, 5, %d) = [%d,%d), want [0,%d)", small, lo, hi, small)
+		}
+	}
+}
