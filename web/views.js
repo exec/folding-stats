@@ -1524,9 +1524,14 @@ export async function apiDocs(view) {
   const exampleOf = (path) => {
     const p = path.replace(/\{[^}]+\}/g, (m) => EXAMPLES[m] ?? m);
     if (p === '/v1/search') return p + '?q=Anonymous';
-    // The changes feed needs a cursor to be a working example at all, and the only
-    // one guaranteed to be inside the accepted window is the snapshot being served.
-    if (p === '/v1/changes') return p + `?since=${snapshot()?.at ?? ''}`;
+    // The changes feed needs a cursor to be a working example at all. The snapshot
+    // time is the right one, but this page can be the first thing a visitor loads and
+    // there is no snapshot until something has been fetched — so fall back to an hour
+    // ago by the reader's own clock, which is inside the window unless their machine
+    // is a week out.
+    if (p === '/v1/changes') {
+      return p + `?since=${snapshot()?.at ?? new Date(Date.now() - 3600e3).toISOString()}`;
+    }
     return p;
   };
 
