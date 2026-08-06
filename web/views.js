@@ -557,7 +557,9 @@ function productionStats(d, extra = []) {
     // taking a tile of its own: it is a property of the work units, not a sixth
     // headline figure, and the stats row is already full.
     statTile('Work units', short(d.wus_total), perWUText(d),
-      'Work units completed, and the average points each one earned')
+      'Work units completed, and the points each one earned. Compare the recent figure ' +
+      'between entities — the lifetime one is far lower for everybody, because points ' +
+      'per work unit have inflated hugely since the project began.')
   );
 }
 
@@ -572,17 +574,22 @@ function productionStats(d, extra = []) {
  * career average: a decade of CPU folding still reads as CPU the week after a new card
  * arrives.
  */
+/**
+ * Points per work unit — the recent window first, because the lifetime figure is not
+ * the one that means anything.
+ *
+ * Measured across the top teams, the recent ratio runs 3× to 27× the lifetime one, for
+ * every entity rather than for a few that changed hardware. Points per work unit have
+ * inflated enormously over twenty years, so a career average largely measures how long
+ * somebody has been folding. The recent window is what is comparable between entities,
+ * since they are all facing the same work units now.
+ */
 function perWUText(d) {
   const wus = d.wus_total ?? 0;
   if (!wus) return n(wus);
-  // Both figures when they differ enough to be telling different stories. Somebody who
-  // folded on a CPU for a decade and bought a card last week is a GPU folder now and a
-  // CPU folder on the career average, and only the pair says which.
   const recent = d.recent?.points_per_wu;
-  if (recent && (recent >= 2 * d.points_per_wu || recent * 2 <= d.points_per_wu)) {
-    return `${n(wus)} · ${short(recent)}/WU now, ${short(d.points_per_wu)} lifetime`;
-  }
-  return `${n(wus)} · ${n(d.points_per_wu)} points each`;
+  if (!recent) return `${n(wus)} · ${n(d.points_per_wu)} points each, lifetime`;
+  return `${n(wus)} · ${short(recent)}/WU now, ${short(d.points_per_wu)} lifetime`;
 }
 
 /**
@@ -1668,17 +1675,19 @@ export async function apiDocs(view) {
         'is not last place. Collections omit ', el('code', 'standing'),
         ' entirely: within a page of the top fifty it is the same number fifty times.'),
       el('p',
-        el('strong', 'Points per work unit is a career average, not a hardware reading. '),
-        el('code', 'points_per_wu'),
-        ' is lifetime points divided by lifetime work units. It is the only field that ' +
-        'separates hardware classes at all — GPU projects pay orders of magnitude more per ' +
-        'unit than CPU ones — but it is averaged over everything the entity has ever folded, ' +
-        'so it describes a history and not a current machine. Zero means no work units are ' +
-        'recorded. Detail responses also carry ', el('code', 'recent'),
-        ', the same ratio over the last 30 days, which is the one that describes what is ' +
-        'folding now; ', el('code', 'recent.days'),
-        ' says how much of that window actually exists, since it cannot reach back past ' +
-        'the start of collection.'),
+        el('strong', 'Compare points per work unit recently, never lifetime. '),
+        el('code', 'recent.points_per_wu'),
+        ' on detail responses is the ratio over the last 30 days, and it is the one worth ' +
+        'reading: GPU projects pay orders of magnitude more per work unit than CPU ones, and ' +
+        'every entity is facing the same work units now, so the figure is comparable between ' +
+        'them. ', el('code', 'points_per_wu'),
+        ' is the lifetime ratio, and it runs 3× to 27× lower for essentially everybody — not ' +
+        'because their hardware changed, but because points per work unit have inflated ' +
+        'enormously over the project’s twenty years. It tracks how long an entity has ' +
+        'folded far more than what it folds with. ', el('code', 'recent.days'),
+        ' says how much of the 30-day window actually exists, since it cannot reach back past ' +
+        'the start of collection, and ', el('code', 'recent'),
+        ' is absent entirely for an entity that produced nothing in it.'),
       el('p',
         el('strong', 'Calendar buckets are UTC, and weeks start Sunday. '),
         el('code', 'points_today_utc'), ', ', el('code', 'points_this_week_utc'), ' and ',

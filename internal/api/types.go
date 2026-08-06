@@ -157,11 +157,12 @@ type Standings struct {
 
 // Recent is production over a trailing window of whole UTC days.
 //
-// It exists for one field. points_per_wu on Production is a career average, which
-// describes hardware that may have been replaced years ago; the same ratio over the
-// last month describes what is folding now. Somebody who ran a CPU for a decade and
-// bought a graphics card last week reads as a CPU folder lifetime and a GPU folder
-// here, and that difference is the only signal in this data about current hardware.
+// It exists for one field. The lifetime points_per_wu turned out to be dominated by
+// how long an entity has been folding rather than by what it folds with — the same
+// ratio over the last 30 days runs 3x to 27x higher for everybody, because the points
+// a work unit earns have inflated enormously since the project began. This window is
+// the version that can be compared between entities, since they are all facing the
+// same work units now.
 type Recent struct {
 	// Days is the window covered: thirty, or the whole record while it is shorter.
 	// Reported rather than assumed, because a ratio over four days and a ratio over
@@ -249,15 +250,15 @@ type Production struct {
 
 	// PointsPerWU is lifetime points divided by lifetime work units, rounded.
 	//
-	// It is the only signal here about *what* is doing the folding. The points a work
-	// unit is worth vary by orders of magnitude between project classes, and a GPU
-	// running large modern assignments earns a ratio one to two decimal orders above a
-	// CPU chewing through small ones — so the quotient separates hardware classes that
-	// no other field distinguishes.
+	// Do not compare this between entities. Measured across the top teams it runs 3x to
+	// 27x below the same ratio over the last 30 days — for every one of them, not for a
+	// few that changed hardware. Points per work unit have inflated enormously over the
+	// project's twenty years, so this figure tracks how long an entity has been folding
+	// far more than what it folds with.
 	//
-	// It is a career average and reads as one. Somebody who folded on a CPU for a
-	// decade and bought a graphics card last week still reports the decade. Nothing
-	// here claims to identify hardware; it reports a ratio that correlates with it.
+	// Recent.PointsPerWU on detail responses is the comparable one: every entity is
+	// facing the same work units now, so differences there are differences in hardware
+	// and project mix rather than in tenure.
 	//
 	// Zero when no work units are recorded, which is the honest answer to a division
 	// with nothing to divide by.
