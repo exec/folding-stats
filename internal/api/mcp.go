@@ -309,6 +309,26 @@ func mcpTools() []mcpTool {
 			},
 		},
 	}, {
+		Name:  "what_would_it_take",
+		Title: "The rate a goal would need",
+		Description: "The inverse of compare: what daily production would be needed to " +
+			"reach a rank, a points total, or to overtake somebody — either by a given date, " +
+			"or how long it would take at the current rate. Targets that are themselves " +
+			"moving are carried forward at their own rate, so overtaking somebody who is " +
+			"also producing costs more than the gap between you today.",
+		InputSchema: map[string]any{
+			"type":     "object",
+			"required": []any{"kind", "who"},
+			"properties": map[string]any{
+				"kind":          map[string]any{"type": "string", "enum": []any{"teams", "donors"}, "description": "Which ranking."},
+				"who":           strSchema("Whose goal this is: a team number, or an exact donor name."),
+				"target_rank":   intSchema("Reach this rank. Give exactly one of target_rank, target_points or overtake."),
+				"target_points": intSchema("Reach this lifetime points total."),
+				"overtake":      strSchema("Pass this specific team number or donor name."),
+				"by":            strSchema("Target date, YYYY-MM-DD. Omitted, the answer is how long the current rate would take."),
+			},
+		},
+	}, {
 		Name:  "movers",
 		Title: "Who climbed and who fell",
 		Description: "The biggest rank movements over the last 24 hours, within the top of " +
@@ -381,7 +401,12 @@ func (s *Server) mcpCall(r *http.Request, snap *Snapshot, name string, raw json.
 		B           string `json:"b"`
 		Who         string `json:"who"`
 		Direction   string `json:"direction"`
+		Overtake    string `json:"overtake"`
+		By          string `json:"by"`
 		Within      int    `json:"within"`
+		TargetRank  int    `json:"target_rank"`
+
+		TargetPoints int64 `json:"target_points"`
 		TeamID      *int32 `json:"team_id"`
 		Limit       int    `json:"limit"`
 		Members     int    `json:"members"`
@@ -417,6 +442,8 @@ func (s *Server) mcpCall(r *http.Request, snap *Snapshot, name string, raw json.
 		return snap.mcpTeamActivity(a.TeamID, a.Limit)
 	case "movers":
 		return snap.mcpMovers(a.Kind, a.Direction, a.Within, a.Limit)
+	case "what_would_it_take":
+		return snap.mcpGoal(a.Kind, a.Who, a.TargetRank, a.TargetPoints, a.Overtake, a.By)
 	case "project_status":
 		return snap.mcpStatus(), nil
 	}
@@ -854,6 +881,181 @@ func (s *Snapshot) mcpCompare(kind, aRef, bRef string) (string, error) {
 			"  seven-day average forever, which nobody with a job or a power bill does.\n")
 	}
 	return b.String() + s.mcpFooter(), nil
+}
+
+// entity is one side of a projection: the figures every goal calculation needs.
+type entity struct {
+	name  string
+	score int64
+	rate  int64
+	rank  int32
+}
+
+// mcpEntity resolves a team number or donor name to the two figures a projection uses.
+func (s *Snapshot) mcpEntity(kind, ref string) (entity, error) {
+	switch kind {
+	case "teams":
+		id, err := strconv.ParseInt(strings.TrimSpace(ref), 10, 32)
+		if err != nil {
+			return entity{}, fmt.Errorf("%q is not a team number", ref)
+		}
+		slot, ok := s.State.TeamSlot(int32(id))
+		if !ok {
+			return entity{}, fmt.Errorf("no team numbered %d", id)
+		}
+		v := s.teamView(slot)
+		return entity{fmt.Sprintf("%s (team %d)", v.Name, v.TeamID), v.PointsTotal, v.PointsPerDay7dAvg, v.Rank}, nil
+	case "donors":
+		idx, ok := s.donorIndexByName(ref)
+		if !ok {
+			return entity{}, fmt.Errorf("no donor named %q — use search first", ref)
+		}
+		v := s.donorView(idx, false)
+		return entity{v.Name, v.PointsTotal, v.PointsPerDay7dAvg, v.Rank}, nil
+	}
+	return entity{}, fmt.Errorf("kind must be \"teams\" or \"donors\"")
+}
+
+// atRank is whoever currently holds a position in the ranking.
+func (s *Snapshot) atRank(kind string, r int) (entity, error) {
+	switch kind {
+	case "teams":
+		order := s.Ranks.TeamOrder
+		if r < 1 || r > len(order) {
+			return entity{}, fmt.Errorf("rank %d is outside the %s teams there are", r, fmtInt(int64(len(order))))
+		}
+		v := s.teamView(order[r-1])
+		return entity{fmt.Sprintf("%s (team %d)", v.Name, v.TeamID), v.PointsTotal, v.PointsPerDay7dAvg, v.Rank}, nil
+	case "donors":
+		if r < 1 || r > len(s.Ranks.Donors) {
+			return entity{}, fmt.Errorf("rank %d is outside the %s donors there are", r, fmtInt(int64(len(s.Ranks.Donors))))
+		}
+		v := s.donorView(int32(r-1), false)
+		return entity{v.Name, v.PointsTotal, v.PointsPerDay7dAvg, v.Rank}, nil
+	}
+	return entity{}, fmt.Errorf("kind must be \"teams\" or \"donors\"")
+}
+
+// mcpGoal answers what a target would cost, rather than what the current rate produces.
+//
+// compare and rivals both project forward from today's rate and report where it lands.
+// This runs the same arithmetic backwards, which is the form the question is almost
+// always asked in — "what do I have to do to get there", not "where does this take me".
+//
+// The moving-target correction is the part worth having. Overtaking somebody who is
+// also producing costs the gap plus everything they add in the meantime, so a naive
+// gap ÷ days understates it, sometimes by more than the gap itself.
+func (s *Snapshot) mcpGoal(kind, who string, targetRank int, targetPoints int64, overtake, by string) (string, error) {
+	self, err := s.mcpEntity(kind, who)
+	if err != nil {
+		return "", err
+	}
+
+	var goal entity
+	var what string
+	switch {
+	case targetRank > 0:
+		if goal, err = s.atRank(kind, targetRank); err != nil {
+			return "", err
+		}
+		what = fmt.Sprintf("rank #%s, currently held by %s", fmtInt(int64(targetRank)), goal.name)
+		if self.rank <= int32(targetRank) {
+			return fmt.Sprintf("%s is already rank #%s, which is at or above rank #%s.\n",
+				self.name, fmtInt(int64(self.rank)), fmtInt(int64(targetRank))) + s.mcpFooter(), nil
+		}
+	case targetPoints > 0:
+		// A fixed total is the one target that does not run away.
+		goal = entity{name: fmt.Sprintf("%s points", fmtInt(targetPoints)), score: targetPoints}
+		what = goal.name
+	case overtake != "":
+		if goal, err = s.mcpEntity(kind, overtake); err != nil {
+			return "", err
+		}
+		what = "passing " + goal.name
+	default:
+		return "", fmt.Errorf("give a target: one of target_rank, target_points or overtake")
+	}
+
+	if self.score >= goal.score && goal.rate <= self.rate {
+		return fmt.Sprintf("%s is already at or past %s, and not losing ground.\n", self.name, what) +
+			s.mcpFooter(), nil
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s → %s\n\n", self.name, what)
+	fmt.Fprintf(&b, "  Now           %s points, %s/day\n", fmtInt(self.score), fmtInt(self.rate))
+	if goal.rate > 0 {
+		fmt.Fprintf(&b, "  Target        %s points, %s/day — and still climbing\n",
+			fmtInt(goal.score), fmtInt(goal.rate))
+	} else {
+		fmt.Fprintf(&b, "  Target        %s points\n", fmtInt(goal.score))
+	}
+	fmt.Fprintf(&b, "  Gap today     %s points\n", fmtInt(goal.score-self.score))
+
+	needed := func(days float64) int64 {
+		// The target moves too, so the finish line is where it will be, not where it
+		// is. Ignoring this is the mistake that makes a goal look reachable.
+		at := float64(goal.score) + float64(goal.rate)*days
+		return int64(math.Ceil((at - float64(self.score)) / days))
+	}
+
+	if by != "" {
+		when, err := time.Parse("2006-01-02", strings.TrimSpace(by))
+		if err != nil {
+			return "", fmt.Errorf("by must be a date like 2026-12-31, not %q", by)
+		}
+		days := when.Sub(s.At).Hours() / 24
+		if days <= 0 {
+			return "", fmt.Errorf("%s is not in the future", by)
+		}
+		rate := needed(days)
+		fmt.Fprintf(&b, "\n  By %s (%s away) it would take %s points a day.\n",
+			when.Format("2 January 2006"), humanDays(days), fmtInt(rate))
+		switch {
+		case self.rate <= 0:
+			b.WriteString("  There is no current rate to compare that against — nothing has been\n" +
+				"  produced in the last seven days.\n")
+		default:
+			fmt.Fprintf(&b, "  That is %.1f× the current %s/day.\n",
+				float64(rate)/float64(self.rate), fmtInt(self.rate))
+		}
+		return b.String() + goalCaveat(goal) + s.mcpFooter(), nil
+	}
+
+	// No date given: say when the current rate arrives, and what a few round horizons
+	// would each cost, since "how long" and "how much faster" are the same question
+	// asked from either end.
+	_, days, at := projectOvertake(time.Now().UTC(), self.score, self.rate, goal.score, goal.rate)
+	if days == nil {
+		b.WriteString("\n  At the current rate this never happens: the gap is widening, or would take\n" +
+			"  longer than a decade to close.\n")
+	} else {
+		fmt.Fprintf(&b, "\n  At the current rate: about %s, around %s.\n",
+			humanDays(*days), at.Format("2 January 2006"))
+	}
+	b.WriteString("\n  To do it sooner:\n")
+	for _, h := range []struct {
+		days  float64
+		label string
+	}{{30, "30 days"}, {90, "90 days"}, {365, "a year"}} {
+		rate := needed(h.days)
+		line := fmt.Sprintf("    in %-9s %s points a day", h.label, fmtInt(rate))
+		if self.rate > 0 {
+			line += fmt.Sprintf("   (%.1f× the current rate)", float64(rate)/float64(self.rate))
+		}
+		b.WriteString(line + "\n")
+	}
+	return b.String() + goalCaveat(goal) + s.mcpFooter(), nil
+}
+
+func goalCaveat(goal entity) string {
+	s := "\nThis is arithmetic, not a forecast. It assumes the seven-day averages hold, which\n" +
+		"nobody's does"
+	if goal.rate > 0 {
+		s += ", and it already includes what the target adds in the meantime — so the\n" +
+			"rate needed is larger than the gap divided by the days"
+	}
+	return s + ".\n"
 }
 
 // mcpMovers reports the biggest rank movements near the top of a ranking.

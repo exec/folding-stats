@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -459,4 +460,80 @@ func section(text, title string) string {
 		}
 	}
 	return ""
+}
+
+func TestGoalAccountsForTheTargetMovingToo(t *testing.T) {
+	// The moving-target correction is the whole reason this tool is worth more than a
+	// division. Overtaking somebody who is also producing costs the gap plus whatever
+	// they add in the meantime, and a naive gap ÷ days understates it — sometimes by
+	// more than the gap itself.
+	//
+	// It is checked as a property rather than against a hand-computed constant: the
+	// rate required to pass a moving target must exceed the target's own rate, because
+	// anything at or below it never closes the distance no matter how long it runs.
+	srv := fixture(t)
+	got := mcpText(t, srv, "what_would_it_take",
+		`{"kind":"donors","who":"solo","overtake":"toTOW","by":"2026-09-03"}`)
+
+	if !strings.Contains(got, "still climbing") {
+		t.Errorf("a producing target was not flagged as moving:\n%s", got)
+	}
+	if !strings.Contains(got, "already includes what the target adds") {
+		t.Errorf("output does not say the correction was applied:\n%s", got)
+	}
+
+	// Pull the required rate back out of the prose and check it against the target's.
+	rate := extractRate(t, got, "it would take ")
+	target := mcpText(t, srv, "get_donor", `{"name":"toTOW"}`)
+	if rate <= extractRate(t, target, "Per day       ") {
+		t.Errorf("required rate %d does not exceed the target's own rate, so it would "+
+			"never catch them:\n%s", rate, got)
+	}
+}
+
+func TestGoalRefusesTargetsThatAreNotTargets(t *testing.T) {
+	srv := fixture(t)
+	for _, c := range []struct{ args, want string }{
+		{`{"kind":"donors","who":"solo"}`, "give a target"},
+		{`{"kind":"donors","who":"solo","target_points":9999999,"by":"yesterday"}`, "must be a date"},
+		{`{"kind":"donors","who":"solo","target_points":9999999,"by":"2020-01-01"}`, "not in the future"},
+		{`{"kind":"donors","who":"nobody","target_points":1}`, "no donor named"},
+		{`{"kind":"donors","who":"solo","target_rank":99999}`, "outside the"},
+	} {
+		out := mcpDo(t, srv, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"what_would_it_take","arguments":`+c.args+`}}`)
+		res := out["result"].(map[string]any)
+		text, _ := res["content"].([]any)[0].(map[string]any)["text"].(string)
+		if res["isError"] != true {
+			t.Errorf("%s was accepted, want an error: %s", c.args, text)
+			continue
+		}
+		if !strings.Contains(text, c.want) {
+			t.Errorf("%s: error %q does not mention %q", c.args, text, c.want)
+		}
+	}
+}
+
+// extractRate reads the first grouped number following a marker.
+func extractRate(t *testing.T, text, marker string) int64 {
+	t.Helper()
+	i := strings.Index(text, marker)
+	if i < 0 {
+		t.Fatalf("no %q in:\n%s", marker, text)
+	}
+	var digits strings.Builder
+	for _, r := range text[i+len(marker):] {
+		if r >= '0' && r <= '9' {
+			digits.WriteRune(r)
+			continue
+		}
+		if r == ',' {
+			continue
+		}
+		break
+	}
+	v, err := strconv.ParseInt(digits.String(), 10, 64)
+	if err != nil {
+		t.Fatalf("could not read a number after %q: %v", marker, err)
+	}
+	return v
 }
