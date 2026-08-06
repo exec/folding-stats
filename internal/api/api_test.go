@@ -2522,3 +2522,91 @@ func decodeTeams(t *testing.T, srv *Server, url string) []Team {
 	}
 	return env.Data
 }
+
+// TestPreflightAndExposedHeaders covers the browser path the docs assume.
+//
+// Two failures, one visible and one not. OPTIONS answered 405, so a cross-origin
+// conditional GET never got past the preflight. And ETag was not exposed, so even a
+// successful response gave JavaScript no validator to send back — every instruction to
+// use If-None-Match was advice a browser could not follow.
+func TestPreflightAndExposedHeaders(t *testing.T) {
+	srv := fixture(t)
+
+	// A conditional GET is not a simple request: If-None-Match is not safelisted.
+	req := httptest.NewRequest(http.MethodOptions, "/v1/summary", nil)
+	req.Header.Set("Origin", "https://somebody.example")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	req.Header.Set("Access-Control-Request-Headers", "if-none-match")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("preflight = %d, want 204", rec.Code)
+	}
+	for k, want := range map[string]string{
+		"Access-Control-Allow-Origin": "*",
+		"Access-Control-Max-Age":      "86400",
+	} {
+		if got := rec.Header().Get(k); got != want {
+			t.Errorf("preflight %s = %q, want %q", k, got, want)
+		}
+	}
+	if m := rec.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(m, "GET") {
+		t.Errorf("allow-methods = %q, want it to include GET", m)
+	}
+	if h := strings.ToLower(rec.Header().Get("Access-Control-Allow-Headers")); !strings.Contains(h, "if-none-match") {
+		t.Errorf("allow-headers = %q, want it to include If-None-Match", h)
+	}
+	// A shared cache must not answer one origin's preflight with another's.
+	if v := rec.Header().Values("Vary"); len(v) == 0 || !strings.Contains(strings.Join(v, ","), "Origin") {
+		t.Errorf("preflight Vary = %v, want it to include Origin", v)
+	}
+
+	// And the validator must be readable, or the conditional request cannot be made.
+	res, _ := get(t, srv, "/v1/summary")
+	exposed := strings.ToLower(res.Header().Get("Access-Control-Expose-Headers"))
+	if !strings.Contains(exposed, "etag") {
+		t.Errorf("expose-headers = %q, want it to include ETag", exposed)
+	}
+	if res.Header().Get("ETag") == "" {
+		t.Error("no ETag to expose")
+	}
+
+	// Preflight must not have broken ordinary requests.
+	if res.Code != http.StatusOK {
+		t.Errorf("GET /v1/summary = %d, want 200", res.Code)
+	}
+}
+
+// TestPreflightRoundTrip walks the full sequence a browser performs.
+func TestPreflightRoundTrip(t *testing.T) {
+	srv := fixture(t)
+
+	// 1. Preflight is allowed.
+	pre := httptest.NewRequest(http.MethodOptions, "/v1/teams/32", nil)
+	pre.Header.Set("Origin", "https://dash.example")
+	pre.Header.Set("Access-Control-Request-Method", "GET")
+	pre.Header.Set("Access-Control-Request-Headers", "if-none-match")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, pre)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("preflight = %d", rec.Code)
+	}
+
+	// 2. The real request returns a readable validator.
+	res, _ := get(t, srv, "/v1/teams/32")
+	etag := res.Header().Get("ETag")
+	if etag == "" || !strings.Contains(strings.ToLower(res.Header().Get("Access-Control-Expose-Headers")), "etag") {
+		t.Fatal("no readable ETag for a cross-origin caller")
+	}
+
+	// 3. Sending it back short-circuits, which is the whole point.
+	cond := httptest.NewRequest(http.MethodGet, "/v1/teams/32", nil)
+	cond.Header.Set("Origin", "https://dash.example")
+	cond.Header.Set("If-None-Match", etag)
+	rec2 := httptest.NewRecorder()
+	srv.ServeHTTP(rec2, cond)
+	if rec2.Code != http.StatusNotModified {
+		t.Errorf("conditional GET = %d, want 304", rec2.Code)
+	}
+}

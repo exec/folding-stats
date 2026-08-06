@@ -70,7 +70,33 @@ func (s *Server) routes() {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The API is public and unauthenticated by design (R3), so it is usable
 	// directly from a browser or a notebook without a proxy.
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	h := w.Header()
+	h.Set("Access-Control-Allow-Origin", "*")
+
+	// Without this a browser can send a conditional request but never obtain the
+	// validator to send. Only a short list of response headers is readable across
+	// origins by default — Cache-Control and Last-Modified are on it, ETag is not —
+	// so `response.headers.get("etag")` returned null and every page of the docs
+	// telling callers to use If-None-Match was advice a browser could not take.
+	h.Set("Access-Control-Expose-Headers", "ETag, Last-Modified, Cache-Control, Vary")
+
+	// Preflight. A cross-origin GET carrying If-None-Match is not a simple request:
+	// that header is not CORS-safelisted, so the browser asks first, and answering
+	// 405 failed the very pattern the API recommends. Max-Age keeps the question
+	// from being repeated before every conditional fetch.
+	if r.Method == http.MethodOptions {
+		h.Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+		h.Set("Access-Control-Allow-Headers", "If-None-Match, If-Modified-Since, Accept, Accept-Encoding, Content-Type")
+		h.Set("Access-Control-Max-Age", "86400")
+		// Vary on the request headers a preflight is keyed by, so a shared cache
+		// cannot answer one origin's preflight with another's.
+		h.Add("Vary", "Origin")
+		h.Add("Vary", "Access-Control-Request-Method")
+		h.Add("Vary", "Access-Control-Request-Headers")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	s.mux.ServeHTTP(w, r)
 }
 
