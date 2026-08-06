@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -254,6 +255,7 @@ func mcpTools() []mcpTool {
 			"properties": map[string]any{
 				"team_id": intSchema("The team number."),
 				"members": intSchema("How many top members to list. Default 5, max 25."),
+				"sort":    map[string]any{"type": "string", "enum": sortKeys, "description": "How to order those members. Default lifetime — use this_month or per_day to ask who is carrying the team now rather than who built it."},
 			},
 		},
 	}, {
@@ -366,7 +368,7 @@ func (s *Server) mcpCall(r *http.Request, snap *Snapshot, name string, raw json.
 	case "get_donor":
 		return snap.mcpDonor(r.Context(), a.Name)
 	case "get_team":
-		return snap.mcpTeam(r.Context(), a.TeamID, a.Members)
+		return snap.mcpTeam(r.Context(), a.TeamID, a.Members, a.Sort)
 	case "leaderboard":
 		return snap.mcpLeaderboard(a.Kind, a.Sort, a.Limit)
 	case "production_history":
@@ -480,13 +482,21 @@ func (s *Snapshot) mcpDonor(ctx context.Context, name string) (string, error) {
 	return b.String() + s.mcpFooter(), nil
 }
 
-func (s *Snapshot) mcpTeam(ctx context.Context, id *int32, members int) (string, error) {
+func (s *Snapshot) mcpTeam(ctx context.Context, id *int32, members int, sortKey string) (string, error) {
 	if id == nil {
 		return "", fmt.Errorf("get_team needs a team_id")
 	}
 	slot, ok := s.State.TeamSlot(*id)
 	if !ok {
 		return "", fmt.Errorf("no team numbered %d", *id)
+	}
+	if sortKey == "" {
+		sortKey = "lifetime"
+	}
+	key, ok := rank.NormalizeSort(rank.SortKey(sortKey))
+	if !ok || key == rank.Members || key == rank.Teams {
+		return "", fmt.Errorf("unknown member ordering %q — try lifetime, per_day, today, "+
+			"this_week, this_month, last_24h or wus", sortKey)
 	}
 	t := s.teamDetailView(ctx, slot)
 	members = clampInt(members, 5, 0, 25)
@@ -506,18 +516,57 @@ func (s *Snapshot) mcpTeam(ctx context.Context, id *int32, members int) (string,
 	b.WriteString(mcpStanding(t.Standing, "teams"))
 	b.WriteString(mcpStreak(t.Streak))
 
+	roster := s.Ranks.TeamMembers(t.TeamID)
+	b.WriteString(s.mcpConcentration(roster, t.PointsTotal))
+
 	if members > 0 {
-		roster := s.Ranks.TeamMembers(t.TeamID)
 		if n := min(members, len(roster)); n > 0 {
-			fmt.Fprintf(&b, "\nTop %d of %d members:\n", n, len(roster))
-			for _, slot := range roster[:n] {
+			ordered := roster[:n]
+			if key != rank.Lifetime {
+				ordered = s.orderRoster(roster, key, false, 0, n)
+			}
+			fmt.Fprintf(&b, "\nTop %d of %d members by %s:\n", len(ordered), len(roster), key)
+			for _, slot := range ordered {
 				m := s.memberView(slot, false)
-				fmt.Fprintf(&b, "  %-26s %s points, %s/day\n",
-					truncate(m.Name, 26), fmtShort(m.PointsTotal), fmtShort(m.PointsPerDay7dAvg))
+				fmt.Fprintf(&b, "  %-26s %14s points, %12s/day, %s this month\n",
+					truncate(m.Name, 26), fmtShort(m.PointsTotal),
+					fmtShort(m.PointsPerDay7dAvg), fmtShort(m.PointsThisMonthUTC))
 			}
 		}
 	}
 	return b.String() + s.mcpFooter(), nil
+}
+
+// mcpConcentration says whether a team is one machine or a crowd.
+//
+// Two teams with the same total and the same rate can be completely different
+// organisms — one person with a rack, or four hundred people with a spare desktop each
+// — and every other figure reported here renders them identically. The distinction
+// decides what advice is worth giving about the team, so it is worth a line.
+//
+// Bounded on purpose: the roster is already in lifetime order, so the top hundred are a
+// slice, and the largest team on the site has 882,940 members. Walking further to find
+// a median would put the cost of this line above everything else in the response.
+func (s *Snapshot) mcpConcentration(roster []int32, total int64) string {
+	if len(roster) < 10 || total <= 0 {
+		return ""
+	}
+	share := func(n int) int {
+		var sum int64
+		for _, slot := range roster[:min(n, len(roster))] {
+			sum += s.State.Members[slot].Score
+		}
+		return int(math.Round(float64(sum) / float64(total) * 100))
+	}
+	top10 := share(10)
+	if len(roster) < 100 {
+		return fmt.Sprintf("\n  Concentration the top 10 of %d members hold %d%% of the lifetime points\n",
+			len(roster), top10)
+	}
+	return fmt.Sprintf("\n  Concentration the top 10 hold %d%% of the lifetime points, the top 100 hold %d%%\n"+
+		"                (of %s members; lifetime, so it describes who built the total\n"+
+		"                rather than who is producing now)\n",
+		top10, share(100), fmtInt(int64(len(roster))))
 }
 
 func (s *Snapshot) mcpLeaderboard(kind, sortKey string, limit int) (string, error) {
