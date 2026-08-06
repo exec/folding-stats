@@ -825,7 +825,10 @@ func fmtPercent(p float64) string {
 	case p >= 0.01:
 		return strconv.FormatFloat(p, 'f', 2, 64) + "%"
 	}
-	return strconv.FormatFloat(p, 'g', 2, 64) + "%"
+	// Below a hundredth of a percent the digits stop carrying meaning: "top 0.000047%"
+	// of two million donors is a way of writing "first", and the rank on the line above
+	// already says it better.
+	return "<0.01%"
 }
 
 // mcpStreak reports consecutive days of production.

@@ -426,7 +426,10 @@ function pct(p) {
   if (p >= 10) return `${p.toFixed(0)}%`;
   if (p >= 1) return `${p.toFixed(1)}%`;
   if (p >= 0.01) return `${p.toFixed(2)}%`;
-  return `${Number(p.toPrecision(2))}%`;
+  // Below a hundredth of a percent the digits stop meaning anything. "Top 0.000047%"
+  // of two million donors is a laborious way of writing "first", and the Rank tile
+  // right beside this one already says it.
+  return '<0.01%';
 }
 
 /**

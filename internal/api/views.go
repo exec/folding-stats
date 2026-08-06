@@ -157,15 +157,17 @@ func (s *Snapshot) donorView(idx int32, detail bool) Donor {
 
 // shareOf turns a position and a field size into a top-N percentage.
 //
-// Rounded to four decimals rather than left at full float precision: the input is an
-// integer over an integer, and printing 0.5800000000000001 would suggest a measurement
-// far finer than counting two million donors supports.
+// Rounded to six decimals rather than left at full float precision. Six rather than a
+// friendlier two, because the smallest share a field of 2.1M donors can express is
+// 0.0000471% — rounding to anything coarser reports the best donor in the world as
+// being in the top 0%, which is not a rounding of the truth so much as a different
+// claim. Presentation decides how much of that to show; the field carries it.
 func shareOf(rank, of int) *Standing {
 	if rank <= 0 || of <= 0 {
 		return nil
 	}
 	p := float64(rank) / float64(of) * 100
-	return &Standing{TopPercent: math.Round(p*10000) / 10000, Of: of}
+	return &Standing{TopPercent: math.Round(p*1e6) / 1e6, Of: of}
 }
 
 // monthStanding places an entity within the month-to-date ordering.
