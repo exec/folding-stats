@@ -523,7 +523,7 @@ func (s *Snapshot) mcpDonor(ctx context.Context, name string) (string, error) {
 			"unrelated people rather than being one donor. The points are real; the person is not.\n", d.TeamCount)
 	}
 	fmt.Fprintf(&b, "\n  Lifetime      %s points, %s work units\n", fmtInt(d.PointsTotal), fmtInt(d.WUsTotal))
-	b.WriteString(mcpPerWU(d.PointsPerWU))
+	b.WriteString(mcpPerWU(d.PointsPerWU, d.Recent))
 	fmt.Fprintf(&b, "  Per day       %s   (seven-day average)\n", fmtInt(d.PointsPerDay7dAvg))
 	fmt.Fprintf(&b, "  Last 24h      %s\n", fmtInt(d.PointsLast24h))
 	fmt.Fprintf(&b, "  Today (UTC)   %s\n", fmtInt(d.PointsTodayUTC))
@@ -572,7 +572,7 @@ func (s *Snapshot) mcpTeam(ctx context.Context, id *int32, members int, sortKey 
 	fmt.Fprintf(&b, "%s — team %d, rank #%s of %s\n", t.Name, t.TeamID,
 		fmtInt(int64(t.Rank)), fmtInt(int64(s.Totals.Teams)))
 	fmt.Fprintf(&b, "\n  Lifetime      %s points, %s work units\n", fmtInt(t.PointsTotal), fmtInt(t.WUsTotal))
-	b.WriteString(mcpPerWU(t.PointsPerWU))
+	b.WriteString(mcpPerWU(t.PointsPerWU, t.Recent))
 	fmt.Fprintf(&b, "  Per day       %s   (seven-day average)\n", fmtInt(t.PointsPerDay7dAvg))
 	fmt.Fprintf(&b, "  Last 24h      %s\n", fmtInt(t.PointsLast24h))
 	fmt.Fprintf(&b, "  Today (UTC)   %s\n", fmtInt(t.PointsTodayUTC))
@@ -1574,12 +1574,31 @@ func plural(n int, noun string) string {
 // from a CPU at all. But it is a lifetime average, and a model told "high means GPU"
 // without being told "averaged over everything they have ever folded" will confidently
 // describe last decade's hardware.
-func mcpPerWU(ratio int64) string {
+func mcpPerWU(ratio int64, recent *Recent) string {
 	if ratio == 0 {
 		return ""
 	}
-	return fmt.Sprintf("  Per WU        %s points   (lifetime average; a rough proxy for hardware "+
-		"class,\n                since GPU projects pay far more per unit than CPU ones)\n", fmtInt(ratio))
+	var b strings.Builder
+	fmt.Fprintf(&b, "  Per WU        %s points lifetime   (a rough proxy for hardware class, since\n"+
+		"                GPU projects pay far more per unit than CPU ones)\n", fmtInt(ratio))
+	if recent == nil {
+		return b.String()
+	}
+	// The lifetime figure alone invites exactly the wrong reading. Somebody who folded
+	// on a CPU for a decade and bought a card last week is a GPU folder now and a CPU
+	// folder on the career average, and only the pair of numbers says which.
+	fmt.Fprintf(&b, "                %s points over the last %s — this is the one that describes\n"+
+		"                what is folding now\n", fmtInt(recent.PointsPerWU), plural(recent.Days, "day"))
+	// Only remark on a gap wide enough to mean something. Both directions, and each
+	// phrased as a multiplier greater than one — "0× the lifetime figure" is what
+	// printing a fraction with %.0f gets you.
+	switch r := float64(recent.PointsPerWU) / float64(ratio); {
+	case r >= 2:
+		fmt.Fprintf(&b, "                (%.0f× the lifetime figure, so what is folding has changed)\n", r)
+	case r > 0 && r <= 0.5:
+		fmt.Fprintf(&b, "                (%.0f× lower than the lifetime figure, so what is folding has changed)\n", 1/r)
+	}
+	return b.String()
 }
 
 func mcpMovement(label string, change *int32) string {

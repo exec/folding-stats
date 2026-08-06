@@ -1,18 +1,17 @@
 package store
 
-// Which days an entity produced on.
+// One entity's production, day by day.
 //
-// A streak is a question about whether anything happened on a day, not about how much,
-// so these read the bucket column alone. The daily rollup already stores exactly one
-// row per day an entity produced on, which makes "which days" a scan of the clustered
-// key rather than an aggregation: (member_id, bucket) and (slot, bucket) are the
-// primary keys of WITHOUT ROWID tables, so one seek lands on the entity and the rest is
-// a sequential read of its own rows.
+// The daily rollup already stores exactly one row per day an entity produced on, and
+// (member_id, bucket) and (slot, bucket) are the primary keys of WITHOUT ROWID tables —
+// so this is one seek onto the entity followed by a sequential read of its own rows,
+// with points and work units already in the row the key lands on. Reading them costs
+// nothing beyond reading the bucket alone.
 //
 // The whole retained range is read rather than a trailing window, because the longest
 // streak is as interesting as the current one and cannot be found from the tail. That
-// is bounded by daily retention — two years by default, so at most ~730 integers for
-// an entity that has never missed a day.
+// is bounded by daily retention — two years by default, so at most ~730 rows for an
+// entity that has never missed a day.
 
 import (
 	"context"
@@ -21,18 +20,27 @@ import (
 	"time"
 )
 
-// TeamActiveDays returns the UTC day buckets a team produced on, oldest first.
-func (s *Store) TeamActiveDays(ctx context.Context, slot int32) ([]int64, error) {
-	return s.activeDays(ctx,
-		`SELECT bucket FROM team_daily WHERE slot = ? AND points > 0 ORDER BY bucket`, slot)
+// Day is one UTC day on which an entity produced.
+type Day struct {
+	// Bucket is the UTC day number, unix/86400.
+	Bucket int64
+	Points int64
+	WUs    int64
 }
 
-// MemberActiveDays returns the day buckets on which any of the given members produced.
+// TeamDays returns the days a team produced on, oldest first.
+func (s *Store) TeamDays(ctx context.Context, slot int32) ([]Day, error) {
+	return s.days(ctx,
+		`SELECT bucket, points, wus FROM team_daily WHERE slot = ? AND points > 0 ORDER BY bucket`, slot)
+}
+
+// MemberDays returns the days on which any of the given members produced, with their
+// production summed across memberships.
 //
-// DISTINCT because these are one donor's memberships: folding for two teams on the same
-// day is one day of folding, and counting it twice would report streaks longer than the
-// calendar.
-func (s *Store) MemberActiveDays(ctx context.Context, ids []int32) ([]int64, error) {
+// Grouped rather than listed: these are one donor's memberships, so folding for two
+// teams on the same day is one day of folding. Counting it twice would report streaks
+// longer than the calendar.
+func (s *Store) MemberDays(ctx context.Context, ids []int32) ([]Day, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -50,25 +58,26 @@ func (s *Store) MemberActiveDays(ctx context.Context, ids []int32) ([]int64, err
 	for i := len(ids); i < n; i++ {
 		args = append(args, -1)
 	}
-	return s.activeDays(ctx, fmt.Sprintf(
-		`SELECT DISTINCT bucket FROM member_daily WHERE member_id IN (%s) AND points > 0 ORDER BY bucket`,
+	return s.days(ctx, fmt.Sprintf(
+		`SELECT bucket, SUM(points), SUM(wus) FROM member_daily WHERE member_id IN (%s) AND points > 0
+		  GROUP BY bucket ORDER BY bucket`,
 		strings.Repeat("?,", n-1)+"?"), args...)
 }
 
-func (s *Store) activeDays(ctx context.Context, query string, args ...any) ([]int64, error) {
+func (s *Store) days(ctx context.Context, query string, args ...any) ([]Day, error) {
 	rows, err := s.query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var out []int64
+	var out []Day
 	for rows.Next() {
-		var b int64
-		if err := rows.Scan(&b); err != nil {
+		var d Day
+		if err := rows.Scan(&d.Bucket, &d.Points, &d.WUs); err != nil {
 			return nil, err
 		}
-		out = append(out, b)
+		out = append(out, d)
 	}
 	return out, rows.Err()
 }

@@ -575,6 +575,13 @@ function productionStats(d, extra = []) {
 function perWUText(d) {
   const wus = d.wus_total ?? 0;
   if (!wus) return n(wus);
+  // Both figures when they differ enough to be telling different stories. Somebody who
+  // folded on a CPU for a decade and bought a card last week is a GPU folder now and a
+  // CPU folder on the career average, and only the pair says which.
+  const recent = d.recent?.points_per_wu;
+  if (recent && (recent >= 2 * d.points_per_wu || recent * 2 <= d.points_per_wu)) {
+    return `${n(wus)} · ${short(recent)}/WU now, ${short(d.points_per_wu)} lifetime`;
+  }
   return `${n(wus)} · ${n(d.points_per_wu)} points each`;
 }
 
@@ -1667,7 +1674,11 @@ export async function apiDocs(view) {
         'separates hardware classes at all — GPU projects pay orders of magnitude more per ' +
         'unit than CPU ones — but it is averaged over everything the entity has ever folded, ' +
         'so it describes a history and not a current machine. Zero means no work units are ' +
-        'recorded.'),
+        'recorded. Detail responses also carry ', el('code', 'recent'),
+        ', the same ratio over the last 30 days, which is the one that describes what is ' +
+        'folding now; ', el('code', 'recent.days'),
+        ' says how much of that window actually exists, since it cannot reach back past ' +
+        'the start of collection.'),
       el('p',
         el('strong', 'Calendar buckets are UTC, and weeks start Sunday. '),
         el('code', 'points_today_utc'), ', ', el('code', 'points_this_week_utc'), ' and ',

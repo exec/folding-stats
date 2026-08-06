@@ -155,6 +155,27 @@ type Standings struct {
 	ThisMonth *Standing `json:"this_month,omitempty"`
 }
 
+// Recent is production over a trailing window of whole UTC days.
+//
+// It exists for one field. points_per_wu on Production is a career average, which
+// describes hardware that may have been replaced years ago; the same ratio over the
+// last month describes what is folding now. Somebody who ran a CPU for a decade and
+// bought a graphics card last week reads as a CPU folder lifetime and a GPU folder
+// here, and that difference is the only signal in this data about current hardware.
+type Recent struct {
+	// Days is the window covered: thirty, or the whole record while it is shorter.
+	// Reported rather than assumed, because a ratio over four days and a ratio over
+	// thirty deserve different amounts of trust.
+	Days int `json:"days"`
+
+	Points int64 `json:"points"`
+	WUs    int64 `json:"wus"`
+	// PointsPerWU over this window. Absent — the whole block is — when nothing was
+	// produced in it, which is the honest answer rather than falling back to lifetime
+	// and quietly changing what the field means.
+	PointsPerWU int64 `json:"points_per_wu"`
+}
+
 // Streak is consecutive days with production.
 //
 // A day counts if anything at all was produced on it, because the question is whether
@@ -270,9 +291,10 @@ type Team struct {
 	MembersTotal  int32 `json:"members_total"`
 	MembersActive int32 `json:"members_active"`
 
-	// Standing and Streak are present on the detail endpoint only.
+	// Standing, Streak and Recent are present on the detail endpoint only.
 	Standing *Standings `json:"standing,omitempty"`
 	Streak   *Streak    `json:"streak,omitempty"`
+	Recent   *Recent    `json:"recent,omitempty"`
 
 	Production
 }
@@ -316,9 +338,10 @@ type Donor struct {
 	// than hidden so totals still reconcile.
 	LikelyNotAPerson bool `json:"likely_not_a_person"`
 
-	// Standing and Streak are present on the detail endpoint only.
+	// Standing, Streak and Recent are present on the detail endpoint only.
 	Standing *Standings `json:"standing,omitempty"`
 	Streak   *Streak    `json:"streak,omitempty"`
+	Recent   *Recent    `json:"recent,omitempty"`
 
 	Production
 
