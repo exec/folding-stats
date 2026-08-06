@@ -19,6 +19,7 @@ package api
 // calls means nothing to expire, resume, or get wrong.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -344,9 +345,9 @@ func (s *Server) mcpCall(r *http.Request, snap *Snapshot, name string, raw json.
 	case "search":
 		return snap.mcpSearch(a.Query, a.Limit)
 	case "get_donor":
-		return snap.mcpDonor(a.Name)
+		return snap.mcpDonor(r.Context(), a.Name)
 	case "get_team":
-		return snap.mcpTeam(a.TeamID, a.Members)
+		return snap.mcpTeam(r.Context(), a.TeamID, a.Members)
 	case "leaderboard":
 		return snap.mcpLeaderboard(a.Kind, a.Sort, a.Limit)
 	case "production_history":
@@ -414,7 +415,7 @@ func (s *Snapshot) mcpSearch(q string, limit int) (string, error) {
 	return b.String() + s.mcpFooter(), nil
 }
 
-func (s *Snapshot) mcpDonor(name string) (string, error) {
+func (s *Snapshot) mcpDonor(ctx context.Context, name string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("get_donor needs a name")
 	}
@@ -423,7 +424,7 @@ func (s *Snapshot) mcpDonor(name string) (string, error) {
 		return "", fmt.Errorf("no donor named %q. Names are case-sensitive and must match "+
 			"exactly — use search to find the right spelling.", name)
 	}
-	d := s.donorView(idx, true)
+	d := s.donorDetailView(ctx, idx)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s — donor rank #%s of %s\n", d.Name, fmtInt(int64(d.Rank)), fmtInt(int64(s.Totals.Donors)))
@@ -440,6 +441,7 @@ func (s *Snapshot) mcpDonor(name string) (string, error) {
 	fmt.Fprintf(&b, "  This month    %s\n", fmtInt(d.PointsThisMonthUTC))
 	b.WriteString(mcpMovement("  Rank moved    ", d.RankChange24h))
 	b.WriteString(mcpStanding(d.Standing, "donors"))
+	b.WriteString(mcpStreak(d.Streak))
 
 	fmt.Fprintf(&b, "\nFolds for %d team(s)", d.TeamCount)
 	if len(d.Teams) > 0 {
@@ -457,7 +459,7 @@ func (s *Snapshot) mcpDonor(name string) (string, error) {
 	return b.String() + s.mcpFooter(), nil
 }
 
-func (s *Snapshot) mcpTeam(id *int32, members int) (string, error) {
+func (s *Snapshot) mcpTeam(ctx context.Context, id *int32, members int) (string, error) {
 	if id == nil {
 		return "", fmt.Errorf("get_team needs a team_id")
 	}
@@ -465,7 +467,7 @@ func (s *Snapshot) mcpTeam(id *int32, members int) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("no team numbered %d", *id)
 	}
-	t := s.teamDetailView(slot)
+	t := s.teamDetailView(ctx, slot)
 	members = clampInt(members, 5, 0, 25)
 
 	var b strings.Builder
@@ -481,6 +483,7 @@ func (s *Snapshot) mcpTeam(id *int32, members int) (string, error) {
 		fmtInt(int64(t.MembersTotal)), fmtInt(int64(t.MembersActive)))
 	b.WriteString(mcpMovement("  Rank moved    ", t.RankChange24h))
 	b.WriteString(mcpStanding(t.Standing, "teams"))
+	b.WriteString(mcpStreak(t.Streak))
 
 	if members > 0 {
 		roster := s.Ranks.TeamMembers(t.TeamID)
@@ -823,6 +826,42 @@ func fmtPercent(p float64) string {
 		return strconv.FormatFloat(p, 'f', 2, 64) + "%"
 	}
 	return strconv.FormatFloat(p, 'g', 2, 64) + "%"
+}
+
+// mcpStreak reports consecutive days of production.
+//
+// The caveat is not optional. This service started collecting on a particular day, so
+// an entity that has folded daily for fifteen years reports whatever that is in days —
+// and a model relaying "a 3-day streak" for a fifteen-year habit has said something
+// false out of a number that is arithmetically correct. Where the run reaches the floor
+// of the record, the line says so instead of quoting it flat.
+func mcpStreak(s *Streak) string {
+	if s == nil || s.ActiveDays == 0 {
+		return ""
+	}
+	var b strings.Builder
+	switch {
+	case s.Current == 0:
+		fmt.Fprintf(&b, "  Streak        none running; best was %s, %s active in total\n",
+			plural(s.Longest, "day"), plural(s.ActiveDays, "day"))
+	case s.AtCollectionFloor:
+		fmt.Fprintf(&b, "  Streak        %s and counting — but that is every day on record, so it is a\n"+
+			"                floor and not a measurement: collection began %s and whatever\n"+
+			"                came before it is not visible here\n",
+			plural(s.Current, "day"), s.Since.Format("2 January 2006"))
+	default:
+		fmt.Fprintf(&b, "  Streak        %s, since %s (best %s, %s active in total)\n",
+			plural(s.Current, "day"), s.Since.Format("2 January 2006"),
+			plural(s.Longest, "day"), plural(s.ActiveDays, "day"))
+	}
+	return b.String()
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%s %ss", fmtInt(int64(n)), noun)
 }
 
 // mcpPerWU reports points per work unit with the one caveat that stops a model

@@ -553,6 +553,13 @@ table.data td.wrap { min-width: 24ch; }
    derived from, is a column in the same row. */
 .tier-name { font-weight: 500; }
 
+/* The streak flame climbs the same ramp. Its colour is decoration — the day count sits
+   beside it in the same tile — so it is never the only encoding, and inheriting the
+   validated text steps means it clears the text gate rather than the looser one a
+   decorative mark would have been held to. */
+.streak { display: inline-flex; align-items: center; gap: var(--s2); }
+.flame { width: 0.85em; height: 0.85em; flex: none; }
+
 /* Idle. Not part of the ramp — no production is not the coldest heat, it is the
    absence of any, so it takes the muted ink token and recedes. */
 .tier-0 { color: var(--ink-muted); }

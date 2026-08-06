@@ -81,6 +81,12 @@ type Service struct {
 	tbl   *rank.Table
 	tblAt time.Time
 
+	// firstCycle is when collection started, read once and cached: it is the minimum
+	// of a table nothing deletes from the front of, so it cannot move while we run.
+	// Streaks are bounded by it — a run reaching this day is a lower bound rather than
+	// a fact about the entity.
+	firstCycle time.Time
+
 	// guard serialises mutation of state and the windows against API reads, which
 	// serve directly from those structures rather than from a copy.
 	guard sync.RWMutex
@@ -413,6 +419,17 @@ func (s *Service) publish() {
 		s.state.At, next, etag)
 	snap.Guard = &s.guard
 	snap.TeamMonth, snap.MemberMonth = s.teamMonth, s.memberMonth
+	// Where the record begins, which bounds every streak. Read once and cached for the
+	// life of the process: it is the minimum of a table nothing ever deletes from the
+	// front of, so it cannot change while we are running.
+	if s.firstCycle.IsZero() {
+		if at, err := s.Store.FirstCycle(context.Background()); err != nil {
+			s.Log.Warn("could not read the first cycle; streaks will not be marked as bounded", "err", err)
+		} else {
+			s.firstCycle = at
+		}
+	}
+	snap.CollectionStart = s.firstCycle
 	// Team totals are authoritative for the project, and summing 130k of them once a
 	// cycle beats doing it per request on a cached endpoint.
 	for _, v := range s.teamMonth {

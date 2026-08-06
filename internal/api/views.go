@@ -89,18 +89,6 @@ func (s *Snapshot) memberView(slot int32, withTeamName bool) Member {
 	return out
 }
 
-// teamDetailView is teamView plus the figures only a team's own page needs.
-//
-// Separate from teamView rather than a flag on it, because teamView also builds every
-// row of every listing and of the rivals neighbourhood — and standings cost a search
-// over the month ordering, which is worth paying once for the subject and never fifty
-// times for a page.
-func (s *Snapshot) teamDetailView(slot int32) Team {
-	t := s.teamView(slot)
-	t.Standing = s.teamStandings(slot, t.Rank)
-	return t
-}
-
 // donorView aggregates a name across its teams. Rates are summed on demand because a
 // donor is a read-time view over member state (R1), never stored identity.
 //

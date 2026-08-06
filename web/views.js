@@ -6,7 +6,7 @@
 
 import { api, snapshot } from '/api.js';
 import { el, clear, card, cardWith, statTile, pager, segmented, notice, loading, errorView, link } from '/ui.js';
-import { n, short, ago, dateTime, delta, tierName, nameText, plural, span, tzName } from '/format.js';
+import { n, short, ago, dateTime, utcDate, delta, tierName, nameText, plural, span, tzName } from '/format.js';
 import { productionChart, seriesChart, stack, legend, palette, densify, perDayPoints, MAX_STACK_SERIES } from '/charts.js';
 
 const PER_PAGE = 100;
@@ -450,6 +450,65 @@ function standingTile(standing, basis) {
 }
 
 /**
+ * How long a streak has to run to reach each step of the production heat ramp.
+ *
+ * The ramp is reused rather than given its own colours: it is already validated in
+ * both themes for contrast, monotone lightness and separable neighbours, and a second
+ * six-step scale would be the same work done twice and less well.
+ */
+const STREAK_TIERS = [365, 100, 30, 7, 3, 1];
+
+function streakTier(days) {
+  const i = STREAK_TIERS.findIndex((t) => days >= t);
+  return i < 0 ? 0 : STREAK_TIERS.length - i;
+}
+
+/**
+ * The flame, drawn rather than typed.
+ *
+ * An emoji would have been shorter, but it carries its own colours and so could not
+ * climb the ramp with the streak — and the point of the icon is that it changes.
+ */
+function flame() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('class', 'flame');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M12 2 C16 8, 18 10, 18 14 A6 6 0 0 1 6 14 C6 10, 8 8, 12 2 Z');
+  path.setAttribute('fill', 'currentColor');
+  svg.append(path);
+  return svg;
+}
+
+/**
+ * Consecutive days with production.
+ *
+ * Every other tile is a magnitude. This is the only one about persistence, which is
+ * what distributed computing actually runs on — a modest machine left on every day
+ * beats a fast one switched on twice a month, and nothing else here says so.
+ *
+ * A run reaching the first day on record is labelled as such rather than quoted. This
+ * service started watching on a particular day, so somebody who has folded daily for
+ * fifteen years would otherwise be told they were on a three-day streak.
+ */
+function streakTile(s) {
+  const hint = 'Consecutive days with any production. For a donor, folding for two ' +
+    'teams on one day is one day.';
+  if (!s || !s.active_days) return statTile('Streak', '—', 'no production on record', hint);
+  if (!s.current) {
+    return statTile('Streak', '—', `best run was ${plural(s.longest, 'day')}`, hint);
+  }
+  const value = el(`span.streak.tier-${streakTier(s.current)}`,
+    flame(), el('span', { text: plural(s.current, 'day') }));
+  return statTile('Streak', value,
+    s.at_collection_floor
+      ? 'every day since collection began'
+      : `since ${utcDate(s.since)} · best ${plural(s.longest, 'day')}`,
+    hint);
+}
+
+/**
  * The stats row for an entity's own page, with the basis switch its Percentile tile
  * needs.
  *
@@ -458,13 +517,20 @@ function standingTile(standing, basis) {
  * The tile names its own basis in the subtitle, so the pairing survives the distance.
  */
 function detailStats(d, extra = []) {
-  if (!d.standing) return el('section.section', productionStats(d, extra));
   let basis = 'lifetime';
+  const tiles = () => [
+    ...extra,
+    ...(d.standing ? [standingTile(d.standing, basis)] : []),
+    ...(d.streak ? [streakTile(d.streak)] : []),
+  ];
+  // Nothing to switch between: no control, and one render.
+  if (!d.standing) return el('section.section', productionStats(d, tiles()));
+
   const bar = el('div.stats-bar');
   const host = el('div');
   function draw() {
     clear(bar).append(segmented(BASES, basis, (v) => { basis = v; draw(); }));
-    clear(host).append(productionStats(d, [...extra, standingTile(d.standing, basis)]));
+    clear(host).append(productionStats(d, tiles()));
   }
   draw();
   return el('section.section', bar, host);
@@ -1571,6 +1637,16 @@ export async function apiDocs(view) {
         el('strong', 'Field names say what they mean. '),
         el('code', 'points_per_day_7d_avg'),
         ' is the last 7 days divided by 7 — the figure other sites label “24hr avg”, which it is not.'),
+      el('p',
+        el('strong', 'A streak can only be as long as the record. '),
+        el('code', 'streak.current'),
+        ' counts consecutive UTC days with production, and survives a today that has ' +
+        'not finished — a day still in progress cannot have been missed. When ',
+        el('code', 'at_collection_floor'),
+        ' is set the run reaches the first day this service recorded anything, so the ' +
+        'figure is a lower bound and not a fact about the entity: somebody who has folded ' +
+        'daily since the nineties reports the age of this site. For a donor a day counts ' +
+        'once however many teams they folded for.'),
       el('p',
         el('strong', 'Standing is a share of the field, and only on detail responses. '),
         el('code', 'standing.lifetime.top_percent'), ' and ',

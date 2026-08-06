@@ -75,6 +75,14 @@ type Snapshot struct {
 	// ETag identifies this snapshot for conditional requests.
 	ETag string
 
+	// CollectionStart is the earliest snapshot ever ingested — where the record
+	// begins, as distinct from where the rolling windows do.
+	//
+	// It bounds every streak. An entity that has produced on every day we have watched
+	// has a streak equal to the age of this service, which is a fact about the service
+	// and not about the entity, and the response has to say which it is reporting.
+	CollectionStart time.Time
+
 	// ProjectHist is the default-window project history for each granularity,
 	// computed once when the snapshot is published.
 	//

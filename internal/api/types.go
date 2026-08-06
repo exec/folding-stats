@@ -155,6 +155,31 @@ type Standings struct {
 	ThisMonth *Standing `json:"this_month,omitempty"`
 }
 
+// Streak is consecutive days with production.
+//
+// A day counts if anything at all was produced on it, because the question is whether
+// somebody kept going, not how hard. For a donor that means any of their teams: folding
+// for two teams on one day is one day of folding.
+type Streak struct {
+	// Current is the run ending today, or ending yesterday while today is still open.
+	// A day that has not finished cannot have been missed, so somebody who folded
+	// yesterday and has not yet folded in the hours since midnight has broken nothing.
+	Current int `json:"current"`
+	// Longest is the best run anywhere in the retained record.
+	Longest int `json:"longest"`
+	// ActiveDays is how many days had production at all, which is the denominator
+	// consistency is measured against — 30 days of a 30-day record is a very different
+	// story from 30 days of a 400-day one.
+	ActiveDays int `json:"active_days"`
+	// Since is the first day of the current run, absent when there is no current run.
+	Since *time.Time `json:"since,omitempty"`
+	// AtCollectionFloor marks a current run that reaches back to the first day this
+	// service recorded anything. Then the figure is a lower bound and not a fact about
+	// the entity: somebody who has folded daily for a decade reports the age of this
+	// site. Saying so is the difference between a statistic and a wrong one.
+	AtCollectionFloor bool `json:"at_collection_floor,omitempty"`
+}
+
 // PageInfo describes a paginated collection.
 type PageInfo struct {
 	Page       int `json:"page"`
@@ -245,8 +270,9 @@ type Team struct {
 	MembersTotal  int32 `json:"members_total"`
 	MembersActive int32 `json:"members_active"`
 
-	// Standing is present on the detail endpoint only; see Standings.
+	// Standing and Streak are present on the detail endpoint only.
 	Standing *Standings `json:"standing,omitempty"`
+	Streak   *Streak    `json:"streak,omitempty"`
 
 	Production
 }
@@ -290,8 +316,9 @@ type Donor struct {
 	// than hidden so totals still reconcile.
 	LikelyNotAPerson bool `json:"likely_not_a_person"`
 
-	// Standing is present on the detail endpoint only; see Standings.
+	// Standing and Streak are present on the detail endpoint only.
 	Standing *Standings `json:"standing,omitempty"`
+	Streak   *Streak    `json:"streak,omitempty"`
 
 	Production
 

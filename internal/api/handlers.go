@@ -143,7 +143,7 @@ func (s *Server) team(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
 	if !ok {
 		return nil, nil, notFound("no team with id %d", id)
 	}
-	return snap.teamDetailView(slot), nil, nil
+	return snap.teamDetailView(r.Context(), slot), nil, nil
 }
 
 func (s *Server) teamMembers(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
@@ -232,7 +232,7 @@ func (s *Server) donor(snap *Snapshot, r *http.Request) (any, *PageInfo, error) 
 	}
 	// The per-team breakdown ships with the donor: a client must never have to
 	// issue one request per team to assemble a donor's page (R10).
-	return snap.donorView(idx, true), nil, nil
+	return snap.donorDetailView(r.Context(), idx), nil, nil
 }
 
 // donorTeams is the paginated form of the breakdown, for donors whose inline list

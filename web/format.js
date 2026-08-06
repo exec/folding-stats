@@ -66,6 +66,19 @@ export function ago(iso) {
   return rtf.format(Math.round(secs / 86400), 'day');
 }
 
+/**
+ * A calendar date in UTC, for figures that are about UTC days rather than instants.
+ *
+ * Rendering a day boundary in the reader's own timezone moves it: 00:00 UTC on the 3rd
+ * is the evening of the 2nd in Chicago, so a streak that began on the 3rd would be
+ * reported as beginning the day before it did.
+ */
+export function utcDate(iso) {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, { timeZone: 'UTC', month: 'short', day: 'numeric' });
+}
+
 export function dateTime(iso) {
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return '';
