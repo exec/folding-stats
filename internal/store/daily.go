@@ -82,6 +82,43 @@ func (s *Store) days(ctx context.Context, query string, args ...any) ([]Day, err
 	return out, rows.Err()
 }
 
+// ChangedTeams returns the slots of teams that produced after since, exclusive.
+func (s *Store) ChangedTeams(ctx context.Context, since time.Time) ([]int32, error) {
+	return s.changed(ctx, `SELECT DISTINCT slot FROM team_deltas WHERE ts > ?`, since)
+}
+
+// ChangedMembers returns the slots of members that produced after since, exclusive.
+//
+// Exclusive because the natural cursor is the snapshot time of the last response a
+// client held, and an inclusive bound would hand back that whole cycle every poll.
+//
+// Both of these ride the covering (ts, d_score, d_wu) index, whose entries carry the
+// primary key along — so the distinct set of ids in a time range never touches the
+// table. That matters more here than anywhere: this is the query that exists to keep a
+// mirror off the full collections, and it would be a poor trade if it cost more than
+// the crawl it replaces.
+func (s *Store) ChangedMembers(ctx context.Context, since time.Time) ([]int32, error) {
+	return s.changed(ctx, `SELECT DISTINCT member_id FROM member_deltas WHERE ts > ?`, since)
+}
+
+func (s *Store) changed(ctx context.Context, query string, since time.Time) ([]int32, error) {
+	rows, err := s.query(ctx, query, since.UTC().Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []int32
+	for rows.Next() {
+		var id int32
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // FirstCycle is when collection started: the earliest snapshot ever applied.
 //
 // It bounds every streak. An entity that has produced every day we have watched has a

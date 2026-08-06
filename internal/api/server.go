@@ -61,6 +61,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/donors/{name}/rivals", s.handle(s.donorRivals))
 
 	s.mux.HandleFunc("GET /v1/search", s.handle(s.search))
+
+	// Incremental sync. Deliberately alongside the collections rather than under them:
+	// it is a different question about all of them, not a sub-resource of any one.
+	s.mux.HandleFunc("GET /v1/changes", s.handle(s.changes))
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

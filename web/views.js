@@ -1523,7 +1523,11 @@ export async function apiDocs(view) {
   const EXAMPLES = { '{id}': '0', '{name}': 'Anonymous' };
   const exampleOf = (path) => {
     const p = path.replace(/\{[^}]+\}/g, (m) => EXAMPLES[m] ?? m);
-    return p === '/v1/search' ? p + '?q=Anonymous' : p;
+    if (p === '/v1/search') return p + '?q=Anonymous';
+    // The changes feed needs a cursor to be a working example at all, and the only
+    // one guaranteed to be inside the accepted window is the snapshot being served.
+    if (p === '/v1/changes') return p + `?since=${snapshot()?.at ?? ''}`;
+    return p;
   };
 
   const endpoint = (method, path, desc) => {
@@ -1565,7 +1569,8 @@ export async function apiDocs(view) {
         endpoint('GET', '/v1/donors/{name}/teams', 'Full team list, paginated'),
         endpoint('GET', '/v1/donors/{name}/history', '?team_id= to scope to one team, same granularities'),
         endpoint('GET', '/v1/donors/{name}/rivals', 'Ranking around this donor with projected overtakes; opens on its own page'),
-        endpoint('GET', '/v1/search', '?q= name prefix, exact name, or team ID')
+        endpoint('GET', '/v1/search', '?q= name prefix, exact name, or team ID'),
+        endpoint('GET', '/v1/changes', 'Only what moved. ?since= a snapshot time, ?kind=teams|donors|members')
       ))))));
 
   view.append(el('section.section', card('MCP — for AI agents',
@@ -1654,6 +1659,18 @@ export async function apiDocs(view) {
         el('strong', 'Field names say what they mean. '),
         el('code', 'points_per_day_7d_avg'),
         ' is the last 7 days divided by 7 — the figure other sites label “24hr avg”, which it is not.'),
+      el('p',
+        el('strong', 'Mirroring? Use '), el('code', '/v1/changes'), el('strong', ', not the collections. '),
+        'About 1,100 members produce in any given hour, out of 2.7 million — so ',
+        el('code', '/v1/changes?since=<the snapshot.at you already hold>'),
+        ' is roughly a twentieth of one percent of what crawling everything costs, and it ' +
+        'is the same rows through the same builders. ', el('code', 'kind'),
+        ' selects teams, donors or members; the bound is exclusive, so passing back the ',
+        el('code', 'snapshot.at'),
+        ' of your last response is the whole cursor and there is no state to keep on either ' +
+        'side. It reaches seven days back — past that a full crawl is genuinely cheaper, and ' +
+        'the endpoint says so rather than serving you a diff that costs more than the thing ' +
+        'it replaces.'),
       el('p',
         el('strong', 'A streak can only be as long as the record. '),
         el('code', 'streak.current'),

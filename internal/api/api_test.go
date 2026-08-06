@@ -2438,3 +2438,87 @@ func TestRivalWindowStaysInsideTheOrdering(t *testing.T) {
 		}
 	}
 }
+
+func TestChangesFeedMissesNothingThatMoved(t *testing.T) {
+	// The whole promise of this endpoint is that a client polling it stays in sync with
+	// one that crawls the collections. Completeness is the property: an entity omitted
+	// here is one a mirror silently never updates again, and nothing downstream would
+	// ever notice.
+	srv := fixture(t)
+	snap := srv.Current()
+
+	// The fixture's second cycle moved every entity. Asking from before it must return
+	// exactly the set the full collection reports as having produced.
+	since := at(1).Add(-time.Second).Format(time.RFC3339)
+	got := map[string]bool{}
+	for _, tm := range decodeTeams(t, srv, "/v1/changes?kind=teams&since="+since+"&per_page=100") {
+		got[tm.Name] = true
+	}
+	want := map[string]bool{}
+	for slot := range snap.State.Teams {
+		if snap.Teams.Last24h(int32(slot)) > 0 {
+			want[snap.State.Names.Name(snap.State.Teams[slot].NameID)] = true
+		}
+	}
+	if len(want) == 0 {
+		t.Fatal("fixture produced no team movement, so this proves nothing")
+	}
+	for name := range want {
+		if !got[name] {
+			t.Errorf("team %q produced but is missing from the changes feed", name)
+		}
+	}
+
+	// Asking from the newest snapshot returns nothing: everything the caller could
+	// know about has already been reported to them.
+	after := snap.At.Format(time.RFC3339)
+	if teams := decodeTeams(t, srv, "/v1/changes?kind=teams&since="+after); len(teams) != 0 {
+		t.Errorf("asking from the current snapshot returned %d teams, want none — the "+
+			"bound must be exclusive or every poll replays the last cycle", len(teams))
+	}
+
+	// Unix seconds are accepted alongside RFC 3339, since the two obvious things to
+	// paste are a snapshot.at and a client's own clock.
+	unix := decodeTeams(t, srv, fmt.Sprintf("/v1/changes?kind=teams&since=%d&per_page=100",
+		at(1).Add(-time.Second).Unix()))
+	if len(unix) != len(got) {
+		t.Errorf("unix seconds returned %d teams, RFC 3339 returned %d", len(unix), len(got))
+	}
+}
+
+func TestChangesFeedRejectsWhatItCannotServeWell(t *testing.T) {
+	srv := fixture(t)
+	for _, c := range []struct{ query, want string }{
+		{"", "since is required"},
+		{"?since=tuesday", "RFC 3339 or unix"},
+		{"?since=2020-01-01T00:00:00Z", "further back"},
+		{"?since=0", "further back"},
+		{"?kind=sideways&since=" + at(1).Format(time.RFC3339), "teams"},
+	} {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/changes"+c.query, nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%q got %d, want 400", c.query, rec.Code)
+			continue
+		}
+		if !strings.Contains(rec.Body.String(), c.want) {
+			t.Errorf("%q: error does not mention %q: %s", c.query, c.want, rec.Body.String())
+		}
+	}
+}
+
+func decodeTeams(t *testing.T, srv *Server, url string) []Team {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, url, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%s: status %d: %s", url, rec.Code, rec.Body.String())
+	}
+	var env struct {
+		Data []Team `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("%s: %v", url, err)
+	}
+	return env.Data
+}
