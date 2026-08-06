@@ -1961,7 +1961,18 @@ export async function disclaimerPage(view) {
 
 /* ---------------------------------------------------------------- agents --- */
 
-/** The seven tools, as the server itself declares them. */
+/**
+ * The tools, as the server declares them.
+ *
+ * Written by hand rather than fetched from tools/list, because the descriptions there
+ * are written to help a model choose between tools and run to several sentences each —
+ * a wall of text in a table somebody is skimming. These are one line apiece.
+ *
+ * The cost of writing them twice is that they drift, which they immediately did: four
+ * tools were added and this list was not, so the page confidently documented seven of
+ * eleven. A test now compares this list against the server's, which is the only reason
+ * keeping a second copy is defensible.
+ */
 const MCP_TOOLS = [
   ['search', 'query, limit?',
    'Find donors and teams by name, or a team by number. The entry point: everything ' +
@@ -1969,9 +1980,9 @@ const MCP_TOOLS = [
   ['get_donor', 'name',
    'One donor: lifetime total, rank, rate, 24-hour rank movement, and every team ' +
    'they fold for.'],
-  ['get_team', 'team_id, members?',
-   'One team: totals, rank, how many members it has and how many are active, and ' +
-   'its top contributors.'],
+  ['get_team', 'team_id, members?, sort?',
+   'One team: totals, rank, active member count, how concentrated its output is, and ' +
+   'its top contributors by any column.'],
   ['leaderboard', 'kind, sort?, limit?',
    'Top teams or donors by any column — lifetime, per_day, today, this_week, ' +
    'this_month, last_24h, wus.'],
@@ -1981,9 +1992,21 @@ const MCP_TOOLS = [
   ['compare', 'kind, a, b',
    'Two teams or donors head to head: the gap, who is gaining, and roughly when one ' +
    'would pass the other.'],
+  ['rivals', 'kind, who, span?',
+   'Who is directly ahead and directly behind in the rankings, with the gap to each ' +
+   'and when the order would swap. For "who am I about to pass".'],
+  ['team_activity', 'team_id, limit?',
+   'What changed on a roster: members who produced all week and have stopped, members ' +
+   'far above their own average, and who joined in the last day.'],
+  ['movers', 'kind, direction?, within?, limit?',
+   'The biggest 24-hour rank movements near the top of a ranking, where a place gained ' +
+   'still takes real production.'],
+  ['what_would_it_take', 'kind, who, target_rank? | target_points? | overtake?, by?',
+   'The daily rate a goal would need, accounting for the target moving too — the ' +
+   'inverse of compare.'],
   ['project_status', '—',
-   'Project totals and freshness: donors, teams, active counts, and when the next ' +
-   'update is due.'],
+   'Project totals and freshness: donors, teams, active counts, arrivals in the last ' +
+   'day, and when the next update is due.'],
 ];
 
 export async function agentsPage(view) {
@@ -1993,8 +2016,9 @@ export async function agentsPage(view) {
   view.append(el('div.page-head',
     el('h1.page-title', 'For AI agents'),
     el('p.page-sub',
-      'A Model Context Protocol server, live and unauthenticated. Point a client at it ' +
-      'and it gets seven tools over this data.')));
+      // Counted, not spelled out. It said "seven" while eleven were being served.
+      `A Model Context Protocol server, live and unauthenticated. Point a client at it ` +
+      `and it gets ${MCP_TOOLS.length} tools over this data.`)));
 
   view.append(el('section.section', el('div.stats',
     statTile('Endpoint', '/mcp', 'JSON-RPC 2.0 over POST'),
@@ -2063,9 +2087,15 @@ export async function agentsPage(view) {
         el('a', { href: '/robots.txt' }, 'robots.txt'),
         ', which allows everything and names the AI agents explicitly. There are no ' +
         'challenge pages and no rate limit.'),
-      el('p', { style: 'margin-bottom:0' },
+      el('p',
         'Before scraping these pages, though: the ', link('/api', 'JSON API'),
         ' has everything the HTML shows, costs us both less, and will not change shape ' +
         'under you. Cache against ', el('code', 'next_expected_at'),
-        ' rather than polling — the data changes once an hour and not otherwise.')))));
+        ' rather than polling — the data changes once an hour and not otherwise.'),
+      el('p', { style: 'margin-bottom:0' },
+        'And if you want to mirror the whole corpus, ',
+        el('a', { href: '/api' }, el('code', '/v1/changes')),
+        ' exists for exactly that. Roughly 550 teams and 1,800 donors move in a given ' +
+        'hour, out of 129,958 and 2.1 million — so asking what changed costs well under ' +
+        'one percent of crawling everything, and it is the same rows.')))));
 }
