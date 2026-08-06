@@ -178,6 +178,7 @@ const routes = [
   [/^\/search\/?$/, (m, q) => views.searchPage(view, { q: q.get('q') || '' }, navigate)],
   [/^\/api\/?$/, () => views.apiDocs(view)],
   [/^\/agents\/?$/, () => views.agentsPage(view)],
+  [/^\/bots\/?$/, () => views.botsPage(view)],
   [/^\/privacy\/?$/, () => views.privacyPage(view)],
   [/^\/disclaimer\/?$/, () => views.disclaimerPage(view)],
 ];
@@ -201,7 +202,11 @@ async function render({ quiet = false, keepContent = false } = {}) {
   const query = new URLSearchParams(location.search);
   const href = path + location.search;
 
-  for (const a of document.querySelectorAll('.nav a')) {
+  // The header-actions link too, not just the nav: /bots is a section of the site
+  // reached from an icon rather than a nav entry, and a reader who is on it should be
+  // told so by the same mechanism. Only the ones declaring a route — the GitHub link
+  // leaves the site and is never current.
+  for (const a of document.querySelectorAll('.nav a, .header-actions a[data-route]')) {
     const r = a.dataset.route;
     // Home covers the landing page and the posts it links to; a reader inside an
     // article has not left the section the nav says they are in.

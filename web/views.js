@@ -1603,22 +1603,14 @@ export async function apiDocs(view) {
         'is the better interface: cheaper, paginated, and structured JSON rather than ' +
         'text meant to be read.')))));
 
-  view.append(el('section.section', card('Discord bot',
+  // A pointer, not a copy. The command list lives on /bots, and restating it here is
+  // how the tool count on this page came to say seven while the server served eleven.
+  view.append(el('section.section', card('Chat bots',
     el('div.card-body',
       el('p',
-        'The same data as slash commands: ', el('code', '/donor'), ', ', el('code', '/team'),
-        ', ', el('code', '/top'), ', ', el('code', '/compare'), ', ', el('code', '/rivals'),
-        ', ', el('code', '/movers'), ', ', el('code', '/goal'), ' — and ', el('code', '/link'),
-        ' to bind your Discord account to a donor name so ', el('code', '/me'),
-        ' answers without typing it. ',
-        el('a', { href: DISCORD_INVITE, target: '_blank', rel: 'noopener noreferrer' },
-          'Add it to a server or to your account →')),
-      el('p',
-        'Installable either way: to a server, where everyone can use it, or to your ' +
-        'own account, where the commands follow you into any server and any DM without ' +
-        'the server having to add anything. It reads this API like any other client, ' +
-        'and caches against the snapshot rather than polling — a busy channel costs ' +
-        'one request an hour.')))));
+        'If you would rather ask than call: there is a Discord bot with slash commands ' +
+        'for everything on this site, and it reads these same endpoints. ',
+        link('/bots', 'Commands and install →'))))));
 
   view.append(el('section.section', card('Rate limits',
     el('div.card-body',
@@ -2127,6 +2119,115 @@ function mcpClients(origin) {
         'that only speak the older SSE transport will not connect.'],
     },
   ];
+}
+
+/**
+ * The bots, as data rather than as markup.
+ *
+ * There is one today. The page is built from this list anyway, because the version
+ * that hardcodes Discord and the version that reads a list cost the same to write and
+ * only one of them survives a second platform: adding Matrix or Telegram should be an
+ * entry here and nothing else — not a new page, not a copy of the card, not another
+ * place the header link has to learn about.
+ *
+ * Fields a bot does not have are absent rather than empty. Something still being built
+ * has no invite, and the page renders around the gap instead of offering a dead button.
+ */
+const BOTS = [
+  {
+    id: 'discord',
+    platform: 'Discord',
+    live: true,
+    invite: DISCORD_INVITE,
+    inviteText: 'Add to a server or your account →',
+    blurb: [
+      ['Slash commands for everything on this site: look up a folder or a team, see who ' +
+       'you are about to pass, put two teams head to head, or ask what it would take to ' +
+       'reach a rank. ',
+       ['strong', 'Tell it your donor name once with '], ['code', '/link'],
+       ['strong', ' and '], ['code', '/me'], ['strong', ' answers without typing it again.']],
+      ['It installs two ways. To a server, where everyone in it can use the commands — ' +
+       'or to your own account, where they follow you into any server and any DM without ' +
+       'that server having to add anything.'],
+      ['It reads the same public API as everyone else, from inside the network, and ' +
+       'caches against the snapshot rather than polling. A busy channel costs one ' +
+       'request an hour.'],
+    ],
+    commands: [
+      ['/me', 'Your own stats, once you have linked a name'],
+      ['/link', 'Remember which donor name is yours'],
+      ['/unlink', 'Forget it again'],
+      ['/donor', 'Look up a folder'],
+      ['/team', 'Look up a team'],
+      ['/top', 'Leaderboard, by any column'],
+      ['/rivals', 'Who you are about to pass, and who is about to pass you'],
+      ['/compare', 'Two teams or two folders, head to head'],
+      ['/movers', 'Biggest 24-hour rank movements'],
+      ['/goal', 'What it would take to reach a rank'],
+      ['/status', 'Project totals, and how fresh the data is'],
+    ],
+  },
+];
+
+/** Turns a blurb fragment into a node: a bare string, or [tag, text]. */
+function frag(f) {
+  return Array.isArray(f) ? el(f[0], { text: f[1] }) : f;
+}
+
+function botCard(b) {
+  const badge = b.live
+    ? el('span.badge', { text: 'Live' })
+    : el('span.badge.warn', { text: 'In progress' });
+
+  const body = [
+    el('div.card-body',
+      ...b.blurb.map((p) => el('p', ...(Array.isArray(p) ? p.map(frag) : [p]))),
+      b.invite
+        ? el('p', el('a', { href: b.invite, target: '_blank', rel: 'noopener noreferrer' },
+            b.inviteText))
+        : null),
+  ];
+
+  if (b.commands) {
+    body.push(el('div.table-wrap', el('table.data',
+      el('thead', el('tr', el('th.left', 'Command'), el('th.left.wrap', 'What it does'))),
+      el('tbody', ...b.commands.map(([name, what]) =>
+        el('tr', el('td.left', el('code', name)), el('td.left.wrap.muted', what)))))));
+  }
+
+  return el('section.section', cardWith(b.platform, badge, ...body));
+}
+
+/**
+ * Every bot, on one page.
+ *
+ * It exists because the alternative was a nav entry per platform, and because the
+ * command list is the part people actually want and there was nowhere to put eleven
+ * rows of it — the API page could only afford a sentence.
+ */
+export async function botsPage(view) {
+  clear(view);
+
+  view.append(el('div.page-head',
+    el('h1.page-title', 'Bots'),
+    el('p.page-sub',
+      'The same statistics, where the conversation already is. Free, no key, and ' +
+      'nothing to sign up for.')));
+
+  for (const b of BOTS) view.append(botCard(b));
+
+  view.append(el('section.section', card('Building your own',
+    el('div.card-body',
+      el('p',
+        'Nothing here is privileged. Every figure these commands print comes from the ' +
+        'same unauthenticated endpoints anyone can call — ',
+        link('/api', 'the REST API'), ' if you are writing a program, or ',
+        link('/agents', 'the MCP server'), ' if you are pointing a model at it.'),
+      el('p',
+        'The one thing worth copying is the caching. Upstream publishes about once an ' +
+        'hour, so a response is immutable until the next snapshot: cache against the ' +
+        'snapshot time rather than a duration and a chatty client becomes a quiet one ' +
+        'without losing a second of freshness.')))));
 }
 
 export async function agentsPage(view) {

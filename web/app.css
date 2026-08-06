@@ -158,6 +158,9 @@ a:hover { color: var(--accent); }
 }
 .nav a:hover { background: var(--surface-hover); color: var(--ink); }
 .nav a[aria-current="page"] { background: var(--accent-quiet); color: var(--accent); }
+/* The bots link is an icon in the actions group rather than a nav entry, so it needs
+   the same current-page treatment from its own selector. */
+.icon-btn[aria-current="page"] { background: var(--accent-quiet); color: var(--accent); }
 
 /* Search lives in the header, not a sidebar: it is the primary way people find
    themselves, and burying it below navigation is the main thing wrong with the

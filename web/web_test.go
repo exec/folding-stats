@@ -171,7 +171,7 @@ func TestUnknownPathsAre404(t *testing.T) {
 
 	// Real pages, including ones with a user-supplied segment.
 	for _, p := range []string{
-		"/", "/overview", "/teams", "/donors", "/api", "/agents", "/search",
+		"/", "/overview", "/teams", "/donors", "/api", "/agents", "/bots", "/search",
 		"/privacy", "/disclaimer", "/teams/0", "/donors/Anonymous",
 		"/donors/Mr.Hello", "/teams/0/rivals", "/blog/a-free-folding-at-home-stats-api",
 	} {
