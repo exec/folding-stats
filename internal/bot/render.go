@@ -2,6 +2,7 @@ package bot
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -78,20 +79,151 @@ func movement(change int64) string {
 // back tomorrow and reads it as current. The site can rely on a live countdown in the
 // header; a message cannot, so it has to carry its own timestamp.
 func footer(s Snapshot) *discordgo.MessageEmbedFooter {
-	age := time.Since(s.At).Round(time.Minute)
-	txt := fmt.Sprintf("data from %s UTC (%s old)", s.At.UTC().Format("15:04"), age)
+	txt := fmt.Sprintf("data from %s UTC (%s old)", s.At.UTC().Format("15:04"), since(s.At))
 	if s.Stale {
 		txt += " — upstream update is late"
 	}
 	if s.WarmingUp != nil && s.WarmingUp.HistorySpanSec > 0 {
 		d := time.Duration(s.WarmingUp.HistorySpanSec) * time.Second
-		txt += fmt.Sprintf(" — only %s of history collected, so rates read low", d.Round(time.Hour))
+		txt += fmt.Sprintf(" — only %s of history collected, so rates read low", humanDur(d))
 	}
 	return &discordgo.MessageEmbedFooter{Text: txt}
 }
 
+func since(t time.Time) string { return humanDur(time.Since(t)) }
+
+// humanDur says a duration the way a person would.
+//
+// time.Duration's own String is built for logs, and printing it in a reply leaks that
+// straight to the reader: "32m0s old", "only 91h0m0s of history collected". Days keep
+// a decimal below ten because the figures they caveat are about how much history
+// exists, where "3 days" for 91 hours is a visible undercount.
+func humanDur(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "under a minute"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 48*time.Hour:
+		if m := int(d.Minutes()) % 60; m != 0 {
+			return fmt.Sprintf("%dh %dm", int(d.Hours()), m)
+		}
+		return plural(int(d.Hours()), "hour")
+	case d < 10*24*time.Hour:
+		return trim1(d.Hours()/24) + " days"
+	}
+	return plural(int(d.Hours()/24+0.5), "day")
+}
+
+func plural(v int, unit string) string {
+	if v == 1 {
+		return "1 " + unit
+	}
+	return fmt.Sprintf("%d %ss", v, unit)
+}
+
+func trim1(f float64) string {
+	return strings.TrimSuffix(fmt.Sprintf("%.1f", f), ".0")
+}
+
+// mdEsc defuses the markdown in names people chose themselves.
+//
+// Team names are arbitrary user text, and Discord renders markdown everywhere: a team
+// called **WINNERS** would come out bold and one containing a backtick would tear open
+// the code span around the rate beside it, spilling the formatting into the rest of
+// the list.
+func mdEsc(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if strings.ContainsRune("*_`~|\\>[]()", r) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// clip shortens a name to fit without letting one long entry eat the field.
+func clip(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return strings.TrimRight(string(r[:max-1]), " ") + "…"
+}
+
 func field(name, value string, inline bool) *discordgo.MessageEmbedField {
 	return &discordgo.MessageEmbedField{Name: name, Value: value, Inline: inline}
+}
+
+// streakText renders a daily-production run, and refuses to overstate one.
+//
+// A run that reaches the first day on record is a floor, not a measurement: this
+// service has been collecting for days, so somebody who has folded every day for a
+// decade would otherwise be credited with the age of the site. The website and the
+// MCP tools both say so; a number in a channel gets read by more people than either.
+func streakText(s *Streak) string {
+	if s == nil || s.Current == 0 {
+		return ""
+	}
+	if s.AtCollectionFloor {
+		return fmt.Sprintf("**%s**\nevery day on record — at least", plural(s.Current, "day"))
+	}
+	return fmt.Sprintf("**%s**\nbest %s", plural(s.Current, "day"), plural(s.Longest, "day"))
+}
+
+// teamList renders the teams a donor folds for.
+//
+// Ordered by lifetime points it answers the wrong question. Someone who has joined
+// twenty-five teams over the years gets a list led by four rows reading `0/day` —
+// where they have *ever* folded, when the field is headed "Folding for". So the teams
+// actually producing come first and the dormant ones collapse into a count, and if
+// nothing is producing at all the lifetime totals are the only story left to tell.
+func teamList(ts []Membership) string {
+	var live, idle []Membership
+	for _, t := range ts {
+		if t.PointsPerDay > 0 {
+			live = append(live, t)
+		} else {
+			idle = append(idle, t)
+		}
+	}
+	sort.SliceStable(live, func(i, j int) bool { return live[i].PointsPerDay > live[j].PointsPerDay })
+
+	shown, rate := live, true
+	if len(shown) == 0 {
+		shown, idle, rate = idle, nil, false
+	}
+
+	const max = 5
+	var b strings.Builder
+	for i, t := range shown {
+		if i == max {
+			break
+		}
+		if rate {
+			fmt.Fprintf(&b, "`%s/day` ", short(t.PointsPerDay))
+		} else {
+			fmt.Fprintf(&b, "`%s` ", short(t.PointsTotal))
+		}
+		b.WriteString(mdEsc(clip(t.TeamName, 44)))
+		if t.RankInTeam > 0 {
+			fmt.Fprintf(&b, " · #%s on team", n(t.RankInTeam))
+		}
+		b.WriteByte('\n')
+	}
+
+	var rest []string
+	if over := len(shown) - max; over > 0 {
+		rest = append(rest, fmt.Sprintf("%d more", over))
+	}
+	if len(idle) > 0 {
+		rest = append(rest, fmt.Sprintf("%d with nothing recent", len(idle)))
+	}
+	if len(rest) > 0 {
+		fmt.Fprintf(&b, "…and %s", strings.Join(rest, ", "))
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // DonorEmbed renders one donor.
@@ -114,23 +246,14 @@ func DonorEmbed(d Donor, s Snapshot) *discordgo.MessageEmbed {
 		e.Fields = append(e.Fields, field("Standing",
 			fmt.Sprintf("top %.2f%% of %s donors", d.Standing.Lifetime.TopPercent, short(d.Standing.Lifetime.Of)), true))
 	}
-	if d.Streak != nil && d.Streak.Current > 0 {
-		e.Fields = append(e.Fields, field("Streak",
-			fmt.Sprintf("%d days (best %d)", d.Streak.Current, d.Streak.Longest), true))
+	if s := streakText(d.Streak); s != "" {
+		e.Fields = append(e.Fields, field("Streak", s, true))
 	}
 	if d.TeamCount > 0 {
 		e.Fields = append(e.Fields, field("Teams", n(d.TeamCount), true))
 	}
 	if len(d.Teams) > 0 {
-		var b strings.Builder
-		for i, t := range d.Teams {
-			if i == 5 {
-				fmt.Fprintf(&b, "…and %d more", len(d.Teams)-5)
-				break
-			}
-			fmt.Fprintf(&b, "`%s/day` %s\n", short(t.PointsPerDay), t.Name)
-		}
-		e.Fields = append(e.Fields, field("Folding for", b.String(), false))
+		e.Fields = append(e.Fields, field("Folding for", teamList(d.Teams), false))
 	}
 	// Said plainly, not as a badge: presenting a shared name's aggregate as one
 	// person is the single most misleading thing this bot could do.
@@ -164,9 +287,8 @@ func TeamEmbed(t Team, s Snapshot) *discordgo.MessageEmbed {
 		e.Fields = append(e.Fields, field("Standing",
 			fmt.Sprintf("top %.2f%% of %s teams", t.Standing.Lifetime.TopPercent, short(t.Standing.Lifetime.Of)), true))
 	}
-	if t.Streak != nil && t.Streak.Current > 0 {
-		e.Fields = append(e.Fields, field("Streak",
-			fmt.Sprintf("%d days (best %d)", t.Streak.Current, t.Streak.Longest), true))
+	if s := streakText(t.Streak); s != "" {
+		e.Fields = append(e.Fields, field("Streak", s, true))
 	}
 	return e
 }

@@ -233,6 +233,11 @@ type Streak struct {
 	Longest    int    `json:"longest"`
 	ActiveDays int    `json:"active_days"`
 	Since      string `json:"since,omitempty"`
+	// AtCollectionFloor marks a run reaching back to the first day this service
+	// recorded anything, which makes the figure a lower bound rather than a fact about
+	// the folder: someone who has folded daily for a decade reports the age of the
+	// site. Printing it unqualified is not a rounding error, it is a wrong number.
+	AtCollectionFloor bool `json:"at_collection_floor,omitempty"`
 }
 
 type Team struct {
@@ -266,15 +271,26 @@ type Donor struct {
 	// LikelyNotAPerson marks names shared by implausibly many teams, which the
 	// bot has to surface: replying with Anonymous's aggregate as though it were one
 	// folder would be the most misleading thing it could do.
-	LikelyNotAPerson bool      `json:"likely_not_a_person,omitempty"`
-	Standing         *Standing `json:"standing,omitempty"`
-	Streak           *Streak   `json:"streak,omitempty"`
-	Teams            []struct {
-		TeamID       int64  `json:"team_id"`
-		Name         string `json:"name"`
-		PointsTotal  int64  `json:"points_total"`
-		PointsPerDay int64  `json:"points_per_day_7d_avg"`
-	} `json:"teams,omitempty"`
+	LikelyNotAPerson bool         `json:"likely_not_a_person,omitempty"`
+	Standing         *Standing    `json:"standing,omitempty"`
+	Streak           *Streak      `json:"streak,omitempty"`
+	Teams            []Membership `json:"teams,omitempty"`
+}
+
+// Membership is one donor's record on one team.
+//
+// The service stores at the grain (name, team), so every row here is a membership and
+// not a team. That makes the field names a trap worth naming: "name" is the *donor's*
+// name, identical on all of them, and the team is under "team_name". Binding the
+// former and calling it the team renders as the donor's own name listed once per
+// team, which is exactly what it looked like.
+type Membership struct {
+	TeamID       int64  `json:"team_id"`
+	TeamName     string `json:"team_name"`
+	Donor        string `json:"name"`
+	RankInTeam   int64  `json:"rank_in_team"`
+	PointsTotal  int64  `json:"points_total"`
+	PointsPerDay int64  `json:"points_per_day_7d_avg"`
 }
 
 type SearchResult struct {
