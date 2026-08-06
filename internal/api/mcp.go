@@ -19,6 +19,7 @@ package api
 // calls means nothing to expire, resume, or get wrong.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -167,7 +168,10 @@ func (s *Server) mcpDispatch(r *http.Request, req mcpRequest) mcpResponse {
 			"instructions": "Live Folding@home donor and team statistics, refreshed hourly. " +
 				"Start with search when you have a name and not an id. Every figure is derived " +
 				"by comparing successive published snapshots, so rates and history only exist " +
-				"from 3 August 2026 onward; lifetime totals go back to the beginning.",
+				"from 3 August 2026 onward; lifetime totals go back to the beginning. " +
+				"Ids, names and counts are accepted as either numbers or strings — 32 and \"32\" " +
+				"name the same team — so a value carried from one tool to another never needs " +
+				"converting, whatever the schemas say each one prefers.",
 		}}
 
 	case "ping":
@@ -254,7 +258,7 @@ func mcpTools() []mcpTool {
 			"type":     "object",
 			"required": []any{"team_id"},
 			"properties": map[string]any{
-				"team_id": intSchema("The team number."),
+				"team_id": intSchema("The team number. A string like \"32\" is accepted too."),
 				"members": intSchema("How many top members to list. Default 5, max 25."),
 				"sort":    map[string]any{"type": "string", "enum": sortKeys, "description": "How to order those members. Default lifetime — use this_month or per_day to ask who is carrying the team now rather than who built it."},
 			},
@@ -374,7 +378,7 @@ func mcpTools() []mcpTool {
 			"required": []any{"kind", "who"},
 			"properties": map[string]any{
 				"kind": map[string]any{"type": "string", "enum": []any{"teams", "donors"}, "description": "Which ranking."},
-				"who":  strSchema("A team number, or an exact donor name."),
+				"who":  strSchema("A team number, or an exact donor name. A number is fine here too."),
 				"span": intSchema("How many to show on each side. Default 5, max 15."),
 			},
 		},
@@ -388,34 +392,122 @@ func mcpTools() []mcpTool {
 	}}
 }
 
+// mcpValue is one tool argument, accepted as either a JSON string or a JSON number.
+//
+// Six tools take an entity identifier, and three of them — compare, rivals and
+// what_would_it_take — are polymorphic over teams and donors, so those have to be
+// strings, wide enough to hold a donor name. The team-only tools naturally take a
+// number. A model that has just used one is holding the wrong shape for the other, and
+// with strict decoding that was a hard failure carrying "json: cannot unmarshal string
+// into Go struct field .team_id of type int32" — a sentence about our internals, in the
+// one place where the reader can only act on what the text tells it.
+//
+// So every argument takes both. "32" and 32 name the same team either way, nothing here
+// is ambiguous between the two, and being strict about it bought nothing but a failure
+// mode. The schemas still advertise the natural type, so a model is guided to the right
+// one rather than left to guess; it just no longer matters when it guesses the other.
+type mcpValue struct {
+	raw string
+	set bool
+}
+
+func (v *mcpValue) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	if b[0] == '"' {
+		var str string
+		if err := json.Unmarshal(b, &str); err != nil {
+			return err
+		}
+		v.raw, v.set = str, true
+		return nil
+	}
+	if b[0] == '{' || b[0] == '[' {
+		return fmt.Errorf("expected a number or a string, not an object or an array")
+	}
+	// Anything else scalar keeps its literal text: these are ids, names and counts, and
+	// none of them needs number semantics before the point it is used.
+	v.raw, v.set = string(b), true
+	return nil
+}
+
+func (v mcpValue) String() string { return v.raw }
+
+// Int reads a count, falling back to zero — every caller clamps it to a default, so a
+// value that is not a number is treated as one that was never given.
+func (v mcpValue) Int() int {
+	n, err := strconv.Atoi(strings.TrimSpace(v.raw))
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func (v mcpValue) Int64() int64 {
+	n, err := strconv.ParseInt(strings.TrimSpace(v.raw), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// team resolves an argument that names a team by number.
+//
+// Absent is nil with no error, since several tools take it optionally. Present but
+// unreadable is an error that says what a team number looks like and how to find one,
+// because that is the case a model can actually recover from.
+func (v mcpValue) team(field string) (*int32, error) {
+	if !v.set || strings.TrimSpace(v.raw) == "" {
+		return nil, nil
+	}
+	id, err := strconv.ParseInt(strings.TrimSpace(v.raw), 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be a team's number, like 32 — %q is not one. Both 32 "+
+			"and \"32\" are accepted. Use search to find a team's number from its name.",
+			field, v.raw)
+	}
+	n := int32(id)
+	return &n, nil
+}
+
 func (s *Server) mcpCall(r *http.Request, snap *Snapshot, name string, raw json.RawMessage) (string, error) {
 	var a struct {
-		Query       string `json:"query"`
-		Name        string `json:"name"`
-		Donor       string `json:"donor"`
-		Kind        string `json:"kind"`
-		Sort        string `json:"sort"`
-		Scope       string `json:"scope"`
-		Granularity string `json:"granularity"`
-		A           string `json:"a"`
-		B           string `json:"b"`
-		Who         string `json:"who"`
-		Direction   string `json:"direction"`
-		Overtake    string `json:"overtake"`
-		By          string `json:"by"`
-		Within      int    `json:"within"`
-		TargetRank  int    `json:"target_rank"`
-
-		TargetPoints int64 `json:"target_points"`
-		TeamID      *int32 `json:"team_id"`
-		Limit       int    `json:"limit"`
-		Members     int    `json:"members"`
-		Span        int    `json:"span"`
+		Query        mcpValue `json:"query"`
+		Name         mcpValue `json:"name"`
+		Donor        mcpValue `json:"donor"`
+		Kind         mcpValue `json:"kind"`
+		Sort         mcpValue `json:"sort"`
+		Scope        mcpValue `json:"scope"`
+		Granularity  mcpValue `json:"granularity"`
+		A            mcpValue `json:"a"`
+		B            mcpValue `json:"b"`
+		Who          mcpValue `json:"who"`
+		Direction    mcpValue `json:"direction"`
+		Overtake     mcpValue `json:"overtake"`
+		By           mcpValue `json:"by"`
+		Within       mcpValue `json:"within"`
+		TargetRank   mcpValue `json:"target_rank"`
+		TargetPoints mcpValue `json:"target_points"`
+		TeamID       mcpValue `json:"team_id"`
+		Limit        mcpValue `json:"limit"`
+		Members      mcpValue `json:"members"`
+		Span         mcpValue `json:"span"`
 	}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &a); err != nil {
-			return "", fmt.Errorf("could not read the arguments: %v", err)
+			// Lead with what to do about it. The decoder's own wording names Go types
+			// and struct fields, which is accurate and useless to the only reader here.
+			return "", fmt.Errorf("could not read the arguments for %s. Every id, name and "+
+				"count may be given as either a JSON string or a number, so 32 and \"32\" are "+
+				"both fine; objects and arrays are not. Call tools/list for this tool's "+
+				"arguments. (%v)", name, err)
 		}
+	}
+	teamID, err := a.TeamID.team("team_id")
+	if err != nil {
+		return "", err
 	}
 
 	if snap.Guard != nil {
@@ -425,25 +517,26 @@ func (s *Server) mcpCall(r *http.Request, snap *Snapshot, name string, raw json.
 
 	switch name {
 	case "search":
-		return snap.mcpSearch(a.Query, a.Limit)
+		return snap.mcpSearch(a.Query.String(), a.Limit.Int())
 	case "get_donor":
-		return snap.mcpDonor(r.Context(), a.Name)
+		return snap.mcpDonor(r.Context(), a.Name.String())
 	case "get_team":
-		return snap.mcpTeam(r.Context(), a.TeamID, a.Members, a.Sort)
+		return snap.mcpTeam(r.Context(), teamID, a.Members.Int(), a.Sort.String())
 	case "leaderboard":
-		return snap.mcpLeaderboard(a.Kind, a.Sort, a.Limit)
+		return snap.mcpLeaderboard(a.Kind.String(), a.Sort.String(), a.Limit.Int())
 	case "production_history":
-		return snap.mcpHistory(r, a.Scope, a.TeamID, a.Donor, a.Granularity)
+		return snap.mcpHistory(r, a.Scope.String(), teamID, a.Donor.String(), a.Granularity.String())
 	case "compare":
-		return snap.mcpCompare(a.Kind, a.A, a.B)
+		return snap.mcpCompare(a.Kind.String(), a.A.String(), a.B.String())
 	case "rivals":
-		return snap.mcpRivals(a.Kind, a.Who, a.Span)
+		return snap.mcpRivals(a.Kind.String(), a.Who.String(), a.Span.Int())
 	case "team_activity":
-		return snap.mcpTeamActivity(a.TeamID, a.Limit)
+		return snap.mcpTeamActivity(teamID, a.Limit.Int())
 	case "movers":
-		return snap.mcpMovers(a.Kind, a.Direction, a.Within, a.Limit)
+		return snap.mcpMovers(a.Kind.String(), a.Direction.String(), a.Within.Int(), a.Limit.Int())
 	case "what_would_it_take":
-		return snap.mcpGoal(a.Kind, a.Who, a.TargetRank, a.TargetPoints, a.Overtake, a.By)
+		return snap.mcpGoal(a.Kind.String(), a.Who.String(), a.TargetRank.Int(),
+			a.TargetPoints.Int64(), a.Overtake.String(), a.By.String())
 	case "project_status":
 		return snap.mcpStatus(), nil
 	}

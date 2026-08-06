@@ -610,3 +610,70 @@ func aheadButCaughtFixture(t *testing.T) *Server {
 	srv.Publish(Build(state, memberWin, teamWin, tbl, st, last, last.Add(time.Hour), "ahead-etag"))
 	return srv
 }
+
+// TestToolsAcceptIdsAsNumbersOrStrings closes a failure that only a model would hit.
+//
+// Six tools take an entity identifier, and three of them are polymorphic over teams and
+// donors — so those must be strings, wide enough for a donor name — while the team-only
+// tools naturally take a number. A model that has just called one is holding the wrong
+// shape for the other, and strict decoding turned that into a hard failure carrying
+// "json: cannot unmarshal string into Go struct field .team_id of type int32": a
+// sentence about our internals, to a reader that can only act on what the text says.
+//
+// The check is that both spellings produce the *same answer*, not merely that neither
+// errors — accepting an argument and then quietly ignoring it would pass a weaker test
+// and be worse than the failure it replaced.
+func TestToolsAcceptIdsAsNumbersOrStrings(t *testing.T) {
+	srv := fixture(t)
+	for _, c := range []struct{ tool, asNumber, asString string }{
+		{"get_team", `{"team_id":32}`, `{"team_id":"32"}`},
+		{"team_activity", `{"team_id":32}`, `{"team_id":"32"}`},
+		{"production_history", `{"scope":"team","team_id":32}`, `{"scope":"team","team_id":"32"}`},
+		{"rivals", `{"kind":"teams","who":32}`, `{"kind":"teams","who":"32"}`},
+		{"compare", `{"kind":"teams","a":32,"b":51}`, `{"kind":"teams","a":"32","b":"51"}`},
+		{"what_would_it_take", `{"kind":"teams","who":32,"target_points":99999999}`,
+			`{"kind":"teams","who":"32","target_points":"99999999"}`},
+		// Counts too, since they travel between calls the same way.
+		{"leaderboard", `{"kind":"teams","limit":2}`, `{"kind":"teams","limit":"2"}`},
+		{"movers", `{"kind":"teams","within":50,"limit":3}`, `{"kind":"teams","within":"50","limit":"3"}`},
+	} {
+		num := mcpText(t, srv, c.tool, c.asNumber)
+		str := mcpText(t, srv, c.tool, c.asString)
+		if num != str {
+			t.Errorf("%s answers differently depending on how the id was spelled:\n"+
+				"--- as a number ---\n%s\n--- as a string ---\n%s", c.tool, num, str)
+		}
+	}
+}
+
+// TestArgumentErrorsTellTheModelWhatToDo keeps the remaining failures actionable.
+func TestArgumentErrorsTellTheModelWhatToDo(t *testing.T) {
+	srv := fixture(t)
+	for _, c := range []struct {
+		tool, args string
+		want       []string
+	}{
+		// A genuinely unusable team id names what one looks like and where to get it.
+		{"get_team", `{"team_id":"not-a-team"}`, []string{"team's number", "search"}},
+		// A structural mistake leads with the recovery, not with the decoder's wording.
+		{"get_team", `{"team_id":{"id":32}}`, []string{"either a JSON string or a number", "tools/list"}},
+	} {
+		out := mcpDo(t, srv, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"`+
+			c.tool+`","arguments":`+c.args+`}}`)
+		res := out["result"].(map[string]any)
+		text, _ := res["content"].([]any)[0].(map[string]any)["text"].(string)
+		if res["isError"] != true {
+			t.Errorf("%s%s was accepted, want an error", c.tool, c.args)
+			continue
+		}
+		for _, want := range c.want {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s%s: error does not mention %q:\n  %s", c.tool, c.args, want, text)
+			}
+		}
+		// Whatever else it says, it must not be a tour of our struct definitions.
+		if strings.Contains(text, "Go struct field") {
+			t.Errorf("%s%s: error leaks Go internals:\n  %s", c.tool, c.args, text)
+		}
+	}
+}
