@@ -1,8 +1,8 @@
 // Router, header behaviour and boot.
 
 import { api, onSnapshot, setCacheMode } from '/api.js';
-import { el, clear, setQuiet } from '/ui.js';
-import { agoCompact, dateTime, n, short, nameText } from '/format.js';
+import { el, clear, setQuiet, balanceStats } from '/ui.js';
+import { ago, agoCompact, dateTime, n, short, nameText } from '/format.js';
 import { onTick, start as startCountdown } from '/countdown.js';
 import { skewMs } from '/clock.js';
 import * as views from '/views.js';
@@ -36,14 +36,19 @@ const countdownEl = document.getElementById('countdown');
 
 let currentSnap = null;
 
-onSnapshot((s) => {
-  currentSnap = s;
-  freshText.textContent = `Updated ${agoCompact(s.at)}`;
-  freshEl.querySelector('.dot').classList.toggle('stale', !!s.stale);
-
+/**
+ * Everything about the snapshot that no longer fits in the header.
+ *
+ * The age leads, because it is what the visible line used to say and the header now
+ * shows only the countdown — so this is the one place it still exists. It is rebuilt
+ * on every tick rather than once per snapshot, since a relative time set an hour ago
+ * would be an hour wrong by the time anybody hovered it.
+ */
+function freshnessTitle(s) {
   // The interval is next_expected_at - at; the API no longer duplicates it as a field.
   const intervalSec = Math.round((Date.parse(s.next_expected_at) - Date.parse(s.at)) / 1000);
   const parts = [
+    `Updated ${ago(s.at)}`,
     `Snapshot: ${dateTime(s.at)}`,
     `Next expected: ${dateTime(s.next_expected_at)}`,
     s.warming_up?.interval_estimated
@@ -62,16 +67,32 @@ onSnapshot((s) => {
   if (s.warming_up?.history_span_sec) {
     parts.push('Less than 7 days of history collected — the per-day average spans a shorter window.');
   }
-  freshEl.title = parts.join('\n');
+  return parts.join('\n');
+}
+
+onSnapshot((s) => {
+  currentSnap = s;
+  freshEl.querySelector('.dot').classList.toggle('stale', !!s.stale);
+  freshEl.title = freshnessTitle(s);
 });
 
-// "Updated 3m ago" goes wrong just by sitting there, so it is re-rendered on
-// the countdown's own tick rather than on a second timer of its own.
+// The countdown is the whole visible indicator now: a dot for health and the time to
+// the next publish. "Updated 30m ago" said the same thing backwards, in three times
+// the width, next to a countdown that already implies it.
+//
+// It re-renders on the countdown's own tick rather than on a timer of its own, because
+// a relative time goes wrong just by sitting there.
 onTick(({ text, state }) => {
   countdownEl.textContent = text;
   countdownEl.classList.toggle('checking', state === 'checking');
   countdownEl.classList.toggle('overdue', state === 'overdue');
-  if (currentSnap) freshText.textContent = `Updated ${agoCompact(currentSnap.at)}`;
+  // The age stays in the header only while there is no countdown to show — before the
+  // first snapshot lands — so the block is never a lone dot with nothing beside it.
+  freshText.hidden = text !== '';
+  if (currentSnap) {
+    freshText.textContent = `Updated ${agoCompact(currentSnap.at)}`;
+    freshEl.title = freshnessTitle(currentSnap);
+  }
 });
 startCountdown();
 
@@ -93,6 +114,31 @@ const trackHeaderHeight = () => {
 };
 new ResizeObserver(trackHeaderHeight).observe(headerEl);
 trackHeaderHeight();
+
+/* ----------------------------------------------------------- stat grids --- */
+
+// Stat rows need their column count chosen rather than packed; see balanceStats.
+//
+// Driven from one mutation observer on the view rather than a per-grid ResizeObserver:
+// grids are created and thrown away on every navigation and on every basis toggle, and
+// an observer per grid is an observer to forget to disconnect. This one is created once
+// and lives as long as the page.
+//
+// childList only, so writing grid-template-columns back — an attribute mutation — does
+// not re-enter this.
+const scheduleBalance = (() => {
+  let queued = false;
+  return () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      balanceStats();
+    });
+  };
+})();
+new MutationObserver(scheduleBalance).observe(view, { childList: true, subtree: true });
+addEventListener('resize', scheduleBalance);
 
 /* --------------------------------------------------------------- router --- */
 

@@ -51,6 +51,51 @@ export function statTile(label, value, sub, hint) {
   );
 }
 
+/* ------------------------------------------------------- balancing .stats --- */
+
+// The minimum tile width, which must match the minmax() floor in the .stats rule.
+const STAT_MIN = 180;
+// The grid's gap, in the same place for the same reason.
+const STAT_GAP = 1;
+
+/**
+ * How many columns to use for `count` tiles when `fits` would have fitted.
+ *
+ * `repeat(auto-fit, minmax(180px, 1fr))` packs as many columns as fit and lets the
+ * remainder fall onto the next row, so eight tiles in a five-column width render as a
+ * full row of five with a stranded trio beneath it. It reads as a layout bug because
+ * in every sense except the CSS it is one: the grid had no reason to prefer five.
+ *
+ * Grid cannot express "and balance the rows" — the choice depends on the item count,
+ * which is arithmetic CSS has no access to. So: take the columns that would have
+ * fitted, work out how many rows that needs, then use the fewest columns that still
+ * fills those rows. Eight in a five-wide space become four and four; nine stay five
+ * and four, because that is already even.
+ *
+ * Never more columns than would have fitted, so this only ever makes tiles wider.
+ *
+ * Split out from the DOM so the arithmetic can be checked directly — it is the whole
+ * behaviour, and the rest is reading a width and writing a style.
+ */
+export function statColumns(count, fits) {
+  const usable = Math.min(count, Math.max(1, fits));
+  const rows = Math.ceil(count / usable);
+  return Math.ceil(count / rows);
+}
+
+function balanceOne(grid) {
+  const n = grid.childElementCount;
+  const w = grid.clientWidth;
+  if (!n || !w) return;
+  const fits = Math.floor((w + STAT_GAP) / (STAT_MIN + STAT_GAP));
+  grid.style.gridTemplateColumns = `repeat(${statColumns(n, fits)}, minmax(0, 1fr))`;
+}
+
+/** Balance every stat grid under root. Cheap enough to do wholesale. */
+export function balanceStats(root = document) {
+  for (const grid of root.querySelectorAll('.stats')) balanceOne(grid);
+}
+
 export function skeleton(height = 200) {
   return el('div.skeleton', { style: `height:${height}px` });
 }

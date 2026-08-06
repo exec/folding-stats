@@ -248,11 +248,12 @@ a:hover { color: var(--accent); }
 a.icon-btn { color: var(--ink-secondary); text-decoration: none; }
 a.icon-btn:hover { color: var(--ink); }
 
-/* The countdown is a secondary, always-moving figure. Tabular digits stop the
-   whole header shifting sideways every second as the glyph widths change. */
+/* The countdown is now the whole visible indicator, beside a status dot. Tabular
+   digits stop the header shifting sideways every second as glyph widths change.
+
+   No left divider any more: it separated the countdown from "Updated 30m ago", and
+   with that moved into the tooltip there is nothing on the other side of it. */
 .countdown {
-  padding-left: var(--s2);
-  border-left: 1px solid var(--line);
   font-variant-numeric: tabular-nums;
   color: var(--ink-muted);
 }
@@ -1017,12 +1018,6 @@ footer {
 @media (max-width: 480px) {
   .brand-name { display: none; }
   .header-actions { margin-left: auto; }
-}
-
-/* Once the freshness line itself has to wrap, a left divider on the countdown is a
-   rule hanging off the start of a line. Space separates them well enough there. */
-@media (max-width: 420px) {
-  .countdown { padding-left: 0; border-left: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
