@@ -476,7 +476,7 @@ func (s *Service) publish() {
 	// table, and logging it anyway would put figures in the series that are not
 	// comparable with the rest.
 	if rebuilt {
-		logMemory(s.Log, memBefore, memBuilt, readMem(), len(tbl.Donors), len(s.state.Members))
+		logMemory(s.Log, memBefore, memBuilt, readMemSettled(), len(tbl.Donors), len(s.state.Members))
 	}
 }
 
