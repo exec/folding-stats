@@ -218,6 +218,34 @@ function axes(t, gran) {
  * comment here ruled bars out on the opposite claim; it is wrong for 1.6.32, checked
  * against the source.
  */
+/**
+ * Room on the right for the newest bucket to draw in.
+ *
+ * align: 1 means a bar or a step starts at its own timestamp and extends to the right.
+ * uPlot's default x range is exactly [first point, last point], so the final bucket
+ * draws entirely in the space *after* the last data point — outside the plot, clipped
+ * away. The value is still in the series, so the tooltip finds it when the pointer
+ * moves past the last visible bar: a figure you can read but not see, and the newest
+ * one, which is the one people are looking for.
+ *
+ * The width matches what uPlot sizes bars from — the smallest gap between points —
+ * rather than the nominal period, because upstream publishes roughly hourly and never
+ * exactly. Buckets sit about 3,610s apart, so a hard 3,600 would leave the last bar
+ * a sliver short every time.
+ */
+export function xRange(granularity) {
+  return (u, min, max) => {
+    const xs = u.data?.[0] || [];
+    let step = Infinity;
+    for (let i = 1; i < xs.length; i++) step = Math.min(step, xs[i] - xs[i - 1]);
+    if (!Number.isFinite(step) || step <= 0) step = bucketStep(granularity) / 1000;
+    // Monthly reports no fixed step; a month is close enough to thirty days for the
+    // one bucket's worth of trailing space this is measuring out.
+    if (!step) step = 30 * 86400;
+    return [min, max + step];
+  };
+}
+
 function bucketPaths(chart) {
   const n = chart.data?.[0]?.length ?? 0;
   return n > 0 && n < 100
@@ -417,7 +445,13 @@ export function seriesChart(el) {
       cursor: cursor(),
       hooks: tooltipHooks(self),
       legend: { show: false },
-      scales: { x: { time: true }, y: { range: (u, min, max) => [0, max === 0 ? 1 : max * 1.08] } },
+      scales: {
+        // Only the stacked form draws rightward from its points; the overlaid form is
+        // plain lines, whose last point sits on the axis and needs no room after it.
+        // Extending the range there would just leave a bucket of blank plot.
+        x: stacked ? { time: true, range: xRange(meta?.granularity) } : { time: true },
+        y: { range: (u, min, max) => [0, max === 0 ? 1 : max * 1.08] },
+      },
       series: [
         { label: 'Time' },
         ...labels.map((label, i) => ({
