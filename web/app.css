@@ -142,7 +142,11 @@ a:hover { color: var(--accent); }
   white-space: nowrap;
 }
 .brand-mark { color: var(--accent); font-size: 16px; }
-.brand-sub { color: var(--ink-muted); font-weight: 400; font-size: 12px; }
+
+/* The two icon buttons are one group. Left as siblings of the nav and the search they
+   inherited the header's section gap, which spent width implying they were unrelated
+   to each other — and header width is the scarcest thing on this page. */
+.header-actions { display: flex; align-items: center; gap: var(--s2); flex: none; }
 
 .nav { display: flex; gap: var(--s1); }
 .nav a {
@@ -925,7 +929,6 @@ footer {
     padding-bottom: var(--s2);
     row-gap: var(--s2);
   }
-  .brand-sub { display: none; }
   /* Basis zero, not a width. Flexbox breaks lines on each item's *hypothetical*
      size — its basis — and only shrinks within a line afterwards. Any non-zero basis
      therefore forces a wrap at some width even though the item would have shrunk to
@@ -1013,7 +1016,7 @@ footer {
    page. The diamond still links home, which is the part that was doing the work. */
 @media (max-width: 480px) {
   .brand-name { display: none; }
-  #theme-toggle { margin-left: auto; }
+  .header-actions { margin-left: auto; }
 }
 
 /* Once the freshness line itself has to wrap, a left divider on the countdown is a

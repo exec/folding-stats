@@ -86,15 +86,18 @@ function emit() {
     // An unmeasured interval is the nominal hour, not an observation. Saying "~"
     // rather than a precise clock keeps the display from claiming a precision that
     // the first few cycles after a cold start do not have.
-    text = `next update in ${plan.measured ? '' : '~'}${mmss(ms)}`;
+    // "next in 5:12" rather than "next update in 5:12": this sits beside "Updated
+    // 30m ago" in a header where width is the scarcest thing on the page, and the word
+    // it drops is already established by the thing next to it.
+    text = `next in ${plan.measured ? '' : '~'}${mmss(ms)}`;
     state = 'waiting';
   } else if (-ms < CHECKING_WINDOW_MS) {
-    text = 'checking for new data…';
+    text = 'checking…';
     state = 'checking';
   } else {
     // Count up instead. The figure moves every second, which is the difference
     // between a display that is waiting and one that has hung.
-    text = `update overdue by ${mmss(-ms)}`;
+    text = `overdue by ${mmss(-ms)}`;
     state = 'overdue';
   }
   for (const fn of listeners) fn({ text, state, remainingMs: ms });

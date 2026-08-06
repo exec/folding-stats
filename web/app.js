@@ -2,7 +2,7 @@
 
 import { api, onSnapshot, setCacheMode } from '/api.js';
 import { el, clear, setQuiet } from '/ui.js';
-import { ago, dateTime, n, short, nameText } from '/format.js';
+import { agoCompact, dateTime, n, short, nameText } from '/format.js';
 import { onTick, start as startCountdown } from '/countdown.js';
 import { skewMs } from '/clock.js';
 import * as views from '/views.js';
@@ -38,7 +38,7 @@ let currentSnap = null;
 
 onSnapshot((s) => {
   currentSnap = s;
-  freshText.textContent = `Updated ${ago(s.at)}`;
+  freshText.textContent = `Updated ${agoCompact(s.at)}`;
   freshEl.querySelector('.dot').classList.toggle('stale', !!s.stale);
 
   // The interval is next_expected_at - at; the API no longer duplicates it as a field.
@@ -65,13 +65,13 @@ onSnapshot((s) => {
   freshEl.title = parts.join('\n');
 });
 
-// "Updated 3 minutes ago" goes wrong just by sitting there, so it is re-rendered on
+// "Updated 3m ago" goes wrong just by sitting there, so it is re-rendered on
 // the countdown's own tick rather than on a second timer of its own.
 onTick(({ text, state }) => {
   countdownEl.textContent = text;
   countdownEl.classList.toggle('checking', state === 'checking');
   countdownEl.classList.toggle('overdue', state === 'overdue');
-  if (currentSnap) freshText.textContent = `Updated ${ago(currentSnap.at)}`;
+  if (currentSnap) freshText.textContent = `Updated ${agoCompact(currentSnap.at)}`;
 });
 startCountdown();
 

@@ -67,6 +67,29 @@ export function ago(iso) {
 }
 
 /**
+ * The same elapsed time as ago(), in as few characters as it can be said.
+ *
+ * For the header only, where width is the scarcest thing on the page and this figure
+ * sits next to a live countdown, a status dot and a tooltip carrying the exact
+ * timestamps. "30m ago" loses nothing there that the surrounding context does not
+ * already supply, and "Updated 30 minutes ago" was the single widest thing in the row.
+ *
+ * Everywhere else keeps ago(): in running prose, "30 minutes ago" is what a person
+ * reads, and abbreviating it to save eleven characters in a paragraph is a saving
+ * nobody asked for.
+ */
+export function agoCompact(iso) {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return '';
+  const secs = Math.round((serverNow() - then) / 1000);
+  if (secs < 0) return 'just now'; // a snapshot from the future is a clock problem, not an age
+  if (secs < 60) return 'just now';
+  if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+  return `${Math.floor(secs / 86400)}d ago`;
+}
+
+/**
  * A calendar date in UTC, for figures that are about UTC days rather than instants.
  *
  * Rendering a day boundary in the reader's own timezone moves it: 00:00 UTC on the 3rd
