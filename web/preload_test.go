@@ -144,6 +144,21 @@ func TestDottedRoutesReachTheShell(t *testing.T) {
 			t.Errorf("%s: content type %q, want html", path, ct)
 		}
 	}
+	// Reaches the shell, but the router has no page for it: HTML so a person sees the
+	// site's own not-found, 404 so nothing automated records it as content. Distinct
+	// from missing() below, which is a bare plain-text 404 for an absent asset.
+	shellNotFound := func(path string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s: status %d, want 404 — a page that does not exist must say so", path, rec.Code)
+			return
+		}
+		if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+			t.Errorf("%s: content type %q, want html — it should still render the app", path, ct)
+		}
+	}
 	missing := func(path string) {
 		t.Helper()
 		rec := httptest.NewRecorder()
@@ -179,7 +194,9 @@ func TestDottedRoutesReachTheShell(t *testing.T) {
 	shell("/teams")
 	shell("/donors")
 	shell("/overview")
-	shell("/posts/some.slug.with.dots")
+	// Not a route — posts live at /blog/{slug} — so it reaches the shell and the app
+	// renders not-found. It is still html, and it is still not an asset 404.
+	shellNotFound("/posts/some.slug.with.dots")
 
 	// The protection this replaced must survive: a missing module at the root, and a
 	// stale import under an embedded directory, both have to 404 rather than hand
@@ -191,8 +208,9 @@ func TestDottedRoutesReachTheShell(t *testing.T) {
 
 	// An extension the asset tree does not use cannot be a missing module, so it
 	// falls through to the shell and the client router renders its own not-found.
-	// That is the same fallback that makes a dotted donor name work at all.
-	shell("/app.notanext")
+	// That is the same fallback that makes a dotted donor name work at all — the
+	// difference is only that the status now agrees with the page.
+	shellNotFound("/app.notanext")
 
 	// And real assets still serve.
 	asset("/app.js", "text/javascript")

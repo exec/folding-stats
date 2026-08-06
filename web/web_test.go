@@ -149,3 +149,75 @@ func TestEveryAssetIsEmbedded(t *testing.T) {
 		}
 	}
 }
+
+// TestUnknownPathsAre404 closes a soft 404.
+//
+// Paths the router has no page for used to return the shell with status 200. The app
+// rendered "Not found" correctly, so it looked right to a person and wrong to
+// everything else: a crawler indexes the not-found page as content, and an agent
+// probing for /openapi.json or /llms.txt is told it found one. On a site that invites
+// automated clients in robots.txt and publishes an MCP endpoint, that matters.
+func TestUnknownPathsAre404(t *testing.T) {
+	h, err := Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hit := func(p string) (int, string) {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		return rec.Code, rec.Body.String()
+	}
+
+	// Real pages, including ones with a user-supplied segment.
+	for _, p := range []string{
+		"/", "/overview", "/teams", "/donors", "/api", "/agents", "/search",
+		"/privacy", "/disclaimer", "/teams/0", "/donors/Anonymous",
+		"/donors/Mr.Hello", "/teams/0/rivals", "/blog/a-free-folding-at-home-stats-api",
+	} {
+		if code, _ := hit(p); code != http.StatusOK {
+			t.Errorf("%s = %d, want 200", p, code)
+		}
+	}
+
+	// Misses, whatever they look like. The manifest names are the ones an agent
+	// actually probes for.
+	for _, p := range []string{
+		"/openapi.json", "/llms.txt", "/.well-known/ai-plugin.json", "/nope.png",
+		"/no-such-page", "/teams/0/nonsense", "/blog", "/v2/summary",
+	} {
+		code, body := hit(p)
+		if code != http.StatusNotFound {
+			t.Errorf("%s = %d, want 404", p, code)
+		}
+		// Still the app, so a person gets the site's own not-found page.
+		if !strings.Contains(body, "<title>") {
+			t.Errorf("%s: 404 body is not the shell", p)
+		}
+	}
+}
+
+// TestClientRoutesComeFromAppJS pins the single source of truth.
+//
+// Restating the router's table in Go would work until someone adds a route to app.js
+// and not here, at which point a working page answers 404 to every crawler while
+// looking fine in a browser.
+func TestClientRoutesComeFromAppJS(t *testing.T) {
+	s, err := newSite()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Count the entries in app.js's table directly and require every one compiled.
+	inJS := strings.Count(string(s.files["/app.js"]), "\n  [/^")
+	if inJS == 0 {
+		t.Fatal("could not find the route table in app.js; the extraction is looking for the wrong shape")
+	}
+	if len(s.routes) != inJS {
+		t.Errorf("compiled %d routes, app.js declares %d", len(s.routes), inJS)
+	}
+
+	// And extraction failing quietly must not be survivable: every page 404ing is a
+	// worse outcome than refusing to boot.
+	if _, err := clientRoutes([]byte("const routes = [];")); err == nil {
+		t.Error("clientRoutes accepted a table with no routes")
+	}
+}

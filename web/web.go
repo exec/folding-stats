@@ -54,6 +54,51 @@ type site struct {
 	// directories it occupies. Together they say which paths are asset requests.
 	assetExts map[string]bool
 	assetDirs map[string]bool
+	// routes are the client-side routes, read out of app.js rather than restated
+	// here. A path matching none of them gets the shell with a 404 status.
+	routes []*regexp.Regexp
+}
+
+// jsRoute pulls one route pattern out of the router's table in app.js.
+//
+// Each entry is `[/^\/whatever\/?$/, handler]`, and the sources happen to be valid Go
+// regexps unchanged — including the character classes and the non-greedy donor
+// pattern — so they can be compiled directly instead of transcribed.
+var jsRoute = regexp.MustCompile(`(?m)^\s*\[/(\^.*?\$)/\s*,`)
+
+// clientRoutes compiles the router's own table so the server can tell a real page from
+// a miss.
+//
+// Restating the list in Go would work until the day someone adds a route to app.js and
+// not here, at which point a working page starts answering 404 to every crawler while
+// looking fine in a browser — a divergence nothing would surface. Reading the single
+// source of truth cannot drift.
+func clientRoutes(appJS []byte) ([]*regexp.Regexp, error) {
+	ms := jsRoute.FindAllSubmatch(appJS, -1)
+	out := make([]*regexp.Regexp, 0, len(ms))
+	for _, m := range ms {
+		re, err := regexp.Compile(string(m[1]))
+		if err != nil {
+			return nil, fmt.Errorf("web: route %q from app.js: %w", m[1], err)
+		}
+		out = append(out, re)
+	}
+	// Zero would mean the extraction silently stopped working and every page on the
+	// site would start returning 404. Better to refuse to start.
+	if len(out) < 5 {
+		return nil, fmt.Errorf("web: found only %d client routes in app.js; the router's shape must have changed", len(out))
+	}
+	return out, nil
+}
+
+// isRoute reports whether the SPA has a page for this path.
+func (s *site) isRoute(clean string) bool {
+	for _, re := range s.routes {
+		if re.MatchString(clean) {
+			return true
+		}
+	}
+	return false
 }
 
 // isAsset reports whether a path addresses the embedded asset tree rather than a
@@ -127,6 +172,10 @@ func newSite() (*site, error) {
 		return nil, fmt.Errorf("web: index.html missing from embedded assets")
 	}
 	s.preload = preloadLink(s.index)
+
+	if s.routes, err = clientRoutes(s.files["/app.js"]); err != nil {
+		return nil, err
+	}
 
 	s.assetExts = map[string]bool{}
 	s.assetDirs = map[string]bool{}
@@ -239,6 +288,21 @@ func Handler() (http.Handler, error) {
 		// The shell is the one thing that must never be cached: it carries the
 		// version stamp that invalidates everything else.
 		w.Header().Set("Cache-Control", "no-cache")
+
+		// A path the router has no page for gets the shell — the app renders its own
+		// "Not found" — but with the status that says so.
+		//
+		// Serving 200 there is a soft 404: the page reads as missing to a person and
+		// as real content to everything else. On a site that invites automated
+		// clients in robots.txt and publishes an agent endpoint, that is not a
+		// cosmetic detail — a crawler indexes the not-found page, and an agent
+		// probing for /openapi.json or /llms.txt is told it found one.
+		if !s.isRoute(clean) {
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, string(s.index))
+			return
+		}
+
 		// Sent on the real response so a CDN can cache it and replay it as a 103
 		// Early Hint ahead of the next one. Harmless where nothing does: browsers
 		// treat it as an ordinary preload directive.
