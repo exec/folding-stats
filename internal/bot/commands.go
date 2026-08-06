@@ -117,6 +117,7 @@ func Commands() []*discordgo.ApplicationCommand {
 			},
 		},
 		{Name: "status", Description: "Project totals and how fresh the data is"},
+		alertCommand(),
 	})
 }
 
@@ -158,6 +159,12 @@ func anywhere(cmds []*discordgo.ApplicationCommand) []*discordgo.ApplicationComm
 
 func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	data := i.ApplicationCommandData()
+	// The alert group reads nested options and replies ephemerally, so it owns its
+	// whole interaction rather than sharing the flat path below.
+	if data.Name == "alert" {
+		b.handleAlert(s, i)
+		return
+	}
 	opts := map[string]*discordgo.ApplicationCommandInteractionDataOption{}
 	for _, o := range data.Options {
 		opts[o.Name] = o
@@ -446,8 +453,15 @@ func trunc(s string, n int) string {
 // `[Zebulon.fr]_Gtevoone82` correctly.
 func (b *Bot) handleAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	data := i.ApplicationCommandData()
+	// A subcommand's options are nested one level down, so the focused option is not in
+	// data.Options at all — without unwrapping, /alert would offer no completions and
+	// look broken in exactly the place a name is hardest to type.
+	optList := data.Options
+	if len(optList) == 1 && optList[0].Type == discordgo.ApplicationCommandOptionSubCommand {
+		optList = optList[0].Options
+	}
 	var focused *discordgo.ApplicationCommandInteractionDataOption
-	for _, o := range data.Options {
+	for _, o := range optList {
 		if o.Focused {
 			focused = o
 			break
@@ -458,11 +472,20 @@ func (b *Bot) handleAutocomplete(s *discordgo.Session, i *discordgo.InteractionC
 	}
 	q := strings.TrimSpace(focused.StringValue())
 
+	// Existing alerts, not names: the only sensible completion for "which one".
+	if focused.Name == "alert" {
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionApplicationCommandAutocompleteResult,
+			Data: &discordgo.InteractionResponseData{Choices: b.alertChoices(i, q)},
+		})
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
 	defer cancel()
 
 	kind := "both"
-	for _, o := range data.Options {
+	for _, o := range optList {
 		if o.Name == "kind" {
 			kind = o.StringValue()
 		}
@@ -473,25 +496,38 @@ func (b *Bot) handleAutocomplete(s *discordgo.Session, i *discordgo.InteractionC
 		kind = "donors"
 	}
 
+	// One field accepting either kind has to say which it got: a team id and a donor
+	// named "51" are the same string otherwise. Only the alert target needs this, so
+	// only it gets the prefix.
+	tagged := focused.Name == "target"
+
 	var choices []*discordgo.ApplicationCommandOptionChoice
 	if q != "" {
 		if res, _, err := b.api.Search(ctx, q, 25); err == nil {
 			if kind != "donors" {
 				for _, t := range res.Teams {
+					v := strconv.FormatInt(t.TeamID, 10)
+					if tagged {
+						v = "t:" + v
+					}
 					choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
 						// The label carries the points so a reader can tell two
 						// identically named teams apart; the value is the id, which is
 						// what the command actually needs.
 						Name:  trunc(fmt.Sprintf("%s (team %d) — %s", t.Name, t.TeamID, short(t.PointsTotal)), 100),
-						Value: strconv.FormatInt(t.TeamID, 10),
+						Value: v,
 					})
 				}
 			}
 			if kind != "teams" {
 				for _, d := range res.Donors {
+					v := trunc(d.Name, 98)
+					if tagged {
+						v = "d:" + v
+					}
 					choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
 						Name:  trunc(fmt.Sprintf("%s — %s", d.Name, short(d.PointsTotal)), 100),
-						Value: trunc(d.Name, 100),
+						Value: v,
 					})
 				}
 			}

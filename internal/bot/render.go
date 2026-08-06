@@ -17,6 +17,7 @@ const (
 	colourNormal = 0x3987e5
 	colourWarn   = 0xfab219
 	colourBad    = 0xd95926
+	colourGood   = 0x199e70
 )
 
 // n formats a count with thousands separators.

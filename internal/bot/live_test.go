@@ -38,9 +38,14 @@ func liveBot(t *testing.T) *Bot {
 	if err != nil {
 		t.Fatal(err)
 	}
+	alerts, err := OpenAlerts(dir + "/alerts.json")
+	if err != nil {
+		t.Fatal(err)
+	}
 	return &Bot{
 		api:    c,
 		links:  links,
+		alerts: alerts,
 		log:    slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
 		mcpURL: base + "/mcp",
 	}
@@ -263,20 +268,48 @@ func TestCommandsAreValidForDiscord(t *testing.T) {
 		}
 		seen[c.Name] = true
 
-		required := true
-		for _, o := range c.Options {
-			if len(o.Description) > 100 {
-				t.Errorf("%s.%s: description over 100 chars", c.Name, o.Name)
-			}
-			// Discord rejects the command outright if an optional option precedes a
-			// required one, and the message does not say which command.
+		checkOptions(t, c.Name, c.Options)
+	}
+}
+
+// checkOptions walks a command's options and those of any subcommand.
+//
+// The flat version missed everything inside /alert, where the rules bite hardest: a
+// required option after an optional one, or autocomplete alongside fixed choices,
+// makes Discord reject the whole registration with a message that does not name the
+// offending command — at start-up, in a log nobody is reading.
+func checkOptions(t *testing.T, path string, opts []*discordgo.ApplicationCommandOption) {
+	t.Helper()
+	required := true
+	for _, o := range opts {
+		where := path + "." + o.Name
+		if o.Name == "" || o.Description == "" {
+			t.Errorf("%s: options need a name and a description", where)
+		}
+		if o.Name != strings.ToLower(o.Name) {
+			t.Errorf("%s: option names must be lowercase", where)
+		}
+		if len(o.Description) > 100 {
+			t.Errorf("%s: description over 100 chars", where)
+		}
+		sub := o.Type == discordgo.ApplicationCommandOptionSubCommand ||
+			o.Type == discordgo.ApplicationCommandOptionSubCommandGroup
+		if !sub {
 			if o.Required && !required {
-				t.Errorf("%s: required option %q follows an optional one", c.Name, o.Name)
+				t.Errorf("%s: required option %q follows an optional one", path, o.Name)
 			}
 			required = o.Required
-			if o.Autocomplete && len(o.Choices) > 0 {
-				t.Errorf("%s.%s: autocomplete and fixed choices are mutually exclusive", c.Name, o.Name)
-			}
+		}
+		if o.Autocomplete && len(o.Choices) > 0 {
+			t.Errorf("%s: autocomplete and fixed choices are mutually exclusive", where)
+		}
+		if o.Autocomplete && o.Type != discordgo.ApplicationCommandOptionString &&
+			o.Type != discordgo.ApplicationCommandOptionInteger &&
+			o.Type != discordgo.ApplicationCommandOptionNumber {
+			t.Errorf("%s: only string, integer and number options may autocomplete", where)
+		}
+		if sub {
+			checkOptions(t, where, o.Options)
 		}
 	}
 }
@@ -325,5 +358,121 @@ func TestUserIDResolvesOutsideAGuild(t *testing.T) {
 	}
 	if got := userID(inDM); got != "dm-user" {
 		t.Errorf("in a DM userID = %q", got)
+	}
+}
+
+// TestAlertLifecycle drives the whole /alert surface against the live service.
+//
+// No Discord session, which is exactly the point: everything that can be wrong here —
+// resolving a target, seeding it so it does not immediately fire, scoping, removal —
+// happens before a message is ever sent. The session-shaped hole is announce(), which
+// is a no-op without one.
+func TestAlertLifecycle(t *testing.T) {
+	b := liveBot(t)
+	ctx := context.Background()
+
+	i := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		GuildID:   "g1",
+		ChannelID: "c1",
+		User:      &discordgo.User{ID: "u1"},
+	}}
+	data := &discordgo.ApplicationCommandInteractionData{}
+	opt := func(name string, v any) *discordgo.ApplicationCommandInteractionDataOption {
+		t := discordgo.ApplicationCommandOptionString
+		if _, isNum := v.(float64); isNum {
+			t = discordgo.ApplicationCommandOptionInteger
+		}
+		return &discordgo.ApplicationCommandInteractionDataOption{Name: name, Type: t, Value: v}
+	}
+
+	// Add one against a donor that exists in every corpus.
+	add := map[string]*discordgo.ApplicationCommandInteractionDataOption{
+		"type":      opt("type", string(AlertMilestone)),
+		"target":    opt("target", "d:Anonymous"),
+		"threshold": opt("threshold", float64(0)),
+	}
+	e, err := b.alertAdd(ctx, i, data, add)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Color == colourBad {
+		t.Fatalf("add refused: %s", e.Description)
+	}
+	if b.alerts.Count() != 1 {
+		t.Fatalf("alert not stored: %d", b.alerts.Count())
+	}
+
+	stored := b.alerts.InScope("g1", "c1")[0]
+	if stored.Kind != "donor" || stored.Target != "Anonymous" {
+		t.Errorf("target resolved wrong: %+v", stored)
+	}
+	// Seeded from a live reading, so the first evaluation has something to compare to.
+	if stored.Seen.Milestone == 0 || stored.Seen.PointsTotal == 0 {
+		t.Errorf("alert was not seeded from a live reading: %+v", stored.Seen)
+	}
+	// And therefore does not fire on the very next evaluation.
+	live, err := b.reading(ctx, stored.Kind, stored.Target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fire, headline, _, _ := evaluate(stored, live, time.Now().UTC()); fire {
+		t.Errorf("a freshly added alert fired immediately: %q", headline)
+	}
+
+	// A second identical one is refused rather than doubling every message.
+	if e, _ := b.alertAdd(ctx, i, data, add); e.Color != colourBad {
+		t.Error("duplicate alert was accepted")
+	}
+
+	// Listing shows it; another guild's listing does not.
+	if e, err := b.alertList(i); err != nil {
+		t.Fatal(err)
+	} else if !strings.Contains(e.Description, stored.ID) {
+		t.Errorf("list does not mention the alert: %q", e.Description)
+	}
+	other := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		GuildID: "g2", ChannelID: "c2", User: &discordgo.User{ID: "u2"},
+	}}
+	if e, _ := b.alertList(other); !strings.Contains(e.Title, "No alerts") {
+		t.Errorf("another guild can see this one's alerts: %q", e.Description)
+	}
+	// And cannot remove it.
+	if e, _ := b.alertRemove(other, stored.ID); e.Color != colourBad {
+		t.Error("another guild removed this one's alert")
+	}
+	if b.alerts.Count() != 1 {
+		t.Fatal("cross-guild removal succeeded")
+	}
+
+	if e, err := b.alertRemove(i, stored.ID); err != nil {
+		t.Fatal(err)
+	} else if e.Color == colourBad {
+		t.Errorf("owner could not remove: %s", e.Description)
+	}
+	if b.alerts.Count() != 0 {
+		t.Error("removal left it behind")
+	}
+}
+
+// A target nobody can look up must be refused at setup rather than silently never
+// firing — the failure mode alerts are worst at is doing nothing quietly.
+func TestAlertRejectsAnUnknownTarget(t *testing.T) {
+	b := liveBot(t)
+	i := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		GuildID: "g1", ChannelID: "c1", User: &discordgo.User{ID: "u1"},
+	}}
+	e, err := b.alertAdd(context.Background(), i, &discordgo.ApplicationCommandInteractionData{},
+		map[string]*discordgo.ApplicationCommandInteractionDataOption{
+			"type":   {Name: "type", Type: discordgo.ApplicationCommandOptionString, Value: string(AlertIdle)},
+			"target": {Name: "target", Type: discordgo.ApplicationCommandOptionString, Value: "NoSuchDonorXYZ123"},
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Color != colourBad {
+		t.Errorf("accepted an unknown target: %s", e.Description)
+	}
+	if b.alerts.Count() != 0 {
+		t.Error("stored an alert for a target that does not exist")
 	}
 }

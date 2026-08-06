@@ -2149,9 +2149,14 @@ const BOTS = [
       ['It installs two ways. To a server, where everyone in it can use the commands — ' +
        'or to your own account, where they follow you into any server and any DM without ' +
        'that server having to add anything.'],
+      ['It can also speak first. ', ['code', '/alert add'],
+       ' watches a folder or a team and posts to a channel when they pass a points ' +
+       'milestone, reach a rank, or stop producing — optionally pinging a role. The ' +
+       'quiet one is the useful one: a rig that died is otherwise invisible until ' +
+       'somebody thinks to check.'],
       ['It reads the same public API as everyone else, from inside the network, and ' +
        'caches against the snapshot rather than polling. A busy channel costs one ' +
-       'request an hour.'],
+       'request an hour, however many alerts are watching.'],
     ],
     commands: [
       ['/me', 'Your own stats, once you have linked a name'],
@@ -2165,6 +2170,7 @@ const BOTS = [
       ['/movers', 'Biggest 24-hour rank movements'],
       ['/goal', 'What it would take to reach a rank'],
       ['/status', 'Project totals, and how fresh the data is'],
+      ['/alert', 'Post to a channel when a folder or team hits a milestone, reaches a rank, or goes quiet'],
     ],
   },
 ];

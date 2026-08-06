@@ -8,14 +8,21 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/bwmarrin/discordgo"
 )
 
 type Bot struct {
-	api   *Client
-	links *Links
-	log   *slog.Logger
+	api    *Client
+	links  *Links
+	alerts *Alerts
+	log    *slog.Logger
+
+	// alertMu guards mutation of stored alerts. The watcher writes their state on every
+	// snapshot and /alert test writes their failure count on demand; the store's own
+	// lock covers the map, not the structs it holds.
+	alertMu sync.Mutex
 
 	session *discordgo.Session
 	guildID string // when set, commands register instantly to one guild
@@ -23,12 +30,13 @@ type Bot struct {
 }
 
 type Config struct {
-	Token     string
-	APIBase   string // the private address, e.g. http://10.10.10.55:8080
-	SiteURL   string // the public name, for links inside embeds
-	LinksPath string
-	GuildID   string
-	Log       *slog.Logger
+	Token      string
+	APIBase    string // the private address, e.g. http://10.10.10.55:8080
+	SiteURL    string // the public name, for links inside embeds
+	LinksPath  string
+	AlertsPath string
+	GuildID    string
+	Log        *slog.Logger
 }
 
 func New(cfg Config) (*Bot, error) {
@@ -39,6 +47,10 @@ func New(cfg Config) (*Bot, error) {
 		SiteURL = cfg.SiteURL
 	}
 	links, err := OpenLinks(cfg.LinksPath)
+	if err != nil {
+		return nil, err
+	}
+	alerts, err := OpenAlerts(cfg.AlertsPath)
 	if err != nil {
 		return nil, err
 	}
@@ -54,6 +66,7 @@ func New(cfg Config) (*Bot, error) {
 	b := &Bot{
 		api:     NewClient(cfg.APIBase),
 		links:   links,
+		alerts:  alerts,
 		log:     cfg.Log,
 		session: s,
 		guildID: cfg.GuildID,
@@ -83,7 +96,12 @@ func (b *Bot) Run(ctx context.Context) error {
 	if err := b.register(); err != nil {
 		return err
 	}
-	b.log.Info("ready", "commands", len(Commands()), "links", b.links.Count(), "api", b.api.Base)
+	b.log.Info("ready", "commands", len(Commands()), "links", b.links.Count(),
+		"alerts", b.alerts.Count(), "api", b.api.Base)
+
+	// The watcher is the only thing here that outlives an interaction, so it is tied to
+	// the same context: a shutdown stops it before the session closes underneath it.
+	go b.watch(ctx)
 
 	<-ctx.Done()
 	b.log.Info("shutting down")

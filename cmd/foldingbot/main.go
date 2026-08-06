@@ -23,6 +23,7 @@ func main() {
 		api     = flag.String("api", envOr("FOLDING_API", "http://10.10.10.55:8080"), "statistics API base URL — the private address")
 		site    = flag.String("site", envOr("FOLDING_SITE_URL", "https://folding.exec.codes"), "public site URL, used for links inside replies")
 		links   = flag.String("links", envOr("FOLDING_LINKS", "/var/lib/foldingbot/links.json"), "where donor links are stored")
+		alerts  = flag.String("alerts", envOr("FOLDING_ALERTS", "/var/lib/foldingbot/alerts.json"), "where channel alerts are stored")
 		guild   = flag.String("guild", os.Getenv("DISCORD_GUILD_ID"), "register commands to one guild (instant) instead of globally (up to an hour)")
 		verbose = flag.Bool("v", false, "verbose logging")
 	)
@@ -43,12 +44,13 @@ func main() {
 	}
 
 	b, err := bot.New(bot.Config{
-		Token:     token,
-		APIBase:   *api,
-		SiteURL:   *site,
-		LinksPath: *links,
-		GuildID:   *guild,
-		Log:       log,
+		Token:      token,
+		APIBase:    *api,
+		SiteURL:    *site,
+		LinksPath:  *links,
+		AlertsPath: *alerts,
+		GuildID:    *guild,
+		Log:        log,
 	})
 	if err != nil {
 		log.Error("starting", "err", err)
