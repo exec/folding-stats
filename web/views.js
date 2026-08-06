@@ -2009,6 +2009,96 @@ const MCP_TOOLS = [
    'day, and when the next update is due.'],
 ];
 
+/**
+ * How to point each client at this server.
+ *
+ * Worth writing out per client rather than showing one JSON blob and waving at it,
+ * because there is no agreement on the shape. The same remote server is `url` in
+ * Cursor, `serverUrl` in Windsurf and `httpUrl` in Gemini CLI — where a plain `url`
+ * means SSE and quietly does not work. VS Code keys the whole block on `servers`
+ * rather than `mcpServers`, and both it and Cline need an explicit transport, which
+ * Cline defaults to legacy SSE without.
+ *
+ * Six near-identical snippets is more page than one generic one, and it is the
+ * difference between a reader connecting and a reader debugging.
+ */
+function mcpClients(origin) {
+  const url = `${origin}/mcp`;
+  const block = (o) => JSON.stringify(o, null, 2);
+  return [
+    {
+      id: 'claude-code',
+      label: 'Claude Code',
+      steps: [{ text: 'One command:', code: `claude mcp add --transport http folding ${url}` }],
+      note: ['Then ', el('code', '/mcp'), ' inside Claude Code to confirm it connected.'],
+    },
+    {
+      id: 'claude',
+      label: 'Claude Desktop',
+      steps: [{ text: 'No config file. Settings → Connectors → Add custom connector, then paste:', code: url }],
+      note: ['The same flow works on claude.ai. There is no key to enter — leave the auth fields empty.'],
+    },
+    {
+      id: 'cursor',
+      label: 'Cursor',
+      steps: [{
+        text: 'In ~/.cursor/mcp.json, or .cursor/mcp.json for one project:',
+        code: block({ mcpServers: { folding: { url } } }),
+      }],
+      note: ['Cursor infers the transport from the ', el('code', 'url'), ' key; there is no type field.'],
+    },
+    {
+      id: 'vscode',
+      label: 'VS Code',
+      steps: [{
+        text: 'In .vscode/mcp.json, or the user config via “MCP: Open User Configuration”:',
+        code: block({ servers: { folding: { type: 'http', url } } }),
+      }],
+      note: ['Two things differ here: the block is keyed ', el('code', 'servers'), ', not ',
+        el('code', 'mcpServers'), ', and ', el('code', 'type'), ' is required.'],
+    },
+    {
+      id: 'windsurf',
+      label: 'Windsurf',
+      steps: [{
+        text: 'In ~/.codeium/windsurf/mcp_config.json:',
+        code: block({ mcpServers: { folding: { serverUrl: url } } }),
+      }],
+      note: ['Windsurf spells it ', el('code', 'serverUrl'), '. A plain ', el('code', 'url'),
+        ' is read as a local command and fails.'],
+    },
+    {
+      id: 'gemini',
+      label: 'Gemini CLI',
+      steps: [{
+        text: 'In ~/.gemini/settings.json:',
+        code: block({ mcpServers: { folding: { httpUrl: url } } }),
+      }],
+      note: [el('code', 'httpUrl'), ' selects Streamable HTTP. Gemini CLI picks the transport from the ',
+        'key name, and ', el('code', 'url'), ' would mean SSE, which this server does not serve.'],
+    },
+    {
+      id: 'other',
+      label: 'Anything else',
+      steps: [
+        { text: 'Cline — in cline_mcp_settings.json. Without the type it falls back to legacy SSE:',
+          code: block({ mcpServers: { folding: { type: 'streamableHttp', url } } }) },
+        { text: 'Goose — goose configure → Add Extension → Remote Extension (Streamable HTTP), then the URL.',
+          code: null },
+        { text: 'OpenAI Responses API — as a tool on the request:',
+          code: block({ type: 'mcp', server_label: 'folding', server_url: url, require_approval: 'never' }) },
+        { text: 'Or speak to it directly. Nothing here needs a client at all:',
+          code: `curl -X POST ${url} \\\n  -H 'content-type: application/json' \\\n` +
+            `  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'` },
+      ],
+      note: ['It is Streamable HTTP over POST, protocol ', el('code', '2025-06-18'),
+        ', no session and no auth. A GET asking for an event stream is answered 405, which is what ',
+        'the spec says to do when there is nothing to stream — every tool here is a pure read. Clients ',
+        'that only speak the older SSE transport will not connect.'],
+    },
+  ];
+}
+
 export async function agentsPage(view) {
   clear(view);
   const origin = location.origin;
@@ -2027,16 +2117,35 @@ export async function agentsPage(view) {
     statTile('Transport', 'HTTP', 'stateless, CORS open')
   )));
 
+  // Tabs above the instructions rather than in the card header: seven of them are
+  // wider than a card title's leftovers, and on a docs page the control belongs with
+  // the thing it changes.
+  const clients = mcpClients(origin);
+  let client = clients[0].id;
+  const tabHost = el('div.tab-strip');
+  const steps = el('div');
+
+  function drawConnect() {
+    const strip = segmented(
+      clients.map((c) => ({ value: c.id, label: c.label })),
+      client,
+      (v) => { client = v; drawConnect(); }
+    );
+    strip.classList.add('seg-tabs');
+    clear(tabHost).append(strip);
+
+    const c = clients.find((x) => x.id === client);
+    clear(steps);
+    c.steps.forEach((s, i) => {
+      steps.append(el('p', { style: i === 0 ? 'margin-top:var(--s3)' : undefined }, s.text));
+      if (s.code) steps.append(el('pre.code-block', el('code', s.code)));
+    });
+    steps.append(el('p.muted', { style: 'margin-bottom:0' }, ...c.note));
+  }
+  drawConnect();
+
   view.append(el('section.section', card('Connect',
-    el('div.card-body', { style: 'padding-bottom:var(--s4)' },
-      el('p', { style: 'margin-top:0' }, 'In Claude Code:'),
-      el('pre.code-block', el('code', `claude mcp add --transport http folding ${origin}/mcp`)),
-      el('p', 'Or in any client that reads a config file:'),
-      el('pre.code-block', el('code',
-        `{\n  "mcpServers": {\n    "folding": {\n      "type": "http",\n      "url": "${origin}/mcp"\n    }\n  }\n}`)),
-      el('p', { style: 'margin-bottom:0' },
-        'No headers, no token, no OAuth. Most MCP clients connect at startup, so ' +
-        'restart yours after adding it.')))));
+    el('div.card-body', { style: 'padding-bottom:var(--s4)' }, tabHost, steps))));
 
   const rows = el('tbody');
   for (const [name, args, what] of MCP_TOOLS) {

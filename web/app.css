@@ -670,6 +670,20 @@ table.data td.wrap { min-width: 24ch; }
 .seg button:hover { background: var(--surface-hover); color: var(--ink); }
 .seg button[aria-pressed="true"] { background: var(--accent-quiet); color: var(--accent); }
 
+/* A segmented control long enough to outgrow the page: seven client names do not fit
+   a phone. It scrolls sideways rather than wrapping, the same choice the nav makes for
+   the same reason — wrapping would break the pill into ragged rows and the rounded
+   clip and per-button dividers only read correctly on one line. */
+.tab-strip { max-width: 100%; overflow: hidden; }
+.seg-tabs {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.seg-tabs::-webkit-scrollbar { display: none; }
+.seg-tabs button { white-space: nowrap; flex: none; }
+
 /* Legend is always present for two or more series, so identity is never carried
    by colour alone. */
 .legend { display: flex; flex-wrap: wrap; gap: var(--s4); padding: var(--s3) var(--s5) 0; }
