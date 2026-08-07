@@ -155,8 +155,14 @@ export async function adoptCode(code) {
  * none, so the only thing that can add a machine to this fleet is this key. Short
  * lived because on a rented box it travels in an environment variable, and those end
  * up in logs.
+ *
+ * Thirty minutes, which is the protocol ceiling. Fifteen sounded prudent and was not:
+ * renting a machine means finding a host that will actually start one — roughly half
+ * accept a contract and never boot — and then waiting several minutes for an image
+ * pull. A token that expires during provisioning wastes the instance and has to be
+ * minted again, which happened three times in a row before this changed.
  */
-export async function mintToken(id, lifeSeconds = 900) {
+export async function mintToken(id, lifeSeconds = 1800) {
   const nonce = b64(crypto.getRandomValues(new Uint8Array(12)));
   const exp = Math.floor(Date.now() / 1000) + lifeSeconds;
   const sig = await id.sign(joined(ENROL_CONTEXT + id.key, String(exp), nonce));

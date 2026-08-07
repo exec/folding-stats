@@ -2504,7 +2504,7 @@ function addMachine(fleet) {
     clear(panel).append(el('p.muted', 'Minting a token…'));
     try {
       const id = await identity();
-      const token = await mintToken(id, 900);
+      const token = await mintToken(id);
       const cmd = "FOLDING_ENROL='" + JSON.stringify(token) + "' foldingagent";
       clear(panel).append(
         el('p',
@@ -2513,7 +2513,7 @@ function addMachine(fleet) {
           'client\u2019s configuration.'),
         el('pre.code-block', el('code', cmd)),
         el('p.muted',
-          'Good once, for fifteen minutes. Your machine makes its own key and keeps ' +
+          'Good once, for thirty minutes. Your machine makes its own key and keeps ' +
           'it — the token only proves the machine is yours, so finding it later in a ' +
           'log is worth nothing to anybody.'),
         el('p.muted', { style: 'margin-bottom:0' },
