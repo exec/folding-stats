@@ -2315,6 +2315,25 @@ function build(view, fah, donor) {
   };
 }
 
+/**
+ * Reads the client's own duration strings back into seconds.
+ *
+ * eta arrives formatted — "50m 45s", "1h 49m", "2d 3h" — because the client renders it
+ * with its own interval formatter rather than sending a number. Deriving anything from
+ * it means parsing it back, and a shape this code does not recognise returns null so
+ * the caller can leave the figure out rather than print a wrong one.
+ */
+export function parseInterval(text) {
+  if (!text) return null;
+  let total = 0;
+  let found = false;
+  for (const m of String(text).matchAll(/(\d+)\s*([dhms])/g)) {
+    total += Number(m[1]) * { d: 86400, h: 3600, m: 60, s: 1 }[m[2]];
+    found = true;
+  }
+  return found ? total : null;
+}
+
 function btn(label, onClick, primary = false) {
   return el('button.btn' + (primary ? '.btn-primary' : ''), { onClick, type: 'button' }, label);
 }
@@ -2338,7 +2357,10 @@ function unitCard(u) {
   const rate = el('div.hero-side');
   const fill = el('div.bar-fill');
   const left = el('span');
-  const credit = el('span.muted');
+  const creditBase = el('span');
+  const creditBonus = el('span.delta.up');
+  const creditRest = el('span');
+  const credit = el('span.muted', creditBase, creditBonus, creditRest);
   const meta = el('p.fold-meta');
 
   const node = el('section.section', card('Project ' + (a.project ?? '?'),
@@ -2358,7 +2380,48 @@ function unitCard(u) {
       fill.style.width = p + '%';
       rate.textContent = cur.ppd ? short(cur.ppd) + '/day' : '';
       left.textContent = cur.eta ? cur.eta + ' left' : (cur.state === 'RUN' ? 'estimating…' : '');
-      credit.textContent = at.credit ? n(at.credit) + ' points on return' : '';
+      // The bonus, derived from the client's own rate rather than recomputed.
+      //
+      // Folding@home pays a quick return bonus: the base credit is multiplied by
+      // sqrt(0.75 × deadline ÷ time taken), so a unit returned in an hour against a
+      // two-day deadline is worth several times its face value. On a fast GPU that
+      // multiplier is most of the credit, which makes "98,349 points" a wildly
+      // misleading thing to print on its own.
+      //
+      // The client already applies that formula to produce ppd, so the multiplier is
+      // recoverable from figures it reports: ppd = credit ÷ runtime × a day, and
+      // runtime = eta ÷ (1 − progress). Taking it from there rather than
+      // reimplementing sqrt(0.75 × …) means this number cannot disagree with the rate
+      // shown beside it, and the rule that the bonus vanishes after the bonus deadline
+      // needs no special case here — the client has already applied it.
+      const base = at.credit || 0;
+      const etaSec = parseInterval(cur.eta);
+      const prog = cur.wu_progress;
+      let bonus = 0;
+      let runTime = 0;
+      if (base && etaSec != null && cur.ppd > 0 && prog > 0 && prog < 1) {
+        runTime = etaSec / (1 - prog);
+        bonus = Math.max(0, Math.round(cur.ppd * runTime / 86400) - base);
+      }
+      if (bonus > 0) {
+        creditBase.textContent = n(base) + ' ';
+        creditBonus.textContent = '+' + n(bonus);
+        creditBonus.title =
+          `Quick return bonus, ×${((base + bonus) / base).toFixed(2)}.\n\n` +
+          'Folding@home multiplies the base credit by sqrt(0.75 × deadline ÷ time taken), ' +
+          'so the faster a unit comes back the more it is worth.\n\n' +
+          `Projected total time: ${span(Math.round(runTime))}. ` +
+          `Deadline: ${span(at.deadline || 0)}.\n` +
+          `The bonus is lost entirely if the unit comes back after the bonus ` +
+          `deadline, which is ${span(at.timeout || 0)} from assignment.\n\n` +
+          'Estimated from the current rate, so it moves as the unit runs.';
+        creditRest.textContent = ' = ' + n(base + bonus) + ' on return';
+      } else {
+        creditBase.textContent = base ? n(base) + ' points on return' : '';
+        creditBonus.textContent = '';
+        creditBonus.removeAttribute('title');
+        creditRest.textContent = '';
+      }
       // Both deadlines count from when the unit was assigned, so they are absolute
       // moments rather than durations — printing the raw field made a unit look as
       // though it had its whole window left however long it had been running.
