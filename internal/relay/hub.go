@@ -10,7 +10,28 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	p "folding/internal/relayproto"
 )
+
+// Frame and MachineView are the shared wire types, re-exported so callers of this
+// package do not need to name two packages to use one protocol.
+type (
+	Frame       = p.Frame
+	MachineView = p.MachineView
+	Enrolment   = p.Enrolment
+)
+
+func b64(b []byte) string                          { return p.B64(b) }
+func unb64(s string) ([]byte, error)               { return p.UnB64(s) }
+func parseKey(s string) (ed25519.PublicKey, error) { return p.ParseKey(s) }
+func authMessage(role, nonce string) []byte        { return p.AuthMessage(role, nonce) }
+func enrolMessage(owner string, exp int64, nonce string) []byte {
+	return p.EnrolMessage(owner, exp, nonce)
+}
+
+// MaxEnrolLifetime is re-exported for the same reason.
+const MaxEnrolLifetime = p.MaxEnrolLifetime
 
 // Timings.
 //
@@ -28,34 +49,6 @@ const (
 	// can be asked for is megabytes, but that is not something this relay carries.
 	maxFrame = 1 << 20
 )
-
-// Frame is everything the relay understands.
-//
-// Data is json.RawMessage and stays that way: the relay moves it without looking
-// inside. That is what makes it safe to put the folding protocol — or later, sealed
-// ciphertext — through the same pipe without the relay learning either.
-type Frame struct {
-	Type    string          `json:"type"`
-	Nonce   string          `json:"nonce,omitempty"`
-	Role    string          `json:"role,omitempty"`
-	Key     string          `json:"pubkey,omitempty"`
-	Sig     string          `json:"sig,omitempty"`
-	Name    string          `json:"name,omitempty"`
-	Enrol   *Enrolment      `json:"enrol,omitempty"`
-	Machine string          `json:"machine,omitempty"`
-	Data    json.RawMessage `json:"data,omitempty"`
-	Error   string          `json:"error,omitempty"`
-
-	Machines []MachineView `json:"machines,omitempty"`
-}
-
-// MachineView is what an owner is told about one of their machines.
-type MachineView struct {
-	Key      string    `json:"key"`
-	Name     string    `json:"name,omitempty"`
-	Online   bool      `json:"online"`
-	LastSeen time.Time `json:"last_seen,omitzero"`
-}
 
 // conn is one authenticated websocket, either an agent or an owner's browser.
 type conn struct {
@@ -353,6 +346,23 @@ func (h *Hub) reader(c *conn) {
 				continue
 			}
 			a.push(Frame{Type: "down", Data: f.Data})
+
+		case f.Type == p.TypeResync && !c.agent:
+			// A listener that attached after the machine did has missed the snapshot the
+			// folding client only sends on connect, and patches are meaningless without
+			// it. Asking is the listener's job — the relay holds no state and must not
+			// start caching payloads it is supposed to be unable to read.
+			m, ok := h.store.Get(f.Machine)
+			if !ok || m.Owner != c.owner {
+				c.push(Frame{Type: p.TypeError, Machine: f.Machine, Error: "not your machine"})
+				continue
+			}
+			h.mu.RLock()
+			a := h.agents[f.Machine]
+			h.mu.RUnlock()
+			if a != nil {
+				a.push(Frame{Type: p.TypeResync})
+			}
 
 		case f.Type == "forget" && !c.agent:
 			if err := h.store.Forget(f.Machine, c.owner); err != nil {
