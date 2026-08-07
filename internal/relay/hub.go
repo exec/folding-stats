@@ -91,6 +91,7 @@ type Hub struct {
 	agents  map[string]*conn   // machine key -> agent
 	owners  map[string][]*conn // owner key  -> browsers
 	upgrade websocket.Upgrader
+	limit   *limiter
 }
 
 func New(store *Store, log *slog.Logger) *Hub {
@@ -98,6 +99,7 @@ func New(store *Store, log *slog.Logger) *Hub {
 		store:  store,
 		log:    log,
 		nonces: newNonces(),
+		limit:  newLimiter(),
 		agents: map[string]*conn{},
 		owners: map[string][]*conn{},
 		upgrade: websocket.Upgrader{
@@ -120,32 +122,56 @@ func (h *Hub) Handler() http.Handler {
 		h.mu.RLock()
 		a, o := len(h.agents), len(h.owners)
 		h.mu.RUnlock()
+		inFlight, watched := h.limit.stats()
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		json.NewEncoder(w).Encode(map[string]any{
 			"agents_online": a, "owners_online": o, "machines_enrolled": h.store.Count(),
+			"handshakes_in_flight": inFlight, "addresses_failing": watched,
 		})
 	})
 	return mux
 }
 
 func (h *Hub) serve(w http.ResponseWriter, r *http.Request, agent bool) {
+	ip := realIP(r)
+	now := time.Now()
+
+	// Refused before the upgrade, so a caller that is only burning sockets never gets
+	// one. Both answers are plain HTTP, which is also what a misconfigured client is
+	// most likely to be able to report usefully.
+	if h.limit.blocked(ip, now) {
+		http.Error(w, "too many failed authentications from this address", http.StatusTooManyRequests)
+		return
+	}
+	if !h.limit.begin() {
+		http.Error(w, "too many connections being established", http.StatusServiceUnavailable)
+		return
+	}
+
 	ws, err := h.upgrade.Upgrade(w, r, nil)
 	if err != nil {
+		h.limit.done()
 		return
 	}
 	ws.SetReadLimit(maxFrame)
 
 	c, err := h.authenticate(ws, agent)
+	// The slot is held only for the handshake. A connection that authenticates is no
+	// longer unpaid work — it has produced a signature — and holding its slot for hours
+	// would turn a bound on abuse into a bound on the size of a fleet.
+	h.limit.done()
 	if err != nil {
+		h.limit.failed(ip, time.Now())
 		// The reason goes to the client because every one of them is actionable: a bad
 		// signature, an expired token, a machine that belongs to somebody else. None of
 		// it tells an attacker anything they did not already supply.
 		_ = ws.SetWriteDeadline(time.Now().Add(writeWait))
-		_ = ws.WriteJSON(Frame{Type: "error", Error: err.Error()})
+		_ = ws.WriteJSON(Frame{Type: p.TypeError, Error: err.Error()})
 		ws.Close()
 		return
 	}
+	h.limit.succeeded(ip)
 
 	// Success has to say so. Without an acknowledgement a client cannot tell an
 	// accepted connection from one still being considered, and the only way to find out

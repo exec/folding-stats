@@ -63,15 +63,24 @@ func OpenStore(path string) (*Store, error) {
 // what one leaked enrolment token can do before anybody notices.
 const MaxPerOwner = 500
 
-func (s *Store) Get(key string) (*Machine, bool) {
+// Get returns a copy.
+//
+// Handing out the pointer let callers read fields outside the lock while Touch wrote
+// LastSeen under it — a race the detector found the moment a test connected sixty
+// machines at once. The struct is small and read far more often than written, so a
+// copy costs nothing worth measuring and removes the whole class of mistake.
+func (s *Store) Get(key string) (Machine, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	m, ok := s.m[key]
-	return m, ok
+	if !ok {
+		return Machine{}, false
+	}
+	return *m, true
 }
 
 // Enrol records a machine against an owner, or confirms it already is.
-func (s *Store) Enrol(key, owner, name string, now time.Time) (*Machine, error) {
+func (s *Store) Enrol(key, owner, name string, now time.Time) (Machine, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -81,12 +90,12 @@ func (s *Store) Enrol(key, owner, name string, now time.Time) (*Machine, error) 
 		// their own token for a key they do not control. They cannot sign as the
 		// machine, so this is defence in depth rather than the only guard.
 		if m.Owner != owner {
-			return nil, fmt.Errorf("machine already belongs to another owner")
+			return Machine{}, fmt.Errorf("machine already belongs to another owner")
 		}
 		if name != "" {
 			m.Name = name
 		}
-		return m, s.saveLocked()
+		return *m, s.saveLocked()
 	}
 
 	var count int
@@ -96,12 +105,12 @@ func (s *Store) Enrol(key, owner, name string, now time.Time) (*Machine, error) 
 		}
 	}
 	if count >= MaxPerOwner {
-		return nil, fmt.Errorf("owner already has %d machines, which is the limit", MaxPerOwner)
+		return Machine{}, fmt.Errorf("owner already has %d machines, which is the limit", MaxPerOwner)
 	}
 
 	m := &Machine{Key: key, Owner: owner, Name: name, Enrolled: now}
 	s.m[key] = m
-	return m, s.saveLocked()
+	return *m, s.saveLocked()
 }
 
 // Forget removes a machine, which is how a compromised one is revoked.
@@ -119,13 +128,13 @@ func (s *Store) Forget(key, owner string) error {
 	return s.saveLocked()
 }
 
-func (s *Store) Owned(owner string) []*Machine {
+func (s *Store) Owned(owner string) []Machine {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var out []*Machine
+	var out []Machine
 	for _, m := range s.m {
 		if m.Owner == owner {
-			out = append(out, m)
+			out = append(out, *m)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Enrolled.Before(out[j].Enrolled) })

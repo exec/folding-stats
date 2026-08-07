@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -333,5 +334,140 @@ func TestHealthReportsCounts(t *testing.T) {
 		if _, ok := out[k]; !ok {
 			t.Errorf("health is missing %s", k)
 		}
+	}
+}
+
+// TestALargeFleetIsNeverRateLimited is the property that makes this safe to turn on.
+//
+// Machines in one building share an address, and after a relay restart they all
+// reconnect at once. A per-address connection cap — the obvious design — would refuse
+// most of a legitimate fleet at exactly the moment it was trying to come back. Only
+// failures count here, so a correct authentication is free however many arrive.
+func TestALargeFleetIsNeverRateLimited(t *testing.T) {
+	srv, _ := testHub(t)
+	defer srv.Close()
+	alice := newParty(t)
+
+	// Comfortably more than the failure allowance, all from one address, all valid.
+	const fleet = 60
+	conns := make([]*websocket.Conn, 0, fleet)
+	defer func() {
+		for _, c := range conns {
+			c.Close()
+		}
+	}()
+	for i := 0; i < fleet; i++ {
+		machine := newParty(t)
+		ws, refusal := dial(t, srv, "/relay/agent", machine, "agent", func(f *Frame) {
+			f.Enrol = alice.token(time.Now().Add(5*time.Minute), fmt.Sprintf("n%d", i))
+		})
+		if refusal != "" {
+			t.Fatalf("machine %d of %d refused: %s", i+1, fleet, refusal)
+		}
+		conns = append(conns, ws)
+	}
+}
+
+// And an address that only ever fails is slowed down.
+func TestRepeatedBadAuthenticationIsBlocked(t *testing.T) {
+	old := MaxFailures
+	MaxFailures = 5
+	defer func() { MaxFailures = old }()
+
+	srv, _ := testHub(t)
+	defer srv.Close()
+	machine := newParty(t)
+
+	for i := 0; i < MaxFailures; i++ {
+		ws, refusal := dial(t, srv, "/relay/agent", machine, "agent", nil) // no enrolment
+		ws.Close()
+		if refusal == "" {
+			t.Fatalf("attempt %d was accepted without an enrolment", i+1)
+		}
+	}
+
+	// The next one does not even get a websocket.
+	u := "ws" + strings.TrimPrefix(srv.URL, "http") + "/relay/agent"
+	_, resp, err := websocket.DefaultDialer.Dial(u, nil)
+	if err == nil {
+		t.Fatal("still upgrading after repeated failures")
+	}
+	if resp == nil || resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status = %v, want 429", resp)
+	}
+
+	// A success clears the record, so a machine that gets it right is not still
+	// serving a sentence for earlier mistakes.
+	l := newLimiter()
+	now := time.Now()
+	for i := 0; i < MaxFailures; i++ {
+		l.failed("1.2.3.4", now)
+	}
+	if !l.blocked("1.2.3.4", now) {
+		t.Fatal("not blocked after the limit")
+	}
+	l.succeeded("1.2.3.4")
+	if l.blocked("1.2.3.4", now) {
+		t.Error("still blocked after a successful authentication")
+	}
+	// And it forgets on its own.
+	for i := 0; i < MaxFailures; i++ {
+		l.failed("5.6.7.8", now)
+	}
+	if l.blocked("5.6.7.8", now.Add(FailWindow+time.Second)) {
+		t.Error("still blocked after the window passed")
+	}
+}
+
+// Handshakes in flight are capped globally, which is what bounds a caller that opens
+// sockets and then says nothing at all.
+func TestHandshakesInFlightAreCapped(t *testing.T) {
+	old := MaxHandshakes
+	MaxHandshakes = 2
+	defer func() { MaxHandshakes = old }()
+
+	srv, _ := testHub(t)
+	defer srv.Close()
+	u := "ws" + strings.TrimPrefix(srv.URL, "http") + "/relay/agent"
+
+	// Open connections and never authenticate; each holds a slot until it times out.
+	var held []*websocket.Conn
+	defer func() {
+		for _, c := range held {
+			c.Close()
+		}
+	}()
+	for i := 0; i < MaxHandshakes; i++ {
+		c, _, err := websocket.DefaultDialer.Dial(u, nil)
+		if err != nil {
+			t.Fatalf("connection %d refused early: %v", i+1, err)
+		}
+		held = append(held, c)
+	}
+
+	_, resp, err := websocket.DefaultDialer.Dial(u, nil)
+	if err == nil {
+		t.Fatal("upgraded past the in-flight cap")
+	}
+	if resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %v, want 503", resp)
+	}
+
+	// A completed handshake releases its slot rather than holding it for the life of
+	// the connection — otherwise this cap would be a cap on fleet size.
+	alice, machine := newParty(t), newParty(t)
+	held[0].Close()
+	time.Sleep(50 * time.Millisecond)
+	ws, refusal := dial(t, srv, "/relay/agent", machine, "agent", func(f *Frame) {
+		f.Enrol = alice.token(time.Now().Add(5*time.Minute), "slot")
+	})
+	defer ws.Close()
+	if refusal != "" {
+		t.Fatalf("a freed slot was not reusable: %s", refusal)
+	}
+	ws2, refusal := dial(t, srv, "/relay/browser", alice, "owner", nil)
+	defer ws2.Close()
+	if refusal != "" {
+		t.Errorf("an authenticated agent is still holding a handshake slot: %s", refusal)
 	}
 }
