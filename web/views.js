@@ -23,6 +23,9 @@ const PER_PAGE = 100;
  */
 const DISCORD_INVITE = 'https://discord.com/oauth2/authorize?client_id=1534970793283293255';
 
+/** Where the agent is published. Tags are agent/vN, so the latest is always current. */
+const RELEASES = 'https://github.com/exec/folding-stats/releases/latest';
+
 /** Newest snapshot time in ms — the point past which no bucket can exist yet. */
 /** How much history the "active" counts actually cover. */
 function activeWindow() {
@@ -2498,11 +2501,11 @@ function addMachine(fleet) {
           'it — the token only proves the machine is yours, so finding it later in a ' +
           'log is worth nothing to anybody.'),
         el('p.muted', { style: 'margin-bottom:0' },
-          'No published build yet: ',
-          el('code', 'go build ./cmd/foldingagent'),
-          ' from ',
-          el('a', { href: 'https://github.com/exec/folding-stats', target: '_blank',
-            rel: 'noopener noreferrer' }, 'the repository'), '.'));
+          'Builds for Linux, macOS and Windows, on x86-64 and arm64: ',
+          el('a', { href: RELEASES, target: '_blank', rel: 'noopener noreferrer' },
+            'the latest release'),
+          '. Every archive is listed in ', el('code', 'SHA256SUMS'),
+          ' beside it — check a download before running it.'));
     } catch (e) {
       console.error('minting an enrolment token failed', e);
       clear(panel).append(notice(
