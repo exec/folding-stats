@@ -98,10 +98,51 @@ async function importKey(jwk) {
   };
 }
 
-/** Replaces the stored identity, which is how a fleet moves to another browser. */
-export async function adoptIdentity(jwk) {
-  const test = await crypto.subtle.importKey('jwk', jwk, { name: 'Ed25519' }, true, ['sign']);
-  await crypto.subtle.sign({ name: 'Ed25519' }, test, bytes('check'));
+/**
+ * The identity as one line, for carrying a fleet to another browser.
+ *
+ * Both halves, because WebCrypto will not import an Ed25519 private key without the
+ * public one — it refuses a JWK carrying only `d` with a DataError. The public half
+ * could be derived from the private one, but only by implementing curve arithmetic by
+ * hand, and hand-rolled cryptography to save forty characters is a poor trade.
+ */
+export function exportCode(id) {
+  return id.jwk.d + '.' + id.jwk.x;
+}
+
+/**
+ * Adopts an identity from a code, refusing one that does not hold together.
+ *
+ * Chrome checks that the two halves correspond and throws on import, so in practice a
+ * mistyped code is caught before the explicit test below. That is an implementation
+ * being helpful rather than a guarantee — nothing in the Web Crypto specification
+ * requires it — and the failure it would otherwise cause is a bad one: a key that
+ * imports and signs happily, but signs as somebody else, so the relay answers
+ * "signature does not match the key" and the reader is left with a fleet that will not
+ * connect and nothing to suggest they mistyped something. Signing and verifying here
+ * makes that impossible on any engine.
+ */
+export async function adoptCode(code) {
+  const [d, x] = String(code).trim().split('.');
+  if (!d || !x) throw new Error('That does not look like a recovery code.');
+
+  const jwk = { kty: 'OKP', crv: 'Ed25519', d, x, key_ops: ['sign'], ext: true };
+  let priv;
+  try {
+    priv = await crypto.subtle.importKey('jwk', jwk, { name: 'Ed25519' }, true, ['sign']);
+  } catch (e) {
+    throw new Error('That recovery code is not a usable key.');
+  }
+
+  const probe = bytes('folding-relay-code-check');
+  const sig = await crypto.subtle.sign({ name: 'Ed25519' }, priv, probe);
+  const pub = await crypto.subtle.importKey('jwk',
+    { kty: 'OKP', crv: 'Ed25519', x, key_ops: ['verify'], ext: true },
+    { name: 'Ed25519' }, true, ['verify']);
+  if (!await crypto.subtle.verify({ name: 'Ed25519' }, pub, sig, probe)) {
+    throw new Error('That recovery code is damaged — the two halves do not match.');
+  }
+
   const db = await idb();
   await idbPut(db, 'owner', jwk);
   return await importKey(jwk);

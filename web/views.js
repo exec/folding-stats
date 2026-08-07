@@ -9,7 +9,7 @@ import { el, clear, card, cardWith, statTile, pager, segmented, notice, loading,
 import { n, short, ago, dateTime, utcDate, delta, tierName, nameText, plural, span, tzName } from '/format.js';
 import { productionChart, seriesChart, stack, legend, palette, densify, perDayPoints, MAX_STACK_SERIES } from '/charts.js';
 import { LocalClient, Fleet, LOCAL_URL } from '/fah.js';
-import { RelayLink, identity, mintToken } from '/relay.js';
+import { RelayLink, identity, mintToken, exportCode, adoptCode } from '/relay.js';
 
 const PER_PAGE = 100;
 
@@ -2438,7 +2438,46 @@ function addMachine(fleet) {
   const out = el('div.add-machine');
   const open = el('button.linkish', { type: 'button' }, 'Add another machine →');
   const panel = el('div', { hidden: true });
-  out.append(open, panel);
+  const move = el('button.linkish', { type: 'button' }, 'Move your machines to another browser →');
+  const movePanel = el('div', { hidden: true });
+  out.append(open, el('span.dot-sep', ' · '), move, panel, movePanel);
+
+  move.addEventListener('click', async () => {
+    move.hidden = true;
+    movePanel.hidden = false;
+    clear(movePanel).append(el('p.muted', 'Reading your identity…'));
+    try {
+      const id = await identity();
+      const code = exportCode(id);
+      const field = el('input.code-field', { type: 'text', spellcheck: 'false',
+        placeholder: 'paste a code from another browser' });
+      const status = el('p.muted', { style: 'margin-bottom:0' });
+      clear(movePanel).append(
+        el('p',
+          'Your machines belong to a key kept in this browser. Copy this to see the ' +
+          'same fleet somewhere else — a phone, another computer — and to get it back ' +
+          'if you clear this browser\u2019s data.'),
+        el('pre.code-block', el('code', code)),
+        el('p.muted',
+          'Anyone holding this can see and control every machine you have enrolled, ' +
+          'and can enrol more. It is the whole account.'),
+        el('p', field, ' ',
+          el('button.btn', { type: 'button', onClick: async () => {
+            status.textContent = '';
+            try {
+              const adopted = await adoptCode(field.value);
+              status.textContent = 'Adopted. Reloading…';
+              setTimeout(() => location.reload(), 600);
+            } catch (e) {
+              status.textContent = e.message;
+            }
+          } }, 'Use this code')),
+        status);
+    } catch (e) {
+      console.error('reading the identity failed', e);
+      clear(movePanel).append(notice('Could not read this browser\u2019s identity.'));
+    }
+  });
 
   open.addEventListener('click', async () => {
     open.hidden = true;

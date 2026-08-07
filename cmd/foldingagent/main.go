@@ -25,6 +25,10 @@ import (
 	p "folding/internal/relayproto"
 )
 
+// version is stamped at build time by the release workflow. A machine reporting a
+// problem is much easier to help when it can say what it is running.
+var version = "dev"
+
 func main() {
 	host, _ := os.Hostname()
 	var (
@@ -36,9 +40,15 @@ func main() {
 			"where this machine's identity is kept")
 		name    = flag.String("name", envOr("FOLDING_NAME", host), "how this machine appears in your fleet")
 		showKey = flag.Bool("key-only", false, "print this machine's public key and exit")
+		showVer = flag.Bool("version", false, "print the version and exit")
 		verbose = flag.Bool("v", false, "verbose logging")
 	)
 	flag.Parse()
+
+	if *showVer {
+		fmt.Println(version)
+		return
+	}
 
 	lvl := slog.LevelInfo
 	if *verbose {
@@ -61,6 +71,9 @@ func main() {
 		}
 		cfg.Token = &tok
 	}
+
+	log = log.With("version", version)
+	cfg.Log = log
 
 	a, err := agent.New(cfg)
 	if err != nil {
