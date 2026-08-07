@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 
 	"github.com/bwmarrin/discordgo"
@@ -57,6 +58,10 @@ func New(cfg Config) (*Bot, error) {
 	// privileged intents and reads no message content. It cannot see what anyone
 	// says, which is both the least it needs and the least it should have.
 	s.Identify.Intents = discordgo.IntentsNone
+	// Without this the library discards everything below LogError and writes it to the
+	// standard logger, so a gateway that reconnects all night leaves no record.
+	s.LogLevel = discordgo.LogInformational
+	routeDiscordLogs(cfg.Log)
 
 	b := &Bot{
 		api:     NewClient(cfg.APIBase),
@@ -96,6 +101,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	// The watcher is the only thing here that outlives an interaction, so it is tied to
 	// the same context: a shutdown stops it before the session closes underneath it.
 	go b.watch(ctx)
+	go b.watchGateway(ctx, gatewayCheck, os.Exit)
 
 	<-ctx.Done()
 	b.log.Info("shutting down")
