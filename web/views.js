@@ -2298,10 +2298,16 @@ function build(view, fah, donor) {
     for (const u of units) u.sync(fah);
 
     const i = fah.info;
+    const gcfg = fah.groupConfig.gpus || {};
+    const cpus = fah.groupConfig.cpus;
     spec.textContent = [
       i.mach_name || i.hostname,
-      ...fah.gpus.map((g) => g.description),
-      plural(i.cpus || 0, 'CPU'),
+      // Enabled state, not mere presence: a card the client can see but is not using
+      // is not folding, and saying so is the difference between an inventory and a
+      // status line.
+      ...fah.gpus.map((g) => g.description + (gcfg[g.id] && gcfg[g.id].enabled ? '' : ' (off)')),
+      cpus == null ? plural(i.cpus || 0, 'CPU')
+        : `${cpus} of ${plural(i.cpus || 0, 'CPU')} folding`,
       'client ' + (i.version || '?'),
       fah.config.user ? 'as ' + fah.config.user : null,
       fah.config.team != null ? 'team ' + fah.config.team : null,
@@ -2353,10 +2359,21 @@ function unitCard(u) {
       rate.textContent = cur.ppd ? short(cur.ppd) + '/day' : '';
       left.textContent = cur.eta ? cur.eta + ' left' : (cur.state === 'RUN' ? 'estimating…' : '');
       credit.textContent = at.credit ? n(at.credit) + ' points on return' : '';
+      // Both deadlines count from when the unit was assigned, so they are absolute
+      // moments rather than durations — printing the raw field made a unit look as
+      // though it had its whole window left however long it had been running.
+      //
+      // They are also two different things and the old line collapsed them into one.
+      // timeout is the bonus deadline: return after it and the quick-return bonus is
+      // gone, which for a fast GPU is most of the credit. deadline is the hard expiry,
+      // after which the unit is reassigned to somebody else and is worth nothing.
+      const start = Date.parse(at.time);
+      const leftFrom = (secs) => Math.max(0, Math.round((start + secs * 1000 - Date.now()) / 1000));
       meta.textContent = [
         cur.state,
         at.core ? 'core ' + at.core.type : null,
-        at.deadline ? plural(Math.round(at.deadline / 86400), 'day') + ' to return' : null,
+        at.timeout ? 'full credit for ' + span(leftFrom(at.timeout)) : null,
+        at.deadline ? 'expires in ' + span(leftFrom(at.deadline)) : null,
         at.ws,
       ].filter(Boolean).join(' · ');
     },
