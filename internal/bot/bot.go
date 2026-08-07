@@ -60,7 +60,16 @@ func New(cfg Config) (*Bot, error) {
 	s.Identify.Intents = discordgo.IntentsNone
 	// Without this the library discards everything below LogError and writes it to the
 	// standard logger, so a gateway that reconnects all night leaves no record.
-	s.LogLevel = discordgo.LogInformational
+	//
+	// Warning by default rather than Informational: at Informational discordgo prints
+	// the whole READY payload as a Go byte-slice literal — several thousand hex escapes
+	// on one line, every reconnect. That does not make an outage easier to read, it
+	// buries it. Errors are the level the gateway reports its own failures at, which is
+	// the record that was missing; the rest is available under -v.
+	s.LogLevel = discordgo.LogWarning
+	if cfg.Log.Enabled(context.Background(), slog.LevelDebug) {
+		s.LogLevel = discordgo.LogInformational
+	}
 	routeDiscordLogs(cfg.Log)
 
 	b := &Bot{
