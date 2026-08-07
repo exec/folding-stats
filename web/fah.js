@@ -12,7 +12,8 @@
 // reports, including the passkey, arrives in the reader's browser and stays there
 // unless they explicitly ask us to do something with it.
 
-const WS_URL = 'ws://127.0.0.1:7396/api/websocket';
+/** The client's own default. An agent elsewhere is reached through a relay URL. */
+export const LOCAL_URL = 'ws://127.0.0.1:7396/api/websocket';
 
 /**
  * Key normalisation, copied from the official client rather than invented.
@@ -79,7 +80,9 @@ export function applyUpdate(root, update) {
  * costs nothing and the reader is usually watching, waiting for it to come back.
  */
 export class LocalClient {
-  constructor() {
+  constructor(url = LOCAL_URL, label = 'this machine') {
+    this.url = url;
+    this.label = label;
     this.state = {};
     this.status = 'connecting'; // connecting | connected | unreachable
     this.listeners = new Set();
@@ -108,7 +111,7 @@ export class LocalClient {
     if (this.closed) return;
     let ws;
     try {
-      ws = new WebSocket(WS_URL);
+      ws = new WebSocket(this.url);
     } catch (e) {
       // Older browsers throw synchronously on a blocked scheme rather than firing
       // onerror, which would otherwise leave the page saying "connecting" forever.
@@ -219,5 +222,96 @@ export class LocalClient {
     return Object.entries(this.info.gpus || {})
       .map(([id, g]) => ({ id, ...g }))
       .filter((g) => g.supported);
+  }
+
+  /** What to call this machine: its own name if it has told us one. */
+  get name() {
+    return this.info.mach_name || this.info.hostname || this.label;
+  }
+
+  get working() {
+    return this.units.length > 0 && !this.paused;
+  }
+
+  /** fold, pause, finish, or idle — one word for the state a reader cares about. */
+  get phase() {
+    if (this.status !== 'connected') return 'offline';
+    if (this.paused) return 'paused';
+    if (this.finishing) return 'finishing';
+    return this.units.length ? 'folding' : 'waiting';
+  }
+}
+
+/**
+ * Every machine the reader can see, as one thing.
+ *
+ * There is exactly one today — the client on this computer — and the page is built
+ * around a fleet anyway. That is not speculation: the moment a second machine exists
+ * the page has to change shape, and retrofitting a collection into code written for a
+ * singleton is how a dashboard ends up with "machine 2" bolted beside a layout that
+ * assumed one. The cost of writing it this way now is a few lines.
+ *
+ * A machine is a connection. Whether that connection goes to loopback or through a
+ * relay to a box in another country is the transport's business, not the view's.
+ */
+export class Fleet {
+  constructor(sources = [{ url: LOCAL_URL, label: 'this machine' }]) {
+    this.clients = sources.map((s) => new LocalClient(s.url, s.label));
+    this.listeners = new Set();
+    for (const c of this.clients) c.onChange(() => this.emit());
+  }
+
+  connect() {
+    for (const c of this.clients) c.connect();
+  }
+
+  close() {
+    for (const c of this.clients) c.close();
+    this.listeners.clear();
+  }
+
+  onChange(fn) {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  emit() {
+    for (const fn of this.listeners) {
+      try {
+        fn(this);
+      } catch (e) {
+        console.error('fleet listener failed', e);
+      }
+    }
+  }
+
+  /** Machines that have actually answered. A dead one still counts, and says so. */
+  get online() {
+    return this.clients.filter((c) => c.status === 'connected');
+  }
+
+  get ppd() {
+    return this.online.reduce((n, c) => n + c.ppd, 0);
+  }
+
+  get folding() {
+    return this.online.filter((c) => c.working).length;
+  }
+
+  /** True while this is one machine — the layout the single case deserves. */
+  get single() {
+    return this.clients.length === 1;
+  }
+
+  /**
+   * Somewhere to read the account from.
+   *
+   * Every machine on a fleet reports the same donor, so any connected one will do —
+   * but a machine that has not answered yet reports nothing, and picking it would
+   * leave the account block empty until it did.
+   */
+  get config() {
+    const c = this.online[0];
+    return c ? c.config : {};
   }
 }

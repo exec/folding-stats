@@ -352,6 +352,22 @@ main { max-width: var(--wide); margin: 0 auto; padding: var(--s6) var(--s5) var(
 .kv-k { color: var(--ink-muted); font-size: 12px; min-width: 92px; flex: none; }
 .kv-v { color: var(--ink); overflow-wrap: anywhere; }
 
+/* One row per machine. A fleet is scanned, not read: the eye goes down the left edge
+   looking for a dot that is not green, so the name and the state sit there and the
+   output — the least urgent thing — sits furthest right. */
+.machines { display: grid; gap: var(--s3); }
+.machine {
+  padding: var(--s3) var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.mach-head { display: flex; align-items: baseline; gap: var(--s2); flex-wrap: wrap; margin-bottom: var(--s2); }
+.mach-name { font-weight: 620; }
+.mach-rate { margin-left: auto; color: var(--ink-secondary); font-variant-numeric: tabular-nums; }
+.mach-head .fold-actions { margin-left: var(--s3); }
+.machine .bar-legend { font-size: 12px; }
+
 /* Status and actions, above everything. The two commonest reasons to open this page
    are "is it still folding" and "make it stop", so they sit one glance apart. */
 .fold-bar {

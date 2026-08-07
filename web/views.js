@@ -8,7 +8,7 @@ import { api, snapshot } from '/api.js';
 import { el, clear, card, cardWith, statTile, pager, segmented, notice, loading, skeleton, errorView, link } from '/ui.js';
 import { n, short, ago, dateTime, utcDate, delta, tierName, nameText, plural, span, tzName } from '/format.js';
 import { productionChart, seriesChart, stack, legend, palette, densify, perDayPoints, MAX_STACK_SERIES } from '/charts.js';
-import { LocalClient } from '/fah.js';
+import { LocalClient, Fleet, LOCAL_URL } from '/fah.js';
 
 const PER_PAGE = 100;
 
@@ -2149,7 +2149,7 @@ function mcpClients(origin) {
  */
 export function foldPage(view) {
   clear(view);
-  const fah = new LocalClient();
+  const fah = new Fleet(fleetSources());
   let donor = null;
   let donorFor = null;
   let shape = null;
@@ -2158,8 +2158,13 @@ export function foldPage(view) {
   // Rebuild only when the page's *structure* would differ. Numbers changing is not a
   // structural change, and treating it as one is what made the page flicker.
   const shapeOf = () => {
-    if (fah.status !== 'connected') return fah.status;
-    return ['live', fah.units.map((u) => u.id).join(','), donor ? 'donor' : ''].join('|');
+    if (fah.single) {
+      const c = fah.clients[0];
+      if (c.status !== 'connected') return c.status;
+      return ['live', c.units.map((u) => u.id).join(','), donor ? 'donor' : ''].join('|');
+    }
+    return ['fleet', fah.clients.map((c) => c.phase + ':' + c.units.length).join(','),
+      donor ? 'donor' : ''].join('|');
   };
 
   const paint = () => {
@@ -2205,14 +2210,37 @@ export function foldPage(view) {
   return () => fah.close();
 }
 
+/**
+ * Where the machines come from.
+ *
+ * One today: the client on this computer. Additional machines will arrive as paired
+ * agents, each reached through a relay rather than through loopback — the view does
+ * not care which, because a machine is just a connection. The query parameter is for
+ * driving a second local client while building that, and is not how anybody will
+ * really add a machine.
+ */
+function fleetSources() {
+  const extra = new URLSearchParams(location.search).get('ports');
+  const sources = [{ url: LOCAL_URL, label: 'this machine' }];
+  if (extra) {
+    for (const p of extra.split(',').map((x) => x.trim()).filter(Boolean)) {
+      sources.push({ url: `ws://127.0.0.1:${p}/api/websocket`, label: 'port ' + p });
+    }
+  }
+  return sources;
+}
+
 /** Builds the layout for the current shape and returns the function that updates it. */
-function build(view, fah, donor) {
+function build(view, fleet, donor) {
+  const fah = fleet.single ? fleet.clients[0] : null;
   clear(view);
   view.append(el('div.page-head',
     el('h1.page-title', 'My folding'),
     el('p.page-sub',
       'Your own client, live from this machine. Nothing here reaches our server — ' +
       'the page talks to the client directly.')));
+
+  if (!fah) return buildFleet(view, fleet, donor);
 
   if (fah.status === 'connecting') {
     view.append(skeleton(140));
@@ -2247,18 +2275,7 @@ function build(view, fah, donor) {
 
   // Account totals, clearly a different kind of number from the ones above: every
   // machine, not this one, and an hourly snapshot rather than a live reading.
-  if (donor) {
-    view.append(el('section.section', cardWith('Your totals',
-      el('a.section-link', { href: '/donors/' + encodeURIComponent(donor.name) },
-        'Full history →'),
-      el('div.card-body',
-        el('div.stats',
-          statTile('Rank', '#' + n(donor.rank), movementText(donor.rank_change_24h)),
-          statTile('Points', short(donor.points_total), n(donor.points_total)),
-          statTile('Per day', short(donor.points_per_day_7d_avg),
-            '7-day average, all machines'),
-          statTile('Work units', short(donor.wus_total), 'returned in total'))))));
-  }
+  if (donor) view.append(totalsCard(donor));
 
   // The specification, read once and then never again.
   const spec = el('p.fold-spec');
@@ -2313,6 +2330,115 @@ function build(view, fah, donor) {
       fah.config.team != null ? 'team ' + fah.config.team : null,
     ].filter(Boolean).join(' · ');
   };
+}
+
+/**
+ * The layout for more than one machine.
+ *
+ * Deliberately not the single-machine page repeated. With one box the question is
+ * "how is this unit doing", and a large progress figure answers it. With five the
+ * question is "is anything wrong", and five large progress figures answer nothing —
+ * what matters is which machines are not folding, and everything else can be one line
+ * apiece. So the fleet leads with a count and a combined rate, and each machine gets a
+ * row it has to earn attention out of.
+ *
+ * Rows are ordered by trouble rather than by name or by output. A paused box is the
+ * reason somebody opened this page; the one quietly earning the most is not.
+ */
+function buildFleet(view, fleet, donor) {
+  const head = el('div.fold-status');
+  const dot = el('span.dot');
+  const line = el('span.fold-state');
+  const sub = el('span.muted');
+  head.append(dot, line, sub);
+  view.append(el('section.section', el('div.fold-bar', head)));
+
+  // Machine names are not unique — a client reports its hostname, and two boxes
+  // behind the same name are exactly the pair somebody most needs told apart. Where
+  // they collide, the connection is what distinguishes them, so it is shown.
+  const nameOf = (c) => {
+    const clash = fleet.clients.filter((o) => o !== c && o.name === c.name).length > 0;
+    return clash ? `${c.name} (${c.label})` : c.name;
+  };
+  const rows = fleet.clients.map((c) => machineRow(c, nameOf));
+  const list = el('section.section', el('div.machines', ...rows.map((r) => r.node)));
+  view.append(list);
+
+  if (donor) view.append(totalsCard(donor));
+
+  return () => {
+    const online = fleet.online.length;
+    const folding = fleet.folding;
+    const total = fleet.clients.length;
+    line.textContent = `${folding} of ${plural(total, 'machine')} folding`;
+    sub.textContent = fleet.ppd ? '· ' + short(fleet.ppd) + ' points/day combined' : '';
+    dot.className = 'dot ' + (folding === total ? 'good' : (folding ? 'warn' : 'idle'));
+    if (online < total) sub.textContent += (sub.textContent ? ' · ' : '· ') +
+      plural(total - online, 'machine') + ' not answering';
+
+    // Trouble first: offline, then paused, then idle, then working.
+    const rank = { offline: 0, paused: 1, finishing: 2, waiting: 3, folding: 4 };
+    const sorted = [...rows].sort((a, b) =>
+      (rank[a.client.phase] ?? 9) - (rank[b.client.phase] ?? 9) || b.client.ppd - a.client.ppd);
+    for (const r of sorted) {
+      r.sync();
+      r.node.parentNode.append(r.node); // reorder without rebuilding
+    }
+  };
+}
+
+/** One machine, as one line plus whatever it is working on. */
+function machineRow(client, nameOf) {
+  const dot = el('span.dot');
+  const name = el('span.mach-name');
+  const phase = el('span.muted');
+  const rate = el('span.mach-rate');
+  const actions = el('div.fold-actions');
+  const proj = el('span.muted');
+  const fill = el('div.bar-fill');
+  const left = el('span.muted');
+
+  const node = el('div.machine',
+    el('div.mach-head', dot, name, phase, rate, actions),
+    el('div.bar', fill),
+    el('div.bar-legend', proj, left));
+
+  return {
+    client,
+    node,
+    sync() {
+      const u = client.units[0];
+      const p = u ? Math.max(0, Math.min(100, (u.wu_progress || 0) * 100)) : 0;
+      dot.className = 'dot ' + ({ folding: 'good', paused: 'warn', finishing: 'warn',
+        offline: 'idle', waiting: 'idle' }[client.phase] || 'idle');
+      name.textContent = nameOf(client);
+      phase.textContent = client.phase;
+      rate.textContent = client.ppd ? short(client.ppd) + '/day' : '';
+      fill.style.width = p + '%';
+      proj.textContent = u ? 'project ' + (u.assignment || {}).project + ' · ' + p.toFixed(1) + '%'
+        : (client.phase === 'offline' ? 'not answering' : 'no work unit');
+      left.textContent = u && u.eta ? u.eta + ' left' : '';
+
+      clear(actions);
+      if (client.phase === 'offline') return;
+      if (client.paused) actions.append(btn('Resume', () => client.setState('fold'), true));
+      else if (client.finishing) actions.append(btn('Keep folding', () => client.setState('fold'), true));
+      else actions.append(btn('Pause', () => client.setState('pause')));
+    },
+  };
+}
+
+/** The account block, shared by both layouts. */
+function totalsCard(donor) {
+  return el('section.section', cardWith('Your totals',
+    el('a.section-link', { href: '/donors/' + encodeURIComponent(donor.name) },
+      'Full history →'),
+    el('div.card-body',
+      el('div.stats',
+        statTile('Rank', '#' + n(donor.rank), movementText(donor.rank_change_24h)),
+        statTile('Points', short(donor.points_total), n(donor.points_total)),
+        statTile('Per day', short(donor.points_per_day_7d_avg), '7-day average, all machines'),
+        statTile('Work units', short(donor.wus_total), 'returned in total')))));
 }
 
 /**
