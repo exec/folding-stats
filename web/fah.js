@@ -151,6 +151,17 @@ export class MachineState {
       .filter((g) => g.supported);
   }
 
+  /**
+   * The folding client's own identity, from its database.
+   *
+   * Stable across restarts and unique per client, which makes it the only reliable way
+   * to notice that two connections lead to the same machine. Names are not: a hostname
+   * is whatever somebody typed, and two boxes called nebula are common.
+   */
+  get clientID() {
+    return this.info.id || '';
+  }
+
   /** What to call this machine: its own name if it has told us one. */
   get name() {
     return this.info.mach_name || this.info.hostname || this.label;
@@ -287,14 +298,29 @@ export class Fleet {
   }
 
   /**
-   * Every machine, this one first.
+   * Every machine, this one first, each of them once.
    *
    * Computed rather than stored: relay machines appear and vanish as agents connect,
    * and a list captured at construction would be a list of whoever happened to be
    * online when the page loaded.
+   *
+   * The de-duplication matters more than it sounds. Installing the agent on the
+   * computer you browse from is the obvious first thing to do, and it puts that
+   * machine in the list twice — once over loopback and once through the relay, both
+   * genuinely connected, both reporting the same work unit. It showed as "2 of 2
+   * machines folding" with one machine, and the combined rate was double what the
+   * hardware was doing.
+   *
+   * The folding client's own id is what settles it: two connections reporting the same
+   * client are one machine, and the direct one wins because it is the one that keeps
+   * working when the relay does not.
    */
   get clients() {
-    return this.link ? [this.local, ...this.link.machines.values()] : [this.local];
+    if (!this.link) return [this.local];
+    const localID = this.local.clientID;
+    const remote = [...this.link.machines.values()]
+      .filter((m) => !localID || m.clientID !== localID);
+    return [this.local, ...remote];
   }
 
   connect() {
