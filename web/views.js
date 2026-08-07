@@ -2127,70 +2127,240 @@ function mcpClients(origin) {
 /**
  * The reader's own machine, live.
  *
- * Every other page here is a leaderboard: it tells you what happened, hours ago,
- * everywhere. This one is the opposite — one machine, right now, from a websocket to
- * a program running on the same computer as the browser. Our server is not in the
- * path and cannot be: fah-client binds loopback only.
+ * Laid out by what somebody opens it to find out, which is not the order the client
+ * happens to report things in. Almost every visit is one of two questions — "is it
+ * still folding?" and "how far along is this one?" — so those are the first two things
+ * on the page and the second is the largest thing on it. The machine's specification
+ * is read once, ever, so it is a single quiet line at the bottom rather than a card
+ * above the work.
  *
- * The two halves are the point. The client knows what this box is doing this second;
- * the API knows what it has added up to. Neither is interesting without the other —
- * "14M points per day" means nothing until you can see it against a seven-day average,
- * and a rank means nothing until you can see whether the machine earning it is awake.
+ * The account figures are deliberately in their own block, well away from the live
+ * ones. Putting "1.35M/day right now" beside "61.38M/day average" in one stat row
+ * invites a comparison that is simply false: the first is one machine at this instant,
+ * often mid-ramp on a fresh unit, and the second is every machine you own averaged
+ * over a week. They are different scopes on different clocks and they must not look
+ * like peers.
+ *
+ * It also updates in place. The client sends about one patch every four seconds, and
+ * rebuilding the document each time destroyed any text selection, dropped focus from
+ * whatever button was under the cursor, and made the progress bar's transition
+ * unreachable — a new element has no previous width to animate from. The layout is
+ * rebuilt only when its shape changes; everything else is a text assignment.
  */
 export function foldPage(view) {
   clear(view);
   const fah = new LocalClient();
   let donor = null;
   let donorFor = null;
+  let shape = null;
+  let sync = null;
 
-  const render = () => {
-    clear(view);
-    view.append(el('div.page-head',
-      el('h1.page-title', 'My folding'),
-      el('p.page-sub',
-        'Your own client, live from this machine. Nothing here reaches our server — ' +
-        'the page talks to the client directly.')));
+  // Rebuild only when the page's *structure* would differ. Numbers changing is not a
+  // structural change, and treating it as one is what made the page flicker.
+  const shapeOf = () => {
+    if (fah.status !== 'connected') return fah.status;
+    return ['live', fah.units.map((u) => u.id).join(','), donor ? 'donor' : ''].join('|');
+  };
 
-    try {
-      if (fah.status === 'connected') view.append(...connected(fah, donor));
-      else if (fah.status === 'connecting') view.append(skeleton(160));
-      else view.append(setupCard());
-    } catch (e) {
-      // The client is a program we do not ship, on a machine we cannot see, sending a
-      // shape we inferred. When that goes wrong the reader must be told, not shown an
-      // empty page — and the console needs the stack to make it actionable.
-      console.error('rendering the client view failed', e);
-      view.append(notice('Something went wrong reading the client. ' +
-        'The details are in the browser console.'));
+  const paint = () => {
+    const now = shapeOf();
+    if (now !== shape) {
+      shape = now;
+      sync = build(view, fah, donor);
+    }
+    if (sync) {
+      try {
+        sync();
+      } catch (e) {
+        // The client is a program we do not ship, sending a shape we inferred. A fault
+        // must read as a fault rather than as a page that quietly stopped moving.
+        console.error('updating the client view failed', e);
+      }
     }
   };
 
-  // The donor lookup is the join, and it is deliberately lazy: it only happens once a
-  // client has told us a name, and only again if that name changes. A page open all
-  // day should not re-ask for a figure that moves once an hour.
   const maybeFetchDonor = async () => {
     const name = fah.config.user;
     if (!name || name === donorFor) return;
     donorFor = name;
     try {
-      // The envelope, not the entity: every other caller here takes .data, and
-      // reading the wrapper instead yields an object whose every field is undefined —
-      // which renders as a confident rank of #0 rather than as an error.
+      // The envelope, not the entity: reading the wrapper gives an object whose every
+      // field is undefined, which renders as a confident rank of #0 rather than as an
+      // error.
       donor = (await api.donor(name)).data;
     } catch (e) {
       donor = null;
     }
-    render();
+    shape = null; // the donor block appears or disappears, so the layout changes
+    paint();
   };
 
   fah.onChange(() => {
-    render();
+    paint();
     maybeFetchDonor();
   });
   fah.connect();
-  render();
+  paint();
 
   return () => fah.close();
+}
+
+/** Builds the layout for the current shape and returns the function that updates it. */
+function build(view, fah, donor) {
+  clear(view);
+  view.append(el('div.page-head',
+    el('h1.page-title', 'My folding'),
+    el('p.page-sub',
+      'Your own client, live from this machine. Nothing here reaches our server — ' +
+      'the page talks to the client directly.')));
+
+  if (fah.status === 'connecting') {
+    view.append(skeleton(140));
+    return null;
+  }
+  if (fah.status !== 'connected') {
+    view.append(setupCard());
+    return null;
+  }
+
+  // Status and actions together, above everything. The two commonest reasons to open
+  // this page are "is it working" and "make it stop", and they are now one glance apart.
+  const dot = el('span.dot');
+  const statusText = el('span.fold-state');
+  const statusSub = el('span.muted');
+  const actions = el('div.fold-actions');
+  view.append(el('section.section',
+    el('div.fold-bar',
+      el('div.fold-status', dot, statusText, statusSub),
+      actions)));
+
+  const units = fah.units.map((u) => unitCard(u));
+  for (const u of units) view.append(u.node);
+
+  if (!units.length) {
+    view.append(el('section.section', card(null,
+      el('div.card-body', el('p.empty', { style: 'margin:0' },
+        fah.paused
+          ? 'Paused, so no work is being requested.'
+          : 'No work unit yet. The client asks for one when it is ready.')))));
+  }
+
+  // Account totals, clearly a different kind of number from the ones above: every
+  // machine, not this one, and an hourly snapshot rather than a live reading.
+  if (donor) {
+    view.append(el('section.section', cardWith('Your totals',
+      el('a.section-link', { href: '/donors/' + encodeURIComponent(donor.name) },
+        'Full history →'),
+      el('div.card-body',
+        el('div.stats',
+          statTile('Rank', '#' + n(donor.rank), movementText(donor.rank_change_24h)),
+          statTile('Points', short(donor.points_total), n(donor.points_total)),
+          statTile('Per day', short(donor.points_per_day_7d_avg),
+            '7-day average, all machines'),
+          statTile('Work units', short(donor.wus_total), 'returned in total'))))));
+  }
+
+  // The specification, read once and then never again.
+  const spec = el('p.fold-spec');
+  view.append(el('section.section', spec));
+
+  return () => {
+    const paused = fah.paused;
+    const finishing = fah.finishing;
+    const working = fah.units.length > 0;
+
+    let state, sub, tone;
+    if (paused) [state, sub, tone] = ['Paused', 'not requesting work', 'warn'];
+    else if (finishing) [state, sub, tone] = ['Finishing', 'stopping after this unit', 'warn'];
+    else if (working) [state, sub, tone] = ['Folding', plural(fah.units.length, 'work unit'), 'good'];
+    else [state, sub, tone] = ['Waiting', 'asking for a work unit', 'idle'];
+
+    statusText.textContent = state;
+    statusSub.textContent = sub ? '· ' + sub : '';
+    dot.className = 'dot ' + tone;
+
+    // Actions follow the state rather than sitting as three equals. Only a state that
+    // wants fixing gets a primary button; when it is folding, nothing needs doing and
+    // nothing should look like it does.
+    clear(actions);
+    if (paused) {
+      actions.append(btn('Resume folding', () => fah.setState('fold'), true));
+    } else if (finishing) {
+      actions.append(
+        btn('Keep folding', () => fah.setState('fold'), true),
+        btn('Pause now', () => fah.setState('pause')));
+    } else {
+      actions.append(
+        btn('Finish after this', () => fah.setState('finish')),
+        btn('Pause', () => fah.setState('pause')));
+    }
+
+    for (const u of units) u.sync(fah);
+
+    const i = fah.info;
+    spec.textContent = [
+      i.mach_name || i.hostname,
+      ...fah.gpus.map((g) => g.description),
+      plural(i.cpus || 0, 'CPU'),
+      'client ' + (i.version || '?'),
+      fah.config.user ? 'as ' + fah.config.user : null,
+      fah.config.team != null ? 'team ' + fah.config.team : null,
+    ].filter(Boolean).join(' · ');
+  };
+}
+
+function btn(label, onClick, primary = false) {
+  return el('button.btn' + (primary ? '.btn-primary' : ''), { onClick, type: 'button' }, label);
+}
+
+function movementText(change) {
+  if (!change) return 'unchanged in 24h';
+  return (change > 0 ? '▲ ' : '▼ ') + Math.abs(change) + ' in 24h';
+}
+
+/**
+ * One work unit, and the largest thing on the page.
+ *
+ * Percentage leads because it is the answer to the question that brought most people
+ * here. The bar is under it rather than beside it so both get full width — a folding
+ * box is watched from across a room, and a bar is readable at a distance that a number
+ * is not.
+ */
+function unitCard(u) {
+  const a = u.assignment || {};
+  const pct = el('div.hero-num');
+  const rate = el('div.hero-side');
+  const fill = el('div.bar-fill');
+  const left = el('span');
+  const credit = el('span.muted');
+  const meta = el('p.fold-meta');
+
+  const node = el('section.section', card('Project ' + (a.project ?? '?'),
+    el('div.card-body', { 'aria-live': 'off' },
+      el('div.hero-row', pct, rate),
+      el('div.bar', fill),
+      el('div.bar-legend', left, credit),
+      meta)));
+
+  return {
+    node,
+    sync(fah) {
+      const cur = fah.units.find((x) => x.id === u.id) || u;
+      const at = cur.assignment || {};
+      const p = Math.max(0, Math.min(100, (cur.wu_progress || 0) * 100));
+      pct.textContent = p.toFixed(1) + '%';
+      fill.style.width = p + '%';
+      rate.textContent = cur.ppd ? short(cur.ppd) + '/day' : '';
+      left.textContent = cur.eta ? cur.eta + ' left' : (cur.state === 'RUN' ? 'estimating…' : '');
+      credit.textContent = at.credit ? n(at.credit) + ' points on return' : '';
+      meta.textContent = [
+        cur.state,
+        at.core ? 'core ' + at.core.type : null,
+        at.deadline ? plural(Math.round(at.deadline / 86400), 'day') + ' to return' : null,
+        at.ws,
+      ].filter(Boolean).join(' · ');
+    },
+  };
 }
 
 /** The card somebody sees before they have let us in — which is everybody, once. */
@@ -2216,108 +2386,11 @@ function setupCard() {
         'permission foldingathome.org already holds by default. Remove the line to ' +
         'revoke it.'),
       el('p', { style: 'margin-bottom:0' },
-        'This page keeps trying — it will pick the client up on its own, ' +
-        'no reload needed.'))));
+        'Your browser may also ask whether this page may reach devices on your local ' +
+        'network. It has to, because your client is one of them.'))));
 }
 
-function connected(fah, donor) {
-  const out = [];
-  const cfg = fah.config;
-  const info = fah.info;
-  const units = fah.units;
-  const live = fah.ppd;
 
-  // What the machine is doing, next to what the account has done. The comparison is
-  // the reason both are on one page.
-  const tiles = [
-    statTile('Right now', live ? short(live) + '/day' : '—',
-      fah.paused ? 'paused' : (units.length ? 'folding' : 'no work unit'),
-      'Points per day across every unit this client is running.'),
-  ];
-  if (donor) {
-    tiles.push(statTile('7-day average', short(donor.points_per_day_7d_avg) + '/day',
-      'across every machine', 'From the public API — all of your machines, not just this one.'));
-    tiles.push(statTile('Rank', '#' + n(donor.rank), nameText(el('span'), donor.name)));
-    tiles.push(statTile('Points', short(donor.points_total), n(donor.points_total)));
-  }
-  out.push(el('section.section', el('div.stats', ...tiles)));
-
-  // Controls first: somebody who opened this page mid-crisis wants the pause button,
-  // not a hardware inventory.
-  out.push(el('section.section', cardWith('This machine', controls(fah),
-    el('div.card-body',
-      el('div.kv',
-        kv('Machine', info.mach_name || info.hostname || '—'),
-        kv('Client', 'v' + (info.version || '?')),
-        kv('CPUs', String(info.cpus ?? '—')),
-        kv('Folding as', cfg.user
-          ? nameText(el('a', { href: '/donors/' + encodeURIComponent(cfg.user) }), cfg.user)
-          : '—'),
-        kv('Team', cfg.team != null
-          ? el('a', { href: '/teams/' + cfg.team }, '#' + cfg.team)
-          : '—'),
-        ...fah.gpus.map((g) => kv('GPU', g.description)))))));
-
-  if (!units.length) {
-    out.push(el('section.section', card('Work',
-      el('div.card-body', el('p', { style: 'margin:0' },
-        fah.paused
-          ? 'Paused. Nothing is being folded on this machine.'
-          : 'No work unit yet — the client asks for one when it is ready.')))));
-  }
-  for (const u of units) out.push(unitCard(u));
-
-  return out;
-}
-
-// Three states rather than a pause toggle, because "finish" is the one people want
-// and never find: it completes the unit in progress and then stops, where pause
-// abandons a partly-done unit to a deadline it may now miss.
-function controls(fah) {
-  const current = fah.paused ? 'pause' : (fah.finishing ? 'finish' : 'fold');
-  return segmented([
-    { value: 'fold', label: 'Fold', title: 'Keep taking work' },
-    { value: 'finish', label: 'Finish', title: 'Complete this unit, then stop' },
-    { value: 'pause', label: 'Pause', title: 'Stop now, keeping the unit' },
-  ], current, (v) => fah.setState(v));
-}
-
-function kv(k, v) {
-  return el('div.kv-row', el('span.kv-k', k), el('span.kv-v', v));
-}
-
-function unitCard(u) {
-  const a = u.assignment || {};
-  const pct = Math.round((u.wu_progress || 0) * 1000) / 10;
-  const done = u.state === 'DONE' || u.state === 'UPLOAD';
-
-  return el('section.section', card('Project ' + (a.project ?? '?'),
-    el('div.card-body',
-      el('div.bar', el('div.bar-fill', { style: `width:${Math.max(pct, 0)}%` })),
-      el('div.bar-legend',
-        el('span', pct.toFixed(1) + '%'),
-        el('span.muted', u.eta ? 'about ' + u.eta + ' left' : (done ? 'finishing up' : ''))),
-      el('div.kv', { style: 'margin-top:var(--s4)' },
-        kv('State', el('span.badge' + (u.paused ? '.warn' : ''), u.state || '—')),
-        kv('Rate', u.ppd ? short(u.ppd) + '/day' : '—'),
-        kv('Credit', a.credit ? n(a.credit) + ' points' : '—'),
-        kv('Core', a.core ? a.core.type : '—'),
-        kv('Server', a.ws || '—'),
-        kv('Deadline', a.deadline ? plural(Math.round(a.deadline / 86400), 'day') : '—')))));
-}
-
-/**
- * The bots, as data rather than as markup.
- *
- * There is one today. The page is built from this list anyway, because the version
- * that hardcodes Discord and the version that reads a list cost the same to write and
- * only one of them survives a second platform: adding Matrix or Telegram should be an
- * entry here and nothing else — not a new page, not a copy of the card, not another
- * place the header link has to learn about.
- *
- * Fields a bot does not have are absent rather than empty. Something still being built
- * has no invite, and the page renders around the gap instead of offering a dead button.
- */
 const BOTS = [
   {
     id: 'discord',

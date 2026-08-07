@@ -352,6 +352,60 @@ main { max-width: var(--wide); margin: 0 auto; padding: var(--s6) var(--s5) var(
 .kv-k { color: var(--ink-muted); font-size: 12px; min-width: 92px; flex: none; }
 .kv-v { color: var(--ink); overflow-wrap: anywhere; }
 
+/* Status and actions, above everything. The two commonest reasons to open this page
+   are "is it still folding" and "make it stop", so they sit one glance apart. */
+.fold-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  flex-wrap: wrap;
+  padding: var(--s3) var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.fold-status { display: flex; align-items: baseline; gap: var(--s2); min-width: 0; }
+.fold-state { font-weight: 620; font-size: 15px; }
+.fold-actions { display: flex; gap: var(--s2); margin-left: auto; flex-wrap: wrap; }
+.dot.good { background: var(--good); }
+.dot.warn { background: var(--warning); }
+.dot.idle { background: var(--ink-muted); }
+
+/* The site's first real button. Deliberately not the segmented control the charts use:
+   there, picking a segment changes what you are looking at, and here it changes what
+   the computer is doing. Reusing one shape for both would make a destructive-adjacent
+   action look like a view toggle. */
+.btn {
+  padding: 6px 13px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-raised);
+  color: var(--ink-secondary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.btn:hover { background: var(--surface-hover); color: var(--ink); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Only a state that wants fixing gets a primary. While it is folding, nothing needs
+   doing and nothing should look like it does. */
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 560;
+}
+.btn-primary:hover { background: var(--accent); color: #fff; filter: brightness(1.08); }
+
+.hero-row { display: flex; align-items: baseline; gap: var(--s4); margin-bottom: var(--s3); }
+.hero-num { font-size: 34px; font-weight: 640; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.hero-side { margin-left: auto; color: var(--ink-secondary); font-variant-numeric: tabular-nums; }
+.fold-meta { margin: var(--s4) 0 0; color: var(--ink-muted); font-size: 12px; overflow-wrap: anywhere; }
+/* The specification: read once, then never again. */
+.fold-spec { margin: 0; color: var(--ink-muted); font-size: 12px; overflow-wrap: anywhere; }
+
 /* Work unit progress. The bar is the one place on this site where a number is worth
    drawing rather than printing: "61.4%" and a bar that is nearly two-thirds full say
    the same thing, but only one of them is readable at a glance from across a room,
