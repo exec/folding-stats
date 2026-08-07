@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-//go:embed index.html icon.svg app.css app.js api.js ui.js views.js charts.js countdown.js clock.js format.js fah.js vendor
+//go:embed index.html icon.svg app.css app.js api.js ui.js views.js charts.js countdown.js clock.js format.js fah.js relay.js vendor
 var assets embed.FS
 
 // assetRef matches a same-origin asset path in a quoted string: an ES module

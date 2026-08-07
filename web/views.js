@@ -9,6 +9,7 @@ import { el, clear, card, cardWith, statTile, pager, segmented, notice, loading,
 import { n, short, ago, dateTime, utcDate, delta, tierName, nameText, plural, span, tzName } from '/format.js';
 import { productionChart, seriesChart, stack, legend, palette, densify, perDayPoints, MAX_STACK_SERIES } from '/charts.js';
 import { LocalClient, Fleet, LOCAL_URL } from '/fah.js';
+import { RelayLink, identity, mintToken } from '/relay.js';
 
 const PER_PAGE = 100;
 
@@ -2149,7 +2150,10 @@ function mcpClients(origin) {
  */
 export function foldPage(view) {
   clear(view);
-  const fah = new Fleet(fleetSources());
+  // Local first, then anything an agent has enrolled. The relay link is created
+  // regardless: a reader with no machines simply has an empty one, and the page has
+  // somewhere to mint an enrolment token from.
+  const fah = new Fleet(new LocalClient(), new RelayLink());
   let donor = null;
   let donorFor = null;
   let shape = null;
@@ -2163,7 +2167,7 @@ export function foldPage(view) {
       if (c.status !== 'connected') return c.status;
       return ['live', c.units.map((u) => u.id).join(','), donor ? 'donor' : ''].join('|');
     }
-    return ['fleet', fah.clients.map((c) => c.phase + ':' + c.units.length).join(','),
+    return ['fleet', fah.clients.map((c) => c.name + ':' + c.phase + ':' + c.units.length).join(','),
       donor ? 'donor' : ''].join('|');
   };
 
@@ -2208,26 +2212,6 @@ export function foldPage(view) {
   paint();
 
   return () => fah.close();
-}
-
-/**
- * Where the machines come from.
- *
- * One today: the client on this computer. Additional machines will arrive as paired
- * agents, each reached through a relay rather than through loopback — the view does
- * not care which, because a machine is just a connection. The query parameter is for
- * driving a second local client while building that, and is not how anybody will
- * really add a machine.
- */
-function fleetSources() {
-  const extra = new URLSearchParams(location.search).get('ports');
-  const sources = [{ url: LOCAL_URL, label: 'this machine' }];
-  if (extra) {
-    for (const p of extra.split(',').map((x) => x.trim()).filter(Boolean)) {
-      sources.push({ url: `ws://127.0.0.1:${p}/api/websocket`, label: 'port ' + p });
-    }
-  }
-  return sources;
 }
 
 /** Builds the layout for the current shape and returns the function that updates it. */
@@ -2280,6 +2264,7 @@ function build(view, fleet, donor) {
   // The specification, read once and then never again.
   const spec = el('p.fold-spec');
   view.append(el('section.section', spec));
+  view.append(addMachine(fah));
 
   return () => {
     const paused = fah.paused;
@@ -2365,6 +2350,7 @@ function buildFleet(view, fleet, donor) {
   view.append(list);
 
   if (donor) view.append(totalsCard(donor));
+  view.append(addMachine(fleet));
 
   return () => {
     const online = fleet.online.length;
@@ -2420,12 +2406,72 @@ function machineRow(client, nameOf) {
       left.textContent = u && u.eta ? u.eta + ' left' : '';
 
       clear(actions);
+      if (client.key && client.link) {
+        // Only a machine reached through the relay can be forgotten — the client on
+        // this computer is not the relay's to revoke.
+        actions.append(el('button.linkish', {
+          type: 'button',
+          title: 'Stop this machine reporting here. It keeps folding; it just stops appearing.',
+          onClick: () => {
+            if (confirm('Remove ' + client.name + ' from your machines?\n\n' +
+              'It carries on folding — it just stops appearing here, and would need ' +
+              'a new token to come back.')) client.link.forget(client.key);
+          },
+        }, 'Forget'));
+      }
       if (client.phase === 'offline') return;
       if (client.paused) actions.append(btn('Resume', () => client.setState('fold'), true));
       else if (client.finishing) actions.append(btn('Keep folding', () => client.setState('fold'), true));
       else actions.append(btn('Pause', () => client.setState('pause')));
     },
   };
+}
+
+/**
+ * Enrolling another machine.
+ *
+ * Deliberately a folded-away line rather than a card. Most readers have one computer
+ * and the page they get should not be half taken up by an invitation to buy more; the
+ * ones who do have a fleet know they want this and will find one link.
+ */
+function addMachine(fleet) {
+  const out = el('div.add-machine');
+  const open = el('button.linkish', { type: 'button' }, 'Add another machine →');
+  const panel = el('div', { hidden: true });
+  out.append(open, panel);
+
+  open.addEventListener('click', async () => {
+    open.hidden = true;
+    panel.hidden = false;
+    clear(panel).append(el('p.muted', 'Minting a token…'));
+    try {
+      const id = await identity();
+      const token = await mintToken(id, 900);
+      const cmd = "FOLDING_ENROL='" + JSON.stringify(token) + "' foldingagent";
+      clear(panel).append(
+        el('p',
+          'Run this on the machine you want to add. It needs the folding client ' +
+          'already installed and running; it does not need any change to the ' +
+          'client\u2019s configuration.'),
+        el('pre.code-block', el('code', cmd)),
+        el('p.muted',
+          'Good once, for fifteen minutes. Your machine makes its own key and keeps ' +
+          'it — the token only proves the machine is yours, so finding it later in a ' +
+          'log is worth nothing to anybody.'),
+        el('p.muted', { style: 'margin-bottom:0' },
+          'No published build yet: ',
+          el('code', 'go build ./cmd/foldingagent'),
+          ' from ',
+          el('a', { href: 'https://github.com/exec/folding-stats', target: '_blank',
+            rel: 'noopener noreferrer' }, 'the repository'), '.'));
+    } catch (e) {
+      console.error('minting an enrolment token failed', e);
+      clear(panel).append(notice(
+        'This browser could not create an identity. Ed25519 signing is required, ' +
+        'which needs a current browser.'));
+    }
+  });
+  return el('section.section', out);
 }
 
 /** The account block, shared by both layouts. */

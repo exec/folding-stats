@@ -352,6 +352,22 @@ main { max-width: var(--wide); margin: 0 auto; padding: var(--s6) var(--s5) var(
 .kv-k { color: var(--ink-muted); font-size: 12px; min-width: 92px; flex: none; }
 .kv-v { color: var(--ink); overflow-wrap: anywhere; }
 
+/* A link that is really a button. Used where an action has to sit inside prose or a
+   dense row without the weight of a button beside it. */
+.linkish {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.linkish:hover { filter: brightness(1.15); }
+.add-machine { font-size: 13px; }
+
 /* One row per machine. A fleet is scanned, not read: the eye goes down the left edge
    looking for a dot that is not green, so the name and the state sit there and the
    output — the least urgent thing — sits furthest right. */

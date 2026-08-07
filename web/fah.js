@@ -72,24 +72,19 @@ export function applyUpdate(root, update) {
 }
 
 /**
- * A live connection to the local client.
+ * The state a folding client reports, and the questions worth asking of it.
  *
- * Reconnects on its own, because the client restarts whenever its configuration
- * changes and a dashboard that needs reloading after every setting is a dashboard
- * people stop using. Backoff is capped low: this is a socket to loopback, so retrying
- * costs nothing and the reader is usually watching, waiting for it to come back.
+ * Split from the connection deliberately: a machine reached through the relay holds
+ * exactly the same tree, arrived at the same way, and the view must not be able to
+ * tell the two apart. Everything here is a reader over `state` — the transport owns
+ * how it gets filled.
  */
-export class LocalClient {
-  constructor(url = LOCAL_URL, label = 'this machine') {
-    this.url = url;
+export class MachineState {
+  constructor(label = '') {
     this.label = label;
     this.state = {};
     this.status = 'connecting'; // connecting | connected | unreachable
     this.listeners = new Set();
-    this.closed = false;
-    this.attempts = 0;
-    this.ws = null;
-    this.timer = null;
   }
 
   onChange(fn) {
@@ -102,85 +97,18 @@ export class LocalClient {
       try {
         fn(this);
       } catch (e) {
-        console.error('fah listener failed', e);
+        console.error('machine listener failed', e);
       }
     }
   }
 
-  connect() {
-    if (this.closed) return;
-    let ws;
-    try {
-      ws = new WebSocket(this.url);
-    } catch (e) {
-      // Older browsers throw synchronously on a blocked scheme rather than firing
-      // onerror, which would otherwise leave the page saying "connecting" forever.
-      this.fail();
-      return;
-    }
-    this.ws = ws;
-
-    ws.onopen = () => {
-      this.attempts = 0;
-      this.status = 'connected';
-      // A fresh socket sends the whole tree first, so the old one must go: keeping it
-      // would leave a unit that has since finished sitting in the list forever.
-      this.state = {};
-      this.emit();
-    };
-
-    ws.onmessage = (ev) => {
-      let msg;
-      try {
-        msg = JSON.parse(ev.data);
-      } catch (e) {
-        return;
-      }
-      if (Array.isArray(msg)) applyUpdate(this.state, msg);
-      else this.state = cleanKeys(msg);
-      this.status = 'connected';
-      this.emit();
-    };
-
-    ws.onerror = () => {};
-    ws.onclose = () => {
-      if (this.closed) return;
-      this.fail();
-    };
+  /** One message from a client: a whole tree, or a patch against it. */
+  accept(msg) {
+    if (Array.isArray(msg)) applyUpdate(this.state, msg);
+    else if (msg && typeof msg === 'object') this.state = cleanKeys(msg);
+    else return false; // the client also sends bare "ping"
+    return true;
   }
-
-  fail() {
-    this.status = 'unreachable';
-    this.emit();
-    this.attempts++;
-    const wait = Math.min(1000 * 2 ** Math.min(this.attempts, 4), 15000);
-    this.timer = setTimeout(() => this.connect(), wait);
-  }
-
-  send(msg) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg));
-      return true;
-    }
-    return false;
-  }
-
-  /** fold, pause or finish. Group-scoped, but this page drives them all together. */
-  setState(state) {
-    return this.send({ cmd: 'state', state });
-  }
-
-  close() {
-    this.closed = true;
-    clearTimeout(this.timer);
-    if (this.ws) {
-      this.ws.onclose = null;
-      this.ws.close();
-    }
-    this.listeners.clear();
-  }
-
-  /* ------------------------------------------------------------ readers --- */
 
   get config() {
     return this.state.config || {};
@@ -197,8 +125,7 @@ export class LocalClient {
   /** The one group this client has; the API allows several but the client ships one. */
   get group() {
     const gs = this.state.groups || {};
-    const first = Object.values(gs)[0];
-    return first || {};
+    return Object.values(gs)[0] || {};
   }
 
   get groupConfig() {
@@ -240,6 +167,102 @@ export class LocalClient {
     if (this.finishing) return 'finishing';
     return this.units.length ? 'folding' : 'waiting';
   }
+
+  /** fold, pause or finish. Group-scoped, but this page drives them all together. */
+  setState(state) {
+    return this.send({ cmd: 'state', state });
+  }
+
+  send() {
+    return false;
+  }
+}
+
+/**
+ * A live connection to the local client.
+ *
+ * Reconnects on its own, because the client restarts whenever its configuration
+ * changes and a dashboard that needs reloading after every setting is a dashboard
+ * people stop using. Backoff is capped low: this is a socket to loopback, so retrying
+ * costs nothing and the reader is usually watching, waiting for it to come back.
+ */
+export class LocalClient extends MachineState {
+  constructor(url = LOCAL_URL, label = 'this machine') {
+    super(label);
+    this.url = url;
+    this.closed = false;
+    this.attempts = 0;
+    this.ws = null;
+    this.timer = null;
+  }
+
+  connect() {
+    if (this.closed) return;
+    let ws;
+    try {
+      ws = new WebSocket(this.url);
+    } catch (e) {
+      // Older browsers throw synchronously on a blocked scheme rather than firing
+      // onerror, which would otherwise leave the page saying "connecting" forever.
+      this.fail();
+      return;
+    }
+    this.ws = ws;
+
+    ws.onopen = () => {
+      this.attempts = 0;
+      this.status = 'connected';
+      // A fresh socket sends the whole tree first, so the old one must go: keeping it
+      // would leave a unit that has since finished sitting in the list forever.
+      this.state = {};
+      this.emit();
+    };
+
+    ws.onmessage = (ev) => {
+      let msg;
+      try {
+        msg = JSON.parse(ev.data);
+      } catch (e) {
+        return;
+      }
+      if (!this.accept(msg)) return;
+      this.status = 'connected';
+      this.emit();
+    };
+
+    ws.onerror = () => {};
+    ws.onclose = () => {
+      if (this.closed) return;
+      this.fail();
+    };
+  }
+
+  fail() {
+    this.status = 'unreachable';
+    this.emit();
+    this.attempts++;
+    const wait = Math.min(1000 * 2 ** Math.min(this.attempts, 4), 15000);
+    this.timer = setTimeout(() => this.connect(), wait);
+  }
+
+  send(msg) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(msg));
+      return true;
+    }
+    return false;
+  }
+
+  close() {
+    this.closed = true;
+    clearTimeout(this.timer);
+    if (this.ws) {
+      this.ws.onclose = null;
+      this.ws.close();
+    }
+    this.listeners.clear();
+  }
+
 }
 
 /**
@@ -255,18 +278,33 @@ export class LocalClient {
  * relay to a box in another country is the transport's business, not the view's.
  */
 export class Fleet {
-  constructor(sources = [{ url: LOCAL_URL, label: 'this machine' }]) {
-    this.clients = sources.map((s) => new LocalClient(s.url, s.label));
+  constructor(local, link = null) {
+    this.local = local;
+    this.link = link;
     this.listeners = new Set();
-    for (const c of this.clients) c.onChange(() => this.emit());
+    local.onChange(() => this.emit());
+    if (link) link.onChange(() => this.emit());
+  }
+
+  /**
+   * Every machine, this one first.
+   *
+   * Computed rather than stored: relay machines appear and vanish as agents connect,
+   * and a list captured at construction would be a list of whoever happened to be
+   * online when the page loaded.
+   */
+  get clients() {
+    return this.link ? [this.local, ...this.link.machines.values()] : [this.local];
   }
 
   connect() {
-    for (const c of this.clients) c.connect();
+    this.local.connect();
+    if (this.link) this.link.connect();
   }
 
   close() {
-    for (const c of this.clients) c.close();
+    this.local.close();
+    if (this.link) this.link.close();
     this.listeners.clear();
   }
 
@@ -315,3 +353,4 @@ export class Fleet {
     return c ? c.config : {};
   }
 }
+
