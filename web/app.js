@@ -179,6 +179,7 @@ const routes = [
   [/^\/api\/?$/, () => views.apiDocs(view)],
   [/^\/agents\/?$/, () => views.agentsPage(view)],
   [/^\/bots\/?$/, () => views.botsPage(view)],
+  [/^\/fold\/?$/, () => views.foldPage(view)],
   [/^\/privacy\/?$/, () => views.privacyPage(view)],
   [/^\/disclaimer\/?$/, () => views.disclaimerPage(view)],
 ];

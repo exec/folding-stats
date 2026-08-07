@@ -5,9 +5,10 @@
 // charts release their observers.
 
 import { api, snapshot } from '/api.js';
-import { el, clear, card, cardWith, statTile, pager, segmented, notice, loading, errorView, link } from '/ui.js';
+import { el, clear, card, cardWith, statTile, pager, segmented, notice, loading, skeleton, errorView, link } from '/ui.js';
 import { n, short, ago, dateTime, utcDate, delta, tierName, nameText, plural, span, tzName } from '/format.js';
 import { productionChart, seriesChart, stack, legend, palette, densify, perDayPoints, MAX_STACK_SERIES } from '/charts.js';
+import { LocalClient } from '/fah.js';
 
 const PER_PAGE = 100;
 
@@ -2119,6 +2120,190 @@ function mcpClients(origin) {
         'that only speak the older SSE transport will not connect.'],
     },
   ];
+}
+
+/* ------------------------------------------------------------------ fold --- */
+
+/**
+ * The reader's own machine, live.
+ *
+ * Every other page here is a leaderboard: it tells you what happened, hours ago,
+ * everywhere. This one is the opposite — one machine, right now, from a websocket to
+ * a program running on the same computer as the browser. Our server is not in the
+ * path and cannot be: fah-client binds loopback only.
+ *
+ * The two halves are the point. The client knows what this box is doing this second;
+ * the API knows what it has added up to. Neither is interesting without the other —
+ * "14M points per day" means nothing until you can see it against a seven-day average,
+ * and a rank means nothing until you can see whether the machine earning it is awake.
+ */
+export function foldPage(view) {
+  clear(view);
+  const fah = new LocalClient();
+  let donor = null;
+  let donorFor = null;
+
+  const render = () => {
+    clear(view);
+    view.append(el('div.page-head',
+      el('h1.page-title', 'My folding'),
+      el('p.page-sub',
+        'Your own client, live from this machine. Nothing here reaches our server — ' +
+        'the page talks to the client directly.')));
+
+    try {
+      if (fah.status === 'connected') view.append(...connected(fah, donor));
+      else if (fah.status === 'connecting') view.append(skeleton(160));
+      else view.append(setupCard());
+    } catch (e) {
+      // The client is a program we do not ship, on a machine we cannot see, sending a
+      // shape we inferred. When that goes wrong the reader must be told, not shown an
+      // empty page — and the console needs the stack to make it actionable.
+      console.error('rendering the client view failed', e);
+      view.append(notice('Something went wrong reading the client. ' +
+        'The details are in the browser console.'));
+    }
+  };
+
+  // The donor lookup is the join, and it is deliberately lazy: it only happens once a
+  // client has told us a name, and only again if that name changes. A page open all
+  // day should not re-ask for a figure that moves once an hour.
+  const maybeFetchDonor = async () => {
+    const name = fah.config.user;
+    if (!name || name === donorFor) return;
+    donorFor = name;
+    try {
+      // The envelope, not the entity: every other caller here takes .data, and
+      // reading the wrapper instead yields an object whose every field is undefined —
+      // which renders as a confident rank of #0 rather than as an error.
+      donor = (await api.donor(name)).data;
+    } catch (e) {
+      donor = null;
+    }
+    render();
+  };
+
+  fah.onChange(() => {
+    render();
+    maybeFetchDonor();
+  });
+  fah.connect();
+  render();
+
+  return () => fah.close();
+}
+
+/** The card somebody sees before they have let us in — which is everybody, once. */
+function setupCard() {
+  const xml =
+    '<config>\n' +
+    '  <allowed-origins>https://folding.exec.codes</allowed-origins>\n' +
+    '</config>';
+
+  return el('section.section', card('Connect your client',
+    el('div.card-body',
+      el('p',
+        'No client answered on this machine. Either it is not running, or it has not ' +
+        'been told to trust this page — the client ignores any origin it does not ' +
+        'recognise, which is why nothing here can touch it until you say so.'),
+      el('p', 'Add this to ', el('code', '/etc/fah-client/config.xml'),
+        ' (', el('code', '%ProgramData%\\FAHClient\\config.xml'), ' on Windows), then ' +
+        'restart the client:'),
+      el('pre.code-block', el('code', xml)),
+      el('p.muted',
+        'This grants any page at that address the same control the official client has, ' +
+        'including reading your passkey and discarding work units. It is the same ' +
+        'permission foldingathome.org already holds by default. Remove the line to ' +
+        'revoke it.'),
+      el('p', { style: 'margin-bottom:0' },
+        'This page keeps trying — it will pick the client up on its own, ' +
+        'no reload needed.'))));
+}
+
+function connected(fah, donor) {
+  const out = [];
+  const cfg = fah.config;
+  const info = fah.info;
+  const units = fah.units;
+  const live = fah.ppd;
+
+  // What the machine is doing, next to what the account has done. The comparison is
+  // the reason both are on one page.
+  const tiles = [
+    statTile('Right now', live ? short(live) + '/day' : '—',
+      fah.paused ? 'paused' : (units.length ? 'folding' : 'no work unit'),
+      'Points per day across every unit this client is running.'),
+  ];
+  if (donor) {
+    tiles.push(statTile('7-day average', short(donor.points_per_day_7d_avg) + '/day',
+      'across every machine', 'From the public API — all of your machines, not just this one.'));
+    tiles.push(statTile('Rank', '#' + n(donor.rank), nameText(el('span'), donor.name)));
+    tiles.push(statTile('Points', short(donor.points_total), n(donor.points_total)));
+  }
+  out.push(el('section.section', el('div.stats', ...tiles)));
+
+  // Controls first: somebody who opened this page mid-crisis wants the pause button,
+  // not a hardware inventory.
+  out.push(el('section.section', cardWith('This machine', controls(fah),
+    el('div.card-body',
+      el('div.kv',
+        kv('Machine', info.mach_name || info.hostname || '—'),
+        kv('Client', 'v' + (info.version || '?')),
+        kv('CPUs', String(info.cpus ?? '—')),
+        kv('Folding as', cfg.user
+          ? nameText(el('a', { href: '/donors/' + encodeURIComponent(cfg.user) }), cfg.user)
+          : '—'),
+        kv('Team', cfg.team != null
+          ? el('a', { href: '/teams/' + cfg.team }, '#' + cfg.team)
+          : '—'),
+        ...fah.gpus.map((g) => kv('GPU', g.description)))))));
+
+  if (!units.length) {
+    out.push(el('section.section', card('Work',
+      el('div.card-body', el('p', { style: 'margin:0' },
+        fah.paused
+          ? 'Paused. Nothing is being folded on this machine.'
+          : 'No work unit yet — the client asks for one when it is ready.')))));
+  }
+  for (const u of units) out.push(unitCard(u));
+
+  return out;
+}
+
+// Three states rather than a pause toggle, because "finish" is the one people want
+// and never find: it completes the unit in progress and then stops, where pause
+// abandons a partly-done unit to a deadline it may now miss.
+function controls(fah) {
+  const current = fah.paused ? 'pause' : (fah.finishing ? 'finish' : 'fold');
+  return segmented([
+    { value: 'fold', label: 'Fold', title: 'Keep taking work' },
+    { value: 'finish', label: 'Finish', title: 'Complete this unit, then stop' },
+    { value: 'pause', label: 'Pause', title: 'Stop now, keeping the unit' },
+  ], current, (v) => fah.setState(v));
+}
+
+function kv(k, v) {
+  return el('div.kv-row', el('span.kv-k', k), el('span.kv-v', v));
+}
+
+function unitCard(u) {
+  const a = u.assignment || {};
+  const pct = Math.round((u.wu_progress || 0) * 1000) / 10;
+  const done = u.state === 'DONE' || u.state === 'UPLOAD';
+
+  return el('section.section', card('Project ' + (a.project ?? '?'),
+    el('div.card-body',
+      el('div.bar', el('div.bar-fill', { style: `width:${Math.max(pct, 0)}%` })),
+      el('div.bar-legend',
+        el('span', pct.toFixed(1) + '%'),
+        el('span.muted', u.eta ? 'about ' + u.eta + ' left' : (done ? 'finishing up' : ''))),
+      el('div.kv', { style: 'margin-top:var(--s4)' },
+        kv('State', el('span.badge' + (u.paused ? '.warn' : ''), u.state || '—')),
+        kv('Rate', u.ppd ? short(u.ppd) + '/day' : '—'),
+        kv('Credit', a.credit ? n(a.credit) + ' points' : '—'),
+        kv('Core', a.core ? a.core.type : '—'),
+        kv('Server', a.ws || '—'),
+        kv('Deadline', a.deadline ? plural(Math.round(a.deadline / 86400), 'day') : '—')))));
 }
 
 /**

@@ -335,6 +335,49 @@ main { max-width: var(--wide); margin: 0 auto; padding: var(--s6) var(--s5) var(
 .card-title { font-weight: 600; font-size: 14px; }
 .card-body { padding: var(--s5); }
 
+/* ------------------------------------------------------------ my folding --- */
+
+/* A label/value list, for facts that are read rather than compared. A table would
+   line the values up in a column nobody scans down; these are read one row at a
+   time, so they wrap and each row stands alone. */
+.kv { display: grid; gap: var(--s2); }
+.kv-row {
+  display: flex;
+  gap: var(--s4);
+  align-items: baseline;
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--line);
+}
+.kv-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.kv-k { color: var(--ink-muted); font-size: 12px; min-width: 92px; flex: none; }
+.kv-v { color: var(--ink); overflow-wrap: anywhere; }
+
+/* Work unit progress. The bar is the one place on this site where a number is worth
+   drawing rather than printing: "61.4%" and a bar that is nearly two-thirds full say
+   the same thing, but only one of them is readable at a glance from across a room,
+   which is how a folding box is actually watched. */
+.bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 400ms ease;
+}
+.bar-legend {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-top: var(--s2);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) { .bar-fill { transition: none; } }
+
 /* Paragraphs keep the browser's 1em margins, so every card holding prose cancelled
    them by hand: padding-bottom:0 on the body, margin-top:0 on the first paragraph,
    margin-bottom:0 on the last, repeated at twenty call sites. What that produced was
