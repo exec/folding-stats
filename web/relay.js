@@ -281,6 +281,16 @@ export class RelayLink {
         break;
       }
 
+      case 'from_agent': {
+        const machine = this.machines.get(f.machine);
+        if (!machine) return;
+        // The agent's own answers, as opposed to its folding client's. Kept on the
+        // machine they came from so a fleet of managers would not overwrite each other.
+        machine.agent = f.data || {};
+        this.emit();
+        break;
+      }
+
       case 'from': {
         const machine = this.machines.get(f.machine);
         if (!machine || !machine.accept(f.data)) return;
@@ -341,6 +351,16 @@ class RelayMachine extends MachineState {
 
   send(msg) {
     return this.link.send({ type: 'to', machine: this.key, data: msg });
+  }
+
+  /** A command for the agent itself, not for the folding client behind it. */
+  ask(cmd) {
+    return this.link.send({ type: 'to_agent', machine: this.key, data: cmd });
+  }
+
+  /** Whatever the agent last reported about itself; rentals live here. */
+  get rentals() {
+    return (this.agent || {}).rentals || null;
   }
 
   get name() {

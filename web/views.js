@@ -2168,10 +2168,11 @@ export function foldPage(view) {
     if (fah.single) {
       const c = fah.clients[0];
       if (c.status !== 'connected') return c.status;
-      return ['live', c.units.map((u) => u.id).join(','), donor ? 'donor' : ''].join('|');
+      return ['live', c.units.map((u) => u.id).join(','), rentalShape(fah),
+        donor ? 'donor' : ''].join('|');
     }
     return ['fleet', fah.clients.map((c) => c.name + ':' + c.phase + ':' + c.units.length).join(','),
-      donor ? 'donor' : ''].join('|');
+      rentalShape(fah), donor ? 'donor' : ''].join('|');
   };
 
   const paint = () => {
@@ -2215,6 +2216,13 @@ export function foldPage(view) {
   paint();
 
   return () => fah.close();
+}
+
+/** Rentals change the page's structure, so their shape belongs in the shape key. */
+function rentalShape(fleet) {
+  const m = fleet.clients.find((c) => c.rentals && c.rentals.configured);
+  if (!m) return 'norentals';
+  return 'rentals:' + m.rentals.instances.map((i) => i.id + ':' + i.state).join(',');
 }
 
 /** Builds the layout for the current shape and returns the function that updates it. */
@@ -2267,7 +2275,11 @@ function build(view, fleet, donor) {
   // The specification, read once and then never again.
   const spec = el('p.fold-spec');
   view.append(el('section.section', spec));
+  const rentals = rentalsCard(fleet);
+  if (rentals) view.insertBefore(rentals, view.lastChild);
   view.append(addMachine(fah));
+  const setup = rentalSetup(fleet);
+  if (setup) view.append(setup);
 
   return () => {
     const paused = fah.paused;
@@ -2352,8 +2364,12 @@ function buildFleet(view, fleet, donor) {
   const list = el('section.section', el('div.machines', ...rows.map((r) => r.node)));
   view.append(list);
 
+  const rentals = rentalsCard(fleet);
+  if (rentals) view.append(rentals);
   if (donor) view.append(totalsCard(donor));
   view.append(addMachine(fleet));
+  const setup = rentalSetup(fleet);
+  if (setup) view.append(setup);
 
   return () => {
     const online = fleet.online.length;
@@ -2512,6 +2528,211 @@ function addMachine(fleet) {
         'This browser could not create an identity. Ed25519 signing is required, ' +
         'which needs a current browser.'));
     }
+  });
+  return el('section.section', out);
+}
+
+
+/* ------------------------------------------------------------- rentals --- */
+
+/**
+ * Rented compute, if anyone is renting any.
+ *
+ * Deliberately its own section rather than more rows in the fleet, and the reason is
+ * the failure it exists to catch: an evicted box disappears from the fleet entirely,
+ * because its agent goes with it. A fleet-only view would quietly show two machines
+ * where there were three and never mention the third — which is exactly how a watcher
+ * once logged zero evictions for hours while boxes sat dead.
+ *
+ * So this comes from Vast rather than from who happens to be connected, and the gap
+ * between the two is the whole point.
+ *
+ * Absent unless a machine is managing rentals, because most readers are not.
+ */
+function rentalsCard(fleet) {
+  const manager = fleet.clients.find((c) => c.rentals && c.rentals.configured);
+  if (!manager) return null;
+
+  const r = manager.rentals;
+  const running = r.instances.filter((i) => i.state === 'running');
+  const trouble = r.instances.filter((i) => i.state !== 'running');
+  const hourly = r.instances.reduce((n, i) =>
+    n + (i.state === 'running' ? i.dph : i.storage_dph), 0);
+
+  // Points per dollar per hour is the number that decides whether renting is worth
+  // doing, and it is not one Vast can tell you: it needs the folding rate from one
+  // side and the price from the other.
+  //
+  // It must only count the rented machines. The first version divided the whole
+  // fleet's output by the rental bill, which credits money spent on rentals with
+  // points produced by hardware already owned — a figure that looks precise, reads as
+  // an endorsement, and is nonsense for anybody who folds on their own desktop too.
+  //
+  // Matching is by name, which is what the provisioning template gives us: it sets the
+  // machine name from the container id, so a rented box calls itself vast-<something>.
+  // Best effort, so the tile is simply absent when nothing matches rather than
+  // guessing.
+  const rentedPPD = fleet.online
+    .filter((c) => matchesRental(c, r.instances))
+    .reduce((n, c) => n + c.ppd, 0);
+  const perDollar = hourly > 0 && rentedPPD > 0 ? rentedPPD / hourly : 0;
+
+  const tiles = [
+    statTile('Rented', String(r.instances.length),
+      `${running.length} running`, 'Instances this key rents, from Vast rather than from what is connected.'),
+    statTile('Cost', '$' + hourly.toFixed(3), 'per hour',
+      'Running instances at their full rate, stopped ones at storage only — storage is billed either way.'),
+  ];
+  if (perDollar > 0) {
+    tiles.push(statTile('Per dollar', short(Math.round(perDollar)), 'from rented machines',
+      'What the rented machines produce, divided by what they cost. Machines you own ' +
+      'are excluded — counting them would credit the rental bill with points it did ' +
+      'not buy. Bigger cards usually win this, because the quick return bonus grows ' +
+      'faster than the price does.'));
+  }
+  if (r.credit) {
+    const hours = hourly > 0 ? r.credit / hourly : 0;
+    tiles.push(statTile('Credit', '$' + r.credit.toFixed(2),
+      hours > 0 ? 'about ' + span(Math.round(hours * 3600)) + ' left' : 'on the account'));
+  }
+
+  const rows = r.instances.map((i) => rentalRow(i, manager));
+  const body = [el('div.card-body', el('div.stats', ...tiles))];
+  if (r.error) {
+    body.push(el('div.card-body', { style: 'padding-top:0' },
+      notice('Could not reach Vast: ' + r.error + ' — showing the last known state.')));
+  }
+  if (rows.length) body.push(el('div.machines', { style: 'padding:0 var(--s5) var(--s5)' }, ...rows));
+
+  return el('section.section', cardWith('Rented compute',
+    el('span.muted', trouble.length
+      ? plural(trouble.length, 'instance') + ' not folding'
+      : 'all folding'),
+    ...body));
+}
+
+/**
+ * Whether a fleet machine is one of these rented instances.
+ *
+ * There is no identifier shared between the two sides today — Vast knows an instance
+ * id and the folding client knows a machine name — so this leans on the convention the
+ * provisioning template sets up, where a rented box is named after its container. It
+ * is deliberately conservative: a machine that cannot be matched is left out of the
+ * cost figures rather than assumed to be rented, because over-counting there would
+ * overstate the case for renting.
+ */
+function matchesRental(client, instances) {
+  const name = String(client.name || '').toLowerCase();
+  if (!name) return false;
+  for (const i of instances) {
+    if (i.label && name === String(i.label).toLowerCase()) return true;
+    if (name.includes(String(i.id))) return true;
+  }
+  return /^vast[-_]/.test(name);
+}
+
+/** One rented instance. Interruptible ones carry the auction, which is the story. */
+function rentalRow(i, manager) {
+  const dot = el('span.dot ' + ({ running: 'good', outbid: 'warn', booting: 'idle',
+    stopped: 'idle' }[i.state] || 'idle'));
+  const name = el('span.mach-name', i.label || (i.num_gpus > 1
+    ? i.num_gpus + '× ' + i.gpu : i.gpu));
+  const kind = el('span.muted', i.interruptible ? 'interruptible' : 'on-demand');
+  const cost = el('span.mach-rate',
+    '$' + (i.state === 'running' ? i.dph : i.storage_dph).toFixed(4) + '/hr');
+
+  const actions = el('div.fold-actions');
+  const detail = el('div.bar-legend');
+
+  if (i.state === 'outbid') {
+    // The number that matters is not the price, it is how long this has been true.
+    // "Outbid" is unremarkable; "outbid for three hours, still paying for storage"
+    // is the thing somebody needs to see.
+    detail.append(
+      el('span.muted', 'outbid ' + (i.stopped_seconds
+        ? span(Math.round(i.stopped_seconds)) + ' ago' : 'just now') +
+        ' · bid $' + i.bid.toFixed(4) + ', floor says $' + i.min_bid.toFixed(4)),
+      el('span.muted', 'still paying $' + i.storage_dph.toFixed(4) + '/hr for storage'));
+    actions.append(btn('Raise to $' + i.next_bid.toFixed(4), () => {
+      manager.ask({ cmd: 'rentals.bid', id: i.id, price: i.next_bid });
+    }, true));
+  } else if (i.state === 'stopped') {
+    detail.append(el('span.muted', 'stopped' + (i.stopped_seconds
+      ? ' ' + span(Math.round(i.stopped_seconds)) + ' ago' : '')),
+      el('span.muted', 'storage $' + i.storage_dph.toFixed(4) + '/hr'));
+    actions.append(btn('Start', () => manager.ask({ cmd: 'rentals.start', id: i.id }), true));
+  } else if (i.state === 'booting') {
+    detail.append(el('span.muted', 'starting up' + (i.status ? ' · ' + i.status : '')));
+  } else {
+    detail.append(
+      el('span.muted', i.uptime_mins
+        ? 'up ' + span(Math.round(i.uptime_mins * 60)) : 'running'),
+      el('span.muted', i.interruptible
+        ? 'bid $' + i.bid.toFixed(4) + ' · floor $' + i.min_bid.toFixed(4) : ''));
+    actions.append(btn('Stop', () => {
+      if (confirm('Stop this instance?\n\nIt keeps its disk and can be started again, ' +
+        'and storage is billed while it sits there.')) {
+        manager.ask({ cmd: 'rentals.stop', id: i.id });
+      }
+    }));
+  }
+
+  actions.append(el('button.linkish', {
+    type: 'button',
+    onClick: () => {
+      if (confirm('Destroy this instance?\n\nThis cannot be undone. The disk goes with ' +
+        'it, so a part-finished work unit is lost.')) {
+        manager.ask({ cmd: 'rentals.destroy', id: i.id });
+      }
+    },
+  }, 'Destroy'));
+
+  return el('div.machine',
+    el('div.mach-head', dot, name, kind, cost, actions),
+    detail);
+}
+
+/** Turning rentals on, for the one machine that should manage them. */
+function rentalSetup(fleet) {
+  const managed = fleet.clients.some((c) => c.rentals && c.rentals.configured);
+  const candidates = fleet.clients.filter((c) => c.ask && c.status === 'connected');
+  if (managed || !candidates.length) return null;
+
+  const out = el('div.add-machine');
+  const open = el('button.linkish', { type: 'button' }, 'Manage rented GPUs →');
+  const panel = el('div', { hidden: true });
+  out.append(open, panel);
+
+  open.addEventListener('click', () => {
+    open.hidden = true;
+    panel.hidden = false;
+    const field = el('input.code-field', { type: 'password', spellcheck: 'false',
+      placeholder: 'Vast.ai API key' });
+    const pick = el('select.code-field');
+    for (const c of candidates) pick.append(el('option', { value: c.key }, c.name));
+    const status = el('p.muted', { style: 'margin-bottom:0' });
+
+    clear(panel).append(
+      el('p',
+        'Rent GPUs by the hour and fold on them. The key is kept on the machine you ' +
+        'pick, never here and never on our server — Vast refuses browser requests ' +
+        'outright, so this page could not call it even if we wanted to.'),
+      el('p.muted',
+        'Pick a machine that stays on. It does the watching, so an agent on a rented ' +
+        'box is the wrong choice — it would be evicted along with the thing it was ' +
+        'meant to be watching.'),
+      el('p', pick, ' ', field, ' ',
+        el('button.btn', { type: 'button', onClick: () => {
+          const target = fleet.clients.find((c) => c.key === pick.value);
+          if (!target) return;
+          status.textContent = 'Checking the key with Vast…';
+          target.ask({ cmd: 'rentals.configure', key: field.value.trim() });
+        } }, 'Use this key')),
+      el('p.muted', { style: 'margin-bottom:0' },
+        'A scoped key is enough: ', el('code', 'misc'), ', ', el('code', 'instance_read'),
+        ' and ', el('code', 'instance_write'), '. It does not need billing or account ' +
+        'permissions, and should not have them.'),
+      status);
   });
   return el('section.section', out);
 }

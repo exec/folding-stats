@@ -144,8 +144,15 @@ const (
 	TypeTo       = "to"       // owner -> relay: for one of my machines
 	TypeDown     = "down"     // relay -> agent: for your folding client
 	TypeResync   = "resync"   // owner -> relay -> agent: I just attached, send me everything
-	TypeForget   = "forget"   // owner -> relay: revoke a machine
-	TypeError    = "error"
+	// The agent's own channel. Separate from the folding traffic on purpose: the agent
+	// forwards `down` payloads to the folding client without reading them, and giving
+	// it commands of its own on that same channel would force it to start parsing them.
+	// Two frame types cost nothing and keep the folding payload opaque.
+	TypeToAgent   = "to_agent"   // owner -> relay -> agent, as TypeAgent
+	TypeAgent     = "agent"      // relay -> agent: a command for you, not your client
+	TypeFromAgent = "from_agent" // agent -> relay -> owner: the agent's own answer
+	TypeForget    = "forget"     // owner -> relay: revoke a machine
+	TypeError     = "error"
 )
 
 // MachineView is what an owner is told about one of their machines.

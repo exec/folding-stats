@@ -39,6 +39,8 @@ func main() {
 		keyPath = flag.String("key", envOr("FOLDING_KEY", "/var/lib/foldingagent/machine.key"),
 			"where this machine's identity is kept")
 		name    = flag.String("name", envOr("FOLDING_NAME", host), "how this machine appears in your fleet")
+		rentals = flag.String("rentals", envOr("FOLDING_RENTALS", "/var/lib/foldingagent/vast.key"),
+			"where a Vast API key is kept, if this machine manages rented compute")
 		showKey = flag.Bool("key-only", false, "print this machine's public key and exit")
 		showVer = flag.Bool("version", false, "print the version and exit")
 		verbose = flag.Bool("v", false, "verbose logging")
@@ -58,6 +60,7 @@ func main() {
 
 	cfg := agent.Config{
 		Relay: *relay, Local: *local, KeyPath: *keyPath, Name: *name, Log: log,
+		RentalKeyPath: *rentals,
 	}
 
 	// The token is read from the environment rather than a flag: flags are visible in

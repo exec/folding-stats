@@ -38,7 +38,11 @@ type Config struct {
 	// KeyPath holds this machine's identity. It is generated on first run and never
 	// leaves the machine — an enrolment token is what travels, and only once.
 	KeyPath string
-	Name    string
+	// RentalKeyPath is where a Vast API key lives, if this machine manages rentals.
+	// Only one machine should — and one that stays on, since an agent on a rented box
+	// is evicted along with the thing it was meant to be watching.
+	RentalKeyPath string
+	Name          string
 	// Token is an owner-signed enrolment, needed only until the relay knows this key.
 	Token *p.Enrolment
 	Log   *slog.Logger
@@ -53,6 +57,23 @@ type Agent struct {
 
 	mu    sync.Mutex
 	local *websocket.Conn
+
+	rentals *Rentals
+
+	// upMu serialises writes to the relay. gorilla allows one writer at a time, and
+	// the rental watcher writes on its own schedule alongside the folding pump.
+	upMu sync.Mutex
+	up   *websocket.Conn
+}
+
+// send writes one frame to the relay, from whichever goroutine has something to say.
+func (a *Agent) send(f p.Frame) error {
+	a.upMu.Lock()
+	defer a.upMu.Unlock()
+	if a.up == nil {
+		return errNoSender
+	}
+	return a.up.WriteJSON(f)
 }
 
 func New(cfg Config) (*Agent, error) {
@@ -63,7 +84,14 @@ func New(cfg Config) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Agent{cfg: cfg, log: cfg.Log, pub: pub, priv: priv}, nil
+	ag := &Agent{cfg: cfg, log: cfg.Log, pub: pub, priv: priv}
+	if cfg.RentalKeyPath != "" {
+		ag.rentals = openRentals(cfg.RentalKeyPath)
+		if ag.rentals.configured() {
+			cfg.Log.Info("managing rentals from this machine")
+		}
+	}
+	return ag, nil
 }
 
 // Key is this machine's identity, which is also what an owner sees in their fleet.
@@ -170,9 +198,19 @@ func (a *Agent) session(ctx context.Context) error {
 	// patches, and it will still be right once those payloads are sealed.
 	resync := make(chan struct{}, 1)
 
-	errs := make(chan error, 2)
+	a.upMu.Lock()
+	a.up = up
+	a.upMu.Unlock()
+	defer func() {
+		a.upMu.Lock()
+		a.up = nil
+		a.upMu.Unlock()
+	}()
+
+	errs := make(chan error, 3)
 	go func() { errs <- a.localLoop(ctx, up, resync) }()
-	go func() { errs <- a.pumpDown(up, resync) }()
+	go func() { errs <- a.pumpDown(ctx, up, resync) }()
+	go func() { a.watchRentals(ctx, a); errs <- nil }()
 
 	select {
 	case <-ctx.Done():
@@ -277,14 +315,14 @@ func (a *Agent) pumpUp(local, up *websocket.Conn) error {
 		if !json.Valid(msg) {
 			continue
 		}
-		if err := up.WriteJSON(p.Frame{Type: p.TypeUp, Data: json.RawMessage(msg)}); err != nil {
+		if err := a.send(p.Frame{Type: p.TypeUp, Data: json.RawMessage(msg)}); err != nil {
 			return fmt.Errorf("relay closed: %w", err)
 		}
 	}
 }
 
 // pumpDown forwards everything the browser sends to the folding client.
-func (a *Agent) pumpDown(up *websocket.Conn, resync chan<- struct{}) error {
+func (a *Agent) pumpDown(ctx context.Context, up *websocket.Conn, resync chan<- struct{}) error {
 	for {
 		var f p.Frame
 		if err := up.ReadJSON(&f); err != nil {
@@ -311,6 +349,18 @@ func (a *Agent) pumpDown(up *websocket.Conn, resync chan<- struct{}) error {
 			if err := local.WriteMessage(websocket.TextMessage, f.Data); err != nil {
 				return fmt.Errorf("folding client closed: %w", err)
 			}
+		case p.TypeAgent:
+			// A command for the agent itself rather than for the folding client. Run on
+			// its own goroutine: a Vast call takes seconds and must not stall the
+			// folding traffic behind it.
+			data := f.Data
+			go func() {
+				out := a.handleAgentCommand(ctx, data)
+				if err := a.send(p.Frame{Type: p.TypeFromAgent, Data: out}); err != nil {
+					a.log.Debug("could not answer an agent command", "err", err)
+				}
+			}()
+
 		case p.TypeError:
 			// The relay only says this about something we asked for, and the agent asks
 			// for nothing after authenticating — so it is worth seeing.

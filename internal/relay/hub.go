@@ -373,6 +373,31 @@ func (h *Hub) reader(c *conn) {
 			}
 			a.push(Frame{Type: "down", Data: f.Data})
 
+		case f.Type == p.TypeToAgent && !c.agent:
+			// Same ownership check as anything else addressed at a machine.
+			m, ok := h.store.Get(f.Machine)
+			if !ok || m.Owner != c.owner {
+				c.push(Frame{Type: p.TypeError, Machine: f.Machine, Error: "not your machine"})
+				continue
+			}
+			h.mu.RLock()
+			a := h.agents[f.Machine]
+			h.mu.RUnlock()
+			if a == nil {
+				c.push(Frame{Type: p.TypeError, Machine: f.Machine, Error: "machine is offline"})
+				continue
+			}
+			a.push(Frame{Type: p.TypeAgent, Data: f.Data})
+
+		case f.Type == p.TypeFromAgent && c.agent:
+			out := Frame{Type: p.TypeFromAgent, Machine: c.key, Data: f.Data}
+			h.mu.RLock()
+			conns := append([]*conn(nil), h.owners[c.owner]...)
+			h.mu.RUnlock()
+			for _, o := range conns {
+				o.push(out)
+			}
+
 		case f.Type == p.TypeResync && !c.agent:
 			// A listener that attached after the machine did has missed the snapshot the
 			// folding client only sends on connect, and patches are meaningless without
