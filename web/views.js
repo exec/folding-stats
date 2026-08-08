@@ -26,6 +26,16 @@ const DISCORD_INVITE = 'https://discord.com/oauth2/authorize?client_id=153497079
 /** Where the agent is published. Tags are agent/vN, so the latest is always current. */
 const RELEASES = 'https://github.com/exec/folding-stats/releases/latest';
 
+/**
+ * Our Vast template, once it exists.
+ *
+ * Empty until somebody with a Vast account creates it — see deploy/vast/README.md —
+ * and the Rent card is hidden while it is, because a button that goes nowhere is worse
+ * than no button. Creating it is the one step in this flow that cannot be done from
+ * here, since it needs an account on their side.
+ */
+const VAST_TEMPLATE = '';
+
 /** Newest snapshot time in ms — the point past which no bucket can exist yet. */
 /** How much history the "active" counts actually cover. */
 function activeWindow() {
@@ -2474,6 +2484,81 @@ function machineRow(client, nameOf) {
  * and the page they get should not be half taken up by an invitation to buy more; the
  * ones who do have a fleet know they want this and will find one link.
  */
+/**
+ * Renting a GPU, without a Vast key ever coming near us.
+ *
+ * The browser cannot call Vast at all — they return no Access-Control-Allow-Origin on
+ * any response, for any origin, so fetch fails before the request leaves. That is not
+ * a limitation to route around, it is the shape of the thing: the reader authenticates
+ * on Vast's own site, and we never sit between them and their account.
+ *
+ * So this card produces the one thing they cannot generate themselves — an enrolment
+ * token signed by the key that owns their fleet — and sends them to a template that
+ * knows what to do with it. Everything after the button press happens on their side.
+ *
+ * The token is minted on open rather than on render, because it expires in thirty
+ * minutes and a card sitting unopened at the bottom of the page would hand out a dead
+ * one. Minting on demand also means "give me another" is just closing and reopening.
+ */
+function rentCard(fleet) {
+  // Nothing to link to yet: see VAST_TEMPLATE.
+  if (!VAST_TEMPLATE) return null;
+
+  const out = el('div.add-machine');
+  const open = el('button.linkish', { type: 'button' }, 'Rent a GPU \u2192');
+  const panel = el('div', { hidden: true });
+  out.append(open, panel);
+
+  open.addEventListener('click', async () => {
+    open.hidden = true;
+    panel.hidden = false;
+    clear(panel).append(el('p.muted', 'Minting a token\u2026'));
+    try {
+      const id = await identity();
+      const token = await mintToken(id);
+
+      // Prefilled from the reader's own client, because typing a donor name from
+      // memory is how somebody ends up folding for a name that does not exist. Team
+      // falls back to 0 rather than to ours: quietly enrolling a rented box into our
+      // team would be helping ourselves to somebody else's money.
+      const cfg = fleet.config || {};
+      const lines = [
+        'FOLDING_ENROL=' + JSON.stringify(token),
+        'FOLDING_USER=' + (cfg.user || 'YourDonorName'),
+        'FOLDING_TEAM=' + (cfg.team != null ? cfg.team : 0),
+      ];
+
+      clear(panel).append(
+        el('p',
+          'You rent it on Vast, logged in there. We never see your Vast account, your ' +
+          'key, or your card \u2014 this page only makes the token that lets the box ' +
+          'join your fleet.'),
+        el('p', el('strong', '1.'), ' Copy this:'),
+        el('pre.code-block', el('code', lines.join('\n'))),
+        el('p', el('strong', '2.'), ' ',
+          el('a', { href: VAST_TEMPLATE, target: '_blank', rel: 'noopener noreferrer' },
+            'Open the template on Vast \u2197'),
+          ' and paste it into Environment Variables.'),
+        el('p', el('strong', '3.'), ' Pick a GPU and rent it. The box installs the ' +
+          'client and the agent itself, and appears above within a minute of booting.'),
+        cfg.user ? null : notice(
+          'Set a donor name in your own client first. Without FOLDING_USER the rented ' +
+          'box folds anonymously \u2014 it runs perfectly and the points go to nobody.'),
+        el('p.muted', { style: 'margin-bottom:0' },
+          'Good once, for thirty minutes. Reopen this for a fresh one if it lapses ' +
+          'while you are picking a host \u2014 roughly half of them accept a contract ' +
+          'and never boot. Vast publishes instance logs publicly, which is why it ' +
+          'expires: found later, it is worth nothing.'));
+    } catch (e) {
+      console.error('minting a rental token failed', e);
+      clear(panel).append(notice(
+        'This browser could not create an identity. Ed25519 signing is required, ' +
+        'which needs a current browser.'));
+    }
+  });
+  return out;
+}
+
 function addMachine(fleet, first = false) {
   const out = el('div.add-machine');
   // With no machines at all this is not a footnote, it is the way in — a reader on a
@@ -2490,6 +2575,11 @@ function addMachine(fleet, first = false) {
       'here from anywhere, and this page can start, pause and watch them.'));
   }
   out.append(open, el('span.dot-sep', ' · '), move, panel, movePanel);
+  // Renting sits beside adding, because they answer the same question —
+  // "more compute" — and separating them would hide the one that needs no
+  // hardware from the reader most likely to want it.
+  const rent = rentCard(fleet);
+  if (rent) out.append(rent);
 
   move.addEventListener('click', async () => {
     move.hidden = true;
