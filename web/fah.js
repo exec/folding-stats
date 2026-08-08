@@ -162,6 +162,17 @@ export class MachineState {
     return this.info.id || '';
   }
 
+  /**
+   * True when this is not a machine at all — nothing was ever there.
+   *
+   * Different from unreachable, which means a machine we know about is not answering
+   * and belongs on the page saying so. Something absent has no row: it is a computer
+   * that simply has no folding client on it.
+   */
+  get absent() {
+    return false;
+  }
+
   /** What to call this machine: its own name if it has told us one. */
   get name() {
     return this.info.mach_name || this.info.hostname || this.label;
@@ -190,12 +201,28 @@ export class MachineState {
 }
 
 /**
+ * How many times to try loopback before concluding there is nothing there.
+ *
+ * Four attempts is about fourteen seconds with the backoff below — long enough to
+ * cover a client that is slow to open its socket, short enough that a reader on a
+ * computer with no client is not left waiting.
+ */
+const LOCAL_ATTEMPTS = 4;
+
+/**
  * A live connection to the local client.
  *
  * Reconnects on its own, because the client restarts whenever its configuration
  * changes and a dashboard that needs reloading after every setting is a dashboard
  * people stop using. Backoff is capped low: this is a socket to loopback, so retrying
  * costs nothing and the reader is usually watching, waiting for it to come back.
+ *
+ * But only for a client that has answered at least once. Retrying forever is right
+ * for a client that is restarting and wrong for a computer that has no client on it
+ * at all — there, the loop never ends, nothing on the page ever changes, and the
+ * reader is left watching a browser retry a port that will never open. So a socket
+ * that has never once connected gives up, and the page says so and offers the reader
+ * their other machines instead.
  */
 export class LocalClient extends MachineState {
   constructor(url = LOCAL_URL, label = 'this machine') {
@@ -203,8 +230,15 @@ export class LocalClient extends MachineState {
     this.url = url;
     this.closed = false;
     this.attempts = 0;
+    this.everConnected = false;
+    this.gaveUp = false;
     this.ws = null;
     this.timer = null;
+  }
+
+  /** Nothing ever answered here, and we have stopped asking. */
+  get absent() {
+    return this.gaveUp && !this.everConnected;
   }
 
   connect() {
@@ -222,6 +256,8 @@ export class LocalClient extends MachineState {
 
     ws.onopen = () => {
       this.attempts = 0;
+      this.everConnected = true;
+      this.gaveUp = false;
       this.status = 'connected';
       // A fresh socket sends the whole tree first, so the old one must go: keeping it
       // would leave a unit that has since finished sitting in the list forever.
@@ -250,10 +286,23 @@ export class LocalClient extends MachineState {
 
   fail() {
     this.status = 'unreachable';
-    this.emit();
     this.attempts++;
+    if (!this.everConnected && this.attempts >= LOCAL_ATTEMPTS) this.gaveUp = true;
+    this.emit();
+    if (this.gaveUp) return;
     const wait = Math.min(1000 * 2 ** Math.min(this.attempts, 4), 15000);
     this.timer = setTimeout(() => this.connect(), wait);
+  }
+
+  /** Start over, for a reader who has just started their client. */
+  retry() {
+    if (this.closed) return;
+    clearTimeout(this.timer);
+    this.attempts = 0;
+    this.gaveUp = false;
+    this.status = 'connecting';
+    this.emit();
+    this.connect();
   }
 
   send(msg) {
@@ -316,11 +365,20 @@ export class Fleet {
    * working when the relay does not.
    */
   get clients() {
-    if (!this.link) return [this.local];
+    // A computer with no folding client on it is not a machine that is down, and
+    // listing it as one would put "this machine — not answering" permanently at the
+    // top of the fleet of somebody reading from their phone.
+    const here = this.local.absent ? [] : [this.local];
+    if (!this.link) return here;
     const localID = this.local.clientID;
     const remote = [...this.link.machines.values()]
       .filter((m) => !localID || m.clientID !== localID);
-    return [this.local, ...remote];
+    return [...here, ...remote];
+  }
+
+  /** No machines at all: no client here, and none enrolled anywhere else. */
+  get empty() {
+    return this.clients.length === 0;
   }
 
   connect() {

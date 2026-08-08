@@ -2165,9 +2165,12 @@ export function foldPage(view) {
   // Rebuild only when the page's *structure* would differ. Numbers changing is not a
   // structural change, and treating it as one is what made the page flicker.
   const shapeOf = () => {
+    // No machines anywhere. Keyed on the local client's own state so that giving up,
+    // and trying again, both redraw.
+    if (fah.empty) return 'none:' + fah.local.status + (fah.local.gaveUp ? ':gaveup' : '');
     if (fah.single) {
       const c = fah.clients[0];
-      if (c.status !== 'connected') return c.status;
+      if (c.status !== 'connected') return c.status + (c.gaveUp ? ':gaveup' : '');
       return ['live', c.units.map((u) => u.id).join(','), rentalShape(fah),
         donor ? 'donor' : ''].join('|');
     }
@@ -2228,21 +2231,39 @@ function rentalShape(fleet) {
 /** Builds the layout for the current shape and returns the function that updates it. */
 function build(view, fleet, donor) {
   const fah = fleet.single ? fleet.clients[0] : null;
+  const here = fah === fleet.local;
   clear(view);
   view.append(el('div.page-head',
     el('h1.page-title', 'My folding'),
-    el('p.page-sub',
-      'Your own client, live from this machine. Nothing here reaches our server — ' +
-      'the page talks to the client directly.')));
+    el('p.page-sub', fleet.empty
+      ? 'This page talks to folding clients directly — the one on this computer, or ' +
+        'your machines anywhere else. Nothing here reaches our server.'
+      : here
+        ? 'Your own client, live from this machine. Nothing here reaches our server — ' +
+          'the page talks to the client directly.'
+        : 'Your machines, live. Nothing here reaches our server — the page talks to ' +
+          'each client itself, over a relay that cannot read what it carries.')));
 
-  if (!fah) return buildFleet(view, fleet, donor);
+  // Nothing here and nothing enrolled: say so, and give both ways out — start a
+  // client on this computer, or point the page at a machine somewhere else.
+  if (fleet.empty) {
+    view.append(setupCard(fleet), addMachine(fleet, true));
+    return null;
+  }
+
+  // A single machine that is not this computer is still a fleet as far as the layout
+  // goes: an offline one needs a row saying it is offline, not advice about a
+  // config.xml on hardware the reader may not even be sitting at.
+  if (!fah || (fah !== fleet.local && fah.status !== 'connected')) {
+    return buildFleet(view, fleet, donor);
+  }
 
   if (fah.status === 'connecting') {
     view.append(skeleton(140));
     return null;
   }
   if (fah.status !== 'connected') {
-    view.append(setupCard());
+    view.append(setupCard(fleet), addMachine(fleet, true));
     return null;
   }
 
@@ -2277,7 +2298,7 @@ function build(view, fleet, donor) {
   view.append(el('section.section', spec));
   const rentals = rentalsCard(fleet);
   if (rentals) view.insertBefore(rentals, view.lastChild);
-  view.append(addMachine(fah));
+  view.append(addMachine(fleet));
   const setup = rentalSetup(fleet);
   if (setup) view.append(setup);
 
@@ -2453,12 +2474,21 @@ function machineRow(client, nameOf) {
  * and the page they get should not be half taken up by an invitation to buy more; the
  * ones who do have a fleet know they want this and will find one link.
  */
-function addMachine(fleet) {
+function addMachine(fleet, first = false) {
   const out = el('div.add-machine');
-  const open = el('button.linkish', { type: 'button' }, 'Add another machine →');
+  // With no machines at all this is not a footnote, it is the way in — a reader on a
+  // laptop with no client can still watch and control the boxes that do the folding.
+  const open = el('button.linkish', { type: 'button' },
+    first ? 'Fold on another machine →' : 'Add another machine →');
   const panel = el('div', { hidden: true });
-  const move = el('button.linkish', { type: 'button' }, 'Move your machines to another browser →');
+  const move = el('button.linkish', { type: 'button' },
+    first ? 'Already have machines? Bring them here →' : 'Move your machines to another browser →');
   const movePanel = el('div', { hidden: true });
+  if (first) {
+    out.append(el('p.muted',
+      'A client on this computer is not required. Machines running our agent report ' +
+      'here from anywhere, and this page can start, pause and watch them.'));
+  }
   out.append(open, el('span.dot-sep', ' · '), move, panel, movePanel);
 
   move.addEventListener('click', async () => {
@@ -2879,11 +2909,30 @@ function unitCard(u) {
 }
 
 /** The card somebody sees before they have let us in — which is everybody, once. */
-function setupCard() {
+function setupCard(fleet) {
   const xml =
     '<config>\n' +
     '  <allowed-origins>https://folding.exec.codes</allowed-origins>\n' +
     '</config>';
+
+  const local = fleet && fleet.local;
+  const gaveUp = local ? local.gaveUp : true;
+
+  // Whether we are still knocking is worth saying plainly. A page that has quietly
+  // stopped trying, and does not admit it, is one a reader sits in front of waiting
+  // for something that is never going to happen.
+  const again = el('p.muted');
+  if (local) {
+    if (gaveUp) {
+      again.append(
+        'Nothing answered on port 7396, so the page has stopped asking. ',
+        el('button.linkish', { type: 'button', onClick: () => local.retry() },
+          'Try again'),
+        ' once the client is running.');
+    } else {
+      again.textContent = 'Still trying port 7396…';
+    }
+  }
 
   return el('section.section', card('Connect your client',
     el('div.card-body',
@@ -2891,6 +2940,7 @@ function setupCard() {
         'No client answered on this machine. Either it is not running, or it has not ' +
         'been told to trust this page — the client ignores any origin it does not ' +
         'recognise, which is why nothing here can touch it until you say so.'),
+      again,
       el('p', 'Add this to ', el('code', '/etc/fah-client/config.xml'),
         ' (', el('code', '%ProgramData%\\FAHClient\\config.xml'), ' on Windows), then ' +
         'restart the client:'),
