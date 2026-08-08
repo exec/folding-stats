@@ -677,3 +677,34 @@ func TestArgumentErrorsTellTheModelWhatToDo(t *testing.T) {
 		}
 	}
 }
+
+func TestRivalsScopedToATeamRankWithinIt(t *testing.T) {
+	// Two different competitions through one tool, and the output has to say which is
+	// on screen — "7th" among teammates and "7th" among two million donors are the
+	// same word for entirely different things.
+	srv := fixture(t)
+
+	global := mcpText(t, srv, "rivals", `{"kind":"donors","who":"DH"}`)
+	team := mcpText(t, srv, "rivals", `{"kind":"donors","who":"DH","team_id":32}`)
+
+	if global == team {
+		t.Fatal("team_id changed nothing — the field was not scoped")
+	}
+	if !strings.Contains(team, "members of") {
+		t.Errorf("the scoped output does not name the team as the field:\n%s", team)
+	}
+	if strings.Contains(team, "of 4 donors") {
+		t.Errorf("the scoped output still counts the whole site:\n%s", team)
+	}
+	// A donor who is not on that team has no place in it, and saying so beats an
+	// empty neighbourhood that reads as last place.
+	out := mcpDo(t, srv, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rivals",`+
+		`"arguments":{"kind":"donors","who":"solo","team_id":32}}}`)
+	res := out["result"].(map[string]any)
+	text, _ := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	if res["isError"] != true {
+		t.Errorf("a donor outside the team was accepted: %s", text)
+	} else if !strings.Contains(text, "does not fold for team") {
+		t.Errorf("error does not explain the mismatch: %s", text)
+	}
+}

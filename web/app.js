@@ -170,7 +170,14 @@ const routes = [
   [/^\/teams\/([^/]+)\/rivals\/?$/, (m, q) =>
     views.rivalsPage(view, { kind: 'team', id: decodeURIComponent(m[1]), page: +(q.get('page') || 0) || undefined }, navigate)],
   [/^\/donors\/(.+?)\/rivals\/?$/, (m, q) =>
-    views.rivalsPage(view, { kind: 'donor', id: decodeURIComponent(m[1]), page: +(q.get('page') || 0) || undefined }, navigate)],
+    views.rivalsPage(view, {
+      kind: 'donor', id: decodeURIComponent(m[1]),
+      page: +(q.get('page') || 0) || undefined,
+      // Competition within one team, when the link carries it. Validated as a number
+      // here rather than passed through: a hand-typed team_id would otherwise reach
+      // the API and come back 400 where the honest answer is the unscoped board.
+      teamID: /^\d+$/.test(q.get('team_id') || '') ? q.get('team_id') : undefined,
+    }, navigate)],
   [/^\/teams\/([^/]+)\/?$/, (m) => views.teamDetail(view, { id: decodeURIComponent(m[1]) }, navigate)],
   [/^\/donors\/?$/, (m, q) =>
     views.donorsList(view, { page: +(q.get('page') || 1), sort: sortParam(q) }, navigate)],

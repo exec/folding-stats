@@ -85,6 +85,13 @@ type Rivals struct {
 	Rank int32  `json:"rank"`
 	Name string `json:"name"`
 
+	// TeamID and TeamName are present only when the field is one team's roster rather
+	// than the whole site. They are what tells a reader which competition the ranks
+	// below belong to: "7th" means something entirely different among 340 teammates
+	// than among two million donors, and the numbers alone cannot say which.
+	TeamID   *int32 `json:"team_id,omitempty"`
+	TeamName string `json:"team_name,omitempty"`
+
 	// HorizonDays is how far ahead a projection is reported at all. Past it,
 	// overtake_days is null rather than a number: a seven-day average extrapolated
 	// over decades is arithmetic, not information, and printing "412 years" would

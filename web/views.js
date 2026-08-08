@@ -310,6 +310,61 @@ async function rivalsSection(load, kind, href) {
   return el('section.section', c.node);
 }
 
+/**
+ * How many teams get their own tab on a donor's Rivals card.
+ *
+ * A shared placeholder name folds for thousands, and nobody is competing on all of
+ * them. The teams are ordered by the donor's own points, so the ones that get a tab
+ * are the ones they actually fold for rather than the ones they once touched.
+ */
+const RIVAL_TEAM_TABS = 4;
+
+/**
+ * A donor's rivals, in whichever competition they mean.
+ *
+ * Two fields, and the second is the one people care about. Being 48,213rd of two
+ * million moves on a timescale nobody watches; being 7th of 340 on your own team is a
+ * position where the person one place up is somebody you know and could pass this
+ * month. The global board cannot show that — a teammate is thousands of rows away in
+ * it — so the field itself has to change.
+ *
+ * The switch is on the card rather than a separate section because it is one question
+ * asked of different populations, and two cards headed "Rivals" would invite the
+ * reader to compare ranks that have nothing to do with each other.
+ */
+async function donorRivalsSection(donor, teams) {
+  const tabs = [{ value: '', label: 'All donors' },
+    ...teams.slice(0, RIVAL_TEAM_TABS).map((t) => ({
+      value: String(t.team_id),
+      label: t.team_name || `Team ${t.team_id}`,
+      title: `Where ${donor.name} stands among this team\u2019s members`,
+    }))];
+  // One team and no global context worth switching to is still two fields; but a
+  // donor on no teams has nothing to scope to, so the plain card is the whole answer.
+  if (tabs.length === 1) {
+    return rivalsSection((p) => api.donorRivals(donor.name, p), 'donor',
+      `/donors/${encodeURIComponent(donor.name)}/rivals`);
+  }
+
+  const host = el('div');
+  let scope = '';
+
+  async function draw() {
+    const params = scope ? { team_id: scope } : {};
+    const href = `/donors/${encodeURIComponent(donor.name)}/rivals` +
+      (scope ? `?team_id=${scope}` : '');
+    const c = rivalsCard((p) => api.donorRivals(donor.name, { ...p, ...params }), 'donor', { href });
+    // Built before the fetch so the switch is never dead while a page is in flight.
+    const bar = el('div.chart-toolbar',
+      segmented(tabs, scope, (v) => { if (v !== scope) { scope = v; draw(); } }));
+    c.node.querySelector('.card-head')?.append(bar);
+    clear(host).append(c.node);
+    await c.go();
+  }
+  await draw();
+  return el('section.section', host);
+}
+
 /** Empty chart state. Says what window was searched, so "nothing" is informative. */
 function emptyChart(granularity) {
   const window_ = {
@@ -1114,8 +1169,7 @@ export async function donorDetail(view, { name }, nav) {
 
     // Last, as on a team page: the donor's own figures lead, and the comparison
     // against everyone else follows them.
-    view.append(await rivalsSection(
-      (p) => api.donorRivals(d.name, p), 'donor', `/donors/${encodeURIComponent(d.name)}/rivals`));
+    view.append(await donorRivalsSection(d, teams));
   } catch (err) {
     errorView(view, err);
   }
@@ -1467,9 +1521,11 @@ function teamsCard(donor, teams) {
  * it from. "Four days off passing them" is a thing worth linking to, and a link into
  * the middle of somebody else's team page is not that.
  */
-export async function rivalsPage(view, { kind, id, page }, nav) {
+export async function rivalsPage(view, { kind, id, page, teamID }, nav) {
   loading(view);
-  const load = (p) => (kind === 'team' ? api.teamRivals(id, p) : api.donorRivals(id, p));
+  const load = (p) => (kind === 'team'
+    ? api.teamRivals(id, p)
+    : api.donorRivals(id, teamID ? { ...p, team_id: teamID } : p));
   try {
     // One fetch up front so the heading can name the subject before the card
     // renders; the card then owns paging from there.
@@ -1486,7 +1542,13 @@ export async function rivalsPage(view, { kind, id, page }, nav) {
         el('span', '/'), el('a', { href: back }, `#${n(d.rank)}`),
         el('span', '/'), el('span', 'Rivals')),
       title,
-      el('p.page-sub', `Ranked #${n(d.rank)}. Who is within reach, and who is within reach of them.`)));
+      // The field, named. A rank means nothing without the population it is a rank
+      // in, and #7 among teammates versus #7 among two million donors is the same
+      // number for two unrelated achievements.
+      el('p.page-sub', d.team_name
+        ? `Ranked #${n(d.rank)} on ${d.team_name}. Who is within reach on this team, ` +
+          'and who is within reach of them.'
+        : `Ranked #${n(d.rank)}. Who is within reach, and who is within reach of them.`)));
 
     // The page rides in the URL here so a link carries the view the sender was
     // looking at — the whole reason this exists as a page and not only a card.
@@ -1598,7 +1660,7 @@ export async function apiDocs(view) {
         endpoint('GET', '/v1/donors/{name}', 'Per-team breakdown, ?sort=production'),
         endpoint('GET', '/v1/donors/{name}/teams', 'Full team list, paginated'),
         endpoint('GET', '/v1/donors/{name}/history', '?team_id= to scope to one team, same granularities'),
-        endpoint('GET', '/v1/donors/{name}/rivals', 'Ranking around this donor with projected overtakes; opens on its own page'),
+        endpoint('GET', '/v1/donors/{name}/rivals', '?team_id= to rank them inside one team instead of the whole site'),
         endpoint('GET', '/v1/search', '?q= name prefix, exact name, or team ID'),
         endpoint('GET', '/v1/changes', 'Only what moved. ?since= a snapshot time, ?kind=teams|donors|members')
       ))))));
@@ -1756,6 +1818,15 @@ export async function apiDocs(view) {
         el('code', 'sort'), ' orderings. They are calendar periods, not rolling windows: ',
         el('code', 'points_today_utc'), ' reads low just after midnight, while ',
         el('code', 'points_last_24h'), ' is the rolling figure.'),
+      el('p',
+        el('strong', 'A rank means nothing without its field. '),
+        el('code', '/rivals'), ' ranks a donor across every donor tracked; add ',
+        el('code', '?team_id='), ' and the field becomes that team\u2019s roster, with ',
+        el('code', 'rank'), ' counting from 1 within it and ', el('code', 'team_name'),
+        ' naming which competition you are looking at. They are different questions and ' +
+        'usually the second is the one being asked \u2014 a teammate two places up is ' +
+        'somebody catchable this month, while the donor two places up globally is a ' +
+        'stranger among two million.'),
       el('p',
         el('strong', 'Overtakes are projections, not measurements. '),
         el('code', 'overtake_days'), ' on ', el('code', '/rivals'),

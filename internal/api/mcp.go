@@ -372,7 +372,8 @@ func mcpTools() []mcpTool {
 			"who is directly ahead, who is directly behind, the gap to each, and when the " +
 			"order would swap at current rates. This is the tool for \"who am I about to " +
 			"pass\" — compare answers the same question but requires already knowing who " +
-			"the rival is, which is usually the part being asked.",
+			"the rival is, which is usually the part being asked. With kind=donors and a " +
+			"team_id, the field becomes that team's roster instead of the whole site.",
 		InputSchema: map[string]any{
 			"type":     "object",
 			"required": []any{"kind", "who"},
@@ -380,6 +381,10 @@ func mcpTools() []mcpTool {
 				"kind": map[string]any{"type": "string", "enum": []any{"teams", "donors"}, "description": "Which ranking."},
 				"who":  strSchema("A team number, or an exact donor name. A number is fine here too."),
 				"span": intSchema("How many to show on each side. Default 5, max 15."),
+				"team_id": intSchema("With kind=donors, rank them inside this team instead of across " +
+					"the whole site. This is usually the competition somebody means: a teammate two " +
+					"places up is catchable this month, while the donor two places up globally is a " +
+					"stranger among two million."),
 			},
 		},
 	}, {
@@ -529,7 +534,7 @@ func (s *Server) mcpCall(r *http.Request, snap *Snapshot, name string, raw json.
 	case "compare":
 		return snap.mcpCompare(a.Kind.String(), a.A.String(), a.B.String())
 	case "rivals":
-		return snap.mcpRivals(a.Kind.String(), a.Who.String(), a.Span.Int())
+		return snap.mcpRivals(a.Kind.String(), a.Who.String(), a.Span.Int(), teamID)
 	case "team_activity":
 		return snap.mcpTeamActivity(teamID, a.Limit.Int())
 	case "movers":
@@ -1441,7 +1446,7 @@ func max64(a, b int64) int64 {
 // leaderboard, find the subject in it, and read off its neighbours by hand, which is
 // three chances to get an off-by-one wrong in service of a question the ordering
 // answers directly.
-func (s *Snapshot) mcpRivals(kind, who string, span int) (string, error) {
+func (s *Snapshot) mcpRivals(kind, who string, span int, teamID *int32) (string, error) {
 	span = clampInt(span, 5, 1, 15)
 
 	type row struct {
@@ -1472,6 +1477,23 @@ func (s *Snapshot) mcpRivals(kind, who string, span int) (string, error) {
 				v.PointsTotal, v.PointsPerDay7dAvg, near == slot})
 		}
 	case "donors":
+		// Scoped to one team when asked, which is a different competition and usually
+		// the one meant: a teammate two places up is somebody catchable this month,
+		// while the donor two places up globally is a stranger among two million.
+		if teamID != nil {
+			slot, ok := s.memberSlot(who, *teamID)
+			if !ok {
+				return "", fmt.Errorf("%q does not fold for team %d — get_donor lists the teams they do fold for", who, *teamID)
+			}
+			roster := s.Ranks.TeamMembers(*teamID)
+			self := s.memberView(slot, false)
+			lo, hi := window(int(self.RankInTeam)-1, span, len(roster))
+			for _, near := range roster[lo:hi] {
+				v := s.memberView(near, false)
+				rows = append(rows, row{v.RankInTeam, v.Name, v.PointsTotal, v.PointsPerDay7dAvg, near == slot})
+			}
+			break
+		}
 		idx, ok := s.donorIndexByName(who)
 		if !ok {
 			return "", fmt.Errorf("no donor named %q — use search first", who)
@@ -1492,9 +1514,20 @@ func (s *Snapshot) mcpRivals(kind, who string, span int) (string, error) {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Around %s — rank #%s of %s %s\n\n",
-		subject.name, fmtInt(int64(subject.rank)),
-		fmtInt(int64(map[string]int{"teams": s.Totals.Teams, "donors": s.Totals.Donors}[kind])), kind)
+	// Name the field. "7th" among 340 teammates and "7th" among two million donors are
+	// the same word for entirely different achievements, and the rank alone cannot say
+	// which one a model is looking at.
+	field := fmt.Sprintf("%s %s", fmtInt(int64(map[string]int{
+		"teams": s.Totals.Teams, "donors": s.Totals.Donors}[kind])), kind)
+	if teamID != nil {
+		team := fmt.Sprintf("team %d", *teamID)
+		if slot, ok := s.State.TeamSlot(*teamID); ok {
+			team = s.teamView(slot).Name
+		}
+		field = fmt.Sprintf("%s members of %s", fmtInt(int64(len(s.Ranks.TeamMembers(*teamID)))), team)
+	}
+	fmt.Fprintf(&b, "Around %s — rank #%s of %s\n\n",
+		subject.name, fmtInt(int64(subject.rank)), field)
 
 	now := time.Now().UTC()
 	for _, r := range rows {

@@ -2610,3 +2610,103 @@ func TestPreflightRoundTrip(t *testing.T) {
 		t.Errorf("conditional GET = %d, want 304", rec2.Code)
 	}
 }
+
+func TestInTeamRivalsRankWithinTheTeamNotTheSite(t *testing.T) {
+	// The whole point of the team-scoped field is that the ranks belong to it. A row
+	// carrying a global rank in a list of teammates reads as a different table, and
+	// the neighbour who is actually one place ahead would look thousands of rows away.
+	srv := fixture(t)
+	snap := srv.Current()
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/v1/donors/DH/rivals?team_id=32&per_page=50", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var env struct {
+		Data Rivals `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+
+	// The envelope has to say which competition this is, or the ranks are ambiguous.
+	if env.Data.TeamID == nil || *env.Data.TeamID != 32 {
+		t.Errorf("team_id = %v, want 32 — without it a reader cannot tell which field these ranks are in", env.Data.TeamID)
+	}
+	if env.Data.TeamName == "" {
+		t.Error("team_name is empty")
+	}
+	if len(env.Data.Rivals) == 0 {
+		t.Fatal("no rivals returned")
+	}
+
+	// Every rank must be an in-team rank: 1..roster size, and matching what the
+	// member endpoint reports for the same person.
+	roster := len(snap.Ranks.TeamMembers(32))
+	seenSelf := false
+	for _, rv := range env.Data.Rivals {
+		if rv.Rank < 1 || int(rv.Rank) > roster {
+			t.Errorf("%s has rank %d, outside a roster of %d — that is a global rank",
+				rv.Name, rv.Rank, roster)
+		}
+		if rv.Self {
+			seenSelf = true
+			if rv.Rank != env.Data.Rank {
+				t.Errorf("self row rank %d disagrees with the envelope's %d", rv.Rank, env.Data.Rank)
+			}
+			if rv.PointsGap != 0 {
+				t.Errorf("self row has a gap of %d to itself", rv.PointsGap)
+			}
+		}
+	}
+	if !seenSelf {
+		t.Error("the subject is missing from its own neighbourhood")
+	}
+
+	// Ranks descend by points, which is what makes "the person one place up" mean
+	// anything at all.
+	for i := 1; i < len(env.Data.Rivals); i++ {
+		if env.Data.Rivals[i].PointsTotal > env.Data.Rivals[i-1].PointsTotal {
+			t.Errorf("rivals are not ordered by points: %d after %d",
+				env.Data.Rivals[i].PointsTotal, env.Data.Rivals[i-1].PointsTotal)
+		}
+	}
+
+	// The global field must be unaffected by the presence of the scoped one.
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/donors/DH/rivals", nil))
+	var global struct {
+		Data Rivals `json:"data"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &global)
+	if global.Data.TeamID != nil {
+		t.Error("the unscoped field reported a team_id")
+	}
+}
+
+func TestInTeamRivalsRefuseWhatTheyCannotAnswer(t *testing.T) {
+	srv := fixture(t)
+	for _, c := range []struct {
+		url  string
+		code int
+		want string
+	}{
+		// A donor who does not fold for that team has no position in it. Saying so
+		// beats returning an empty neighbourhood that looks like last place.
+		{"/v1/donors/solo/rivals?team_id=32", http.StatusNotFound, "does not fold for team"},
+		{"/v1/donors/DH/rivals?team_id=999999", http.StatusNotFound, "does not fold for team"},
+		{"/v1/donors/DH/rivals?team_id=abc", http.StatusBadRequest, "must be an integer"},
+	} {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, c.url, nil))
+		if rec.Code != c.code {
+			t.Errorf("%s = %d, want %d: %s", c.url, rec.Code, c.code, rec.Body.String())
+			continue
+		}
+		if !strings.Contains(rec.Body.String(), c.want) {
+			t.Errorf("%s: body does not mention %q: %s", c.url, c.want, rec.Body.String())
+		}
+	}
+}

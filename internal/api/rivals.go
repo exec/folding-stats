@@ -100,8 +100,68 @@ func (s *Server) teamRivals(snap *Snapshot, r *http.Request) (any, *PageInfo, er
 	return out, page, nil
 }
 
+// donorTeamRivals is the neighbourhood inside one team rather than across the site.
+//
+// The two are different competitions and people care about the second one more. A
+// donor is rank 48,213 of two million, which moves on a timescale nobody watches; they
+// are also 7th of 340 on their own team, where the person two places up is somebody
+// they know and can actually catch this month. The global board cannot show that — a
+// teammate is thousands of rows away in it — so the same question needs its own field.
+//
+// The roster is already stored best-first, and in-team rank is a position in it, so
+// this is a slice of an existing order and costs no more than the global one.
+func (s *Server) donorTeamRivals(snap *Snapshot, r *http.Request, name string, teamID int32) (any, *PageInfo, error) {
+	slot, ok := snap.memberSlot(name, teamID)
+	if !ok {
+		return nil, nil, notFound("%q does not fold for team %d", name, teamID)
+	}
+	teamSlot, ok := snap.State.TeamSlot(teamID)
+	if !ok {
+		return nil, nil, notFound("no team with id %d", teamID)
+	}
+	roster := snap.Ranks.TeamMembers(teamID)
+	self := snap.memberView(slot, false)
+
+	lo, hi, page, err := paginateAround(r, len(roster), int(self.RankInTeam))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	now := time.Now().UTC()
+	out := Rivals{
+		Rank: self.RankInTeam, Name: self.Name, HorizonDays: overtakeHorizonDays,
+		TeamID: &teamID, TeamName: snap.State.Names.Name(snap.State.Teams[teamSlot].NameID),
+	}
+	for _, near := range roster[lo:hi] {
+		v := snap.memberView(near, false)
+		gap, days, at := int64(0), (*float64)(nil), (*time.Time)(nil)
+		if near != slot { // see the note on the team path
+			gap, days, at = projectOvertake(now, self.PointsTotal, self.PointsPerDay7dAvg,
+				v.PointsTotal, v.PointsPerDay7dAvg)
+		}
+		out.Rivals = append(out.Rivals, Rival{
+			// The in-team position, not the global one: a list ranked 1..n against
+			// ranks in the hundred-thousands would read as a different table.
+			Rank: v.RankInTeam, Name: v.Name, Self: near == slot,
+			PointsTotal: v.PointsTotal, PointsPerDay7dAvg: v.PointsPerDay7dAvg,
+			PointsGap: gap, OvertakeDays: days, OvertakeAt: at,
+		})
+	}
+	return out, page, nil
+}
+
 func (s *Server) donorRivals(snap *Snapshot, r *http.Request) (any, *PageInfo, error) {
-	idx, ok := snap.donorIndexByName(r.PathValue("name"))
+	name := r.PathValue("name")
+	// ?team_id= narrows the field to one team's roster, the same way it narrows a
+	// donor's history to one team's production.
+	if v := r.URL.Query().Get("team_id"); v != "" {
+		id, err := strconv.ParseInt(v, 10, 32)
+		if err != nil {
+			return nil, nil, badRequest("team_id must be an integer")
+		}
+		return s.donorTeamRivals(snap, r, name, int32(id))
+	}
+	idx, ok := snap.donorIndexByName(name)
 	if !ok {
 		return nil, nil, notFound("no donor named %q", r.PathValue("name"))
 	}
