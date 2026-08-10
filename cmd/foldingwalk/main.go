@@ -26,6 +26,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -45,20 +46,38 @@ import (
 
 const userAgent = "foldingwalk/0.1 (+https://foldingstats.org; synthetic client, not a real reader)"
 
+// Latency is kept as a histogram in flat 100µs buckets rather than a log-spaced one.
+// Log buckets are the usual choice and they are wrong for this job: the question is
+// whether two servers differ by a few hundred microseconds under the same offered
+// rate, and a bucket wide enough to make the histogram cheap is wide enough to hide
+// exactly that. A flat one over ten seconds costs 800 KB and answers it exactly.
+//
+// Only requests that came back are recorded. A transport failure has no latency worth
+// a percentile — it has a timeout, which is a property of the client, and folding
+// those in would drag the tail toward whatever deadline happened to be configured.
+// They are counted as errors instead, and a run with errors is read alongside them.
+const (
+	latBucket = 100 * time.Microsecond
+	latMax    = 10 * time.Second
+	latN      = int(latMax / latBucket)
+)
+
 // probe measures one round trip, so the pool can be sized for the network actually in
 // front of it rather than for an assumption about it.
 //
 // A failed probe falls back to something that works badly everywhere rather than
 // catastrophically somewhere: too few workers merely caps the rate, and the run says
 // so, where too many collapse into contention and report a number that is not real.
-func probe(base string) time.Duration {
+func probe(base string, skipVerify bool) time.Duration {
 	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(base, "/")+"/v1/status", nil)
 	if err != nil {
 		return 50 * time.Millisecond
 	}
 	req.Header.Set("User-Agent", userAgent)
 	start := time.Now()
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := (&http.Client{Timeout: 10 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: skipVerify}},
+	}).Do(req)
 	if err != nil {
 		return 50 * time.Millisecond
 	}
@@ -86,15 +105,16 @@ type named struct {
 
 func main() {
 	var (
-		base    = flag.String("url", "https://foldingstats.org", "base URL of the API")
-		rate    = flag.Float64("rate", 1, "requests per second to offer")
-		workers = flag.Int("workers", 0, "concurrent requests in flight (0 picks from the rate)")
-		perPage = flag.Int("per-page", 10, "how many entries a listing page holds")
-		start   = flag.Int("start", 1, "first page to walk (a high offset lands on paths no cache has seen)")
-		kinds   = flag.String("kinds", "donors,teams", "which listings to walk, in order")
-		dur     = flag.Duration("duration", 0, "stop after this long (0 runs until interrupted)")
-		every   = flag.Duration("report", 15*time.Second, "how often to report")
-		verbose = flag.Bool("v", false, "log every request")
+		base     = flag.String("url", "https://foldingstats.org", "base URL of the API")
+		rate     = flag.Float64("rate", 1, "requests per second to offer")
+		workers  = flag.Int("workers", 0, "concurrent requests in flight (0 picks from the rate)")
+		perPage  = flag.Int("per-page", 10, "how many entries a listing page holds")
+		start    = flag.Int("start", 1, "first page to walk (a high offset lands on paths no cache has seen)")
+		kinds    = flag.String("kinds", "donors,teams", "which listings to walk, in order")
+		dur      = flag.Duration("duration", 0, "stop after this long (0 runs until interrupted)")
+		every    = flag.Duration("report", 15*time.Second, "how often to report")
+		verbose  = flag.Bool("v", false, "log every request")
+		insecure = flag.Bool("insecure", false, "skip TLS verification, for hitting an origin directly")
 	)
 	flag.Parse()
 
@@ -113,14 +133,14 @@ func main() {
 	// So it is measured rather than assumed: one probe before anything else, and the
 	// pool sized from what came back with generous headroom.
 	if *workers <= 0 {
-		rtt := probe(*base)
+		rtt := probe(*base, *insecure)
 		*workers = int(math.Min(4096, math.Max(8, math.Ceil(*rate*rtt.Seconds()*3))))
 		log.Info("sized the pool", "measured_rtt", rtt.Round(time.Millisecond), "workers", *workers)
 	}
 
 	w := &walker{
 		base: strings.TrimRight(*base, "/"), perPage: *perPage, page: *start,
-		log: log, verbose: *verbose,
+		log: log, verbose: *verbose, lat: make([]atomic.Int64, latN+1),
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 			// The default pools two idle connections per host, so at any real rate
@@ -130,6 +150,14 @@ func main() {
 				MaxIdleConns:        *workers * 2,
 				MaxIdleConnsPerHost: *workers * 2,
 				IdleConnTimeout:     90 * time.Second,
+				// An origin behind a CDN presents a certificate only that CDN trusts —
+				// Cloudflare's Origin CA is signed by a root no public store carries. So
+				//測 measuring the origin directly means every request fails verification,
+				// and the failure arrives looking like a network problem rather than a
+				// trust one: connections churn, ports fill, and the numbers read as
+				// saturation. Opt-in, because skipping verification silently would make
+				// every other run a weaker test than it appears.
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: *insecure},
 			},
 		},
 	}
@@ -191,10 +219,12 @@ func main() {
 		close(jobs)
 		wg.Wait()
 		el := time.Since(started).Seconds()
+		q := w.quantiles(0.5, 0.9, 0.99, 0.999)
 		log.Info("done", "requests", w.n.Load(), "errors", w.errs.Load(),
 			"offered_per_sec", *rate,
 			"achieved_per_sec", math.Round(float64(w.n.Load())/el*100)/100,
-			"behind", w.behind.Load(), "cache_hits", w.hits.Load())
+			"behind", w.behind.Load(), "cache_hits", w.hits.Load(),
+			"p50", q[0], "p90", q[1], "p99", q[2], "p999", q[3])
 	}
 
 	for {
@@ -247,6 +277,47 @@ type walker struct {
 	errs   atomic.Int64
 	hits   atomic.Int64
 	behind atomic.Int64
+	lat    []atomic.Int64
+}
+
+// observe records one round trip, body included — what a client waited, not what the
+// server spent.
+func (w *walker) observe(d time.Duration) {
+	i := int(d / latBucket)
+	if i < 0 || i > latN {
+		i = latN
+	}
+	w.lat[i].Add(1)
+}
+
+// quantiles returns the requested quantiles, in order, from the histogram.
+//
+// Read once into a plain slice first: the run is still in flight when this is called
+// at the end of a report interval, and walking the atomics twice could see a total
+// that no single moment ever had.
+func (w *walker) quantiles(qs ...float64) []time.Duration {
+	counts := make([]int64, len(w.lat))
+	var total int64
+	for i := range w.lat {
+		counts[i] = w.lat[i].Load()
+		total += counts[i]
+	}
+	out := make([]time.Duration, len(qs))
+	if total == 0 {
+		return out
+	}
+	i, seen := 0, int64(0)
+	for k, q := range qs {
+		want := int64(math.Ceil(q * float64(total)))
+		for i < len(counts) && seen+counts[i] < want {
+			seen += counts[i]
+			i++
+		}
+		// The bucket's upper edge: a sample in bucket i waited at least i*latBucket,
+		// so reporting the edge never claims a run was faster than it was.
+		out[k] = time.Duration(i+1) * latBucket
+	}
+	return out
 }
 
 func (w *walker) kindIdx() int { w.mu.Lock(); defer w.mu.Unlock(); return w.kind }
@@ -335,6 +406,7 @@ func (w *walker) get(path string) {
 	}
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	resp.Body.Close()
+	w.observe(time.Since(start))
 	w.n.Add(1)
 	if strings.EqualFold(resp.Header.Get("Cf-Cache-Status"), "HIT") {
 		w.hits.Add(1)
