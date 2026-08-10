@@ -45,6 +45,33 @@ import (
 
 const userAgent = "foldingwalk/0.1 (+https://foldingstats.org; synthetic client, not a real reader)"
 
+// probe measures one round trip, so the pool can be sized for the network actually in
+// front of it rather than for an assumption about it.
+//
+// A failed probe falls back to something that works badly everywhere rather than
+// catastrophically somewhere: too few workers merely caps the rate, and the run says
+// so, where too many collapse into contention and report a number that is not real.
+func probe(base string) time.Duration {
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(base, "/")+"/v1/status", nil)
+	if err != nil {
+		return 50 * time.Millisecond
+	}
+	req.Header.Set("User-Agent", userAgent)
+	start := time.Now()
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return 50 * time.Millisecond
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	// A floor, because a sub-millisecond loopback would otherwise size the pool at the
+	// minimum and leave the generator unable to fill its own pipeline.
+	if d := time.Since(start); d > time.Millisecond {
+		return d
+	}
+	return time.Millisecond
+}
+
 type envelope struct {
 	Data json.RawMessage `json:"data"`
 	Page *struct {
@@ -76,12 +103,19 @@ func main() {
 		log.Error("rate must be above zero")
 		os.Exit(1)
 	}
-	// Enough workers that the round trip is not the limit: at r requests a second and
-	// a round trip of t, r*t are in flight at any moment. Assuming a slow 250ms and
-	// leaving headroom costs idle goroutines, which are cheap; guessing low silently
-	// caps the offered rate, which is the failure that makes the whole run a lie.
+	// Enough workers that the round trip is not the limit: at r requests a second over
+	// a round trip of t, r*t are in flight at any moment. So the count depends on the
+	// latency, and guessing it does not work in either direction — a fixed 250ms
+	// assumption sized twenty thousand workers for a LAN where replies take a
+	// millisecond, and the contention delivered 7,700 requests a second where two
+	// hundred workers delivered 37,000. Both runs reported success.
+	//
+	// So it is measured rather than assumed: one probe before anything else, and the
+	// pool sized from what came back with generous headroom.
 	if *workers <= 0 {
-		*workers = int(math.Max(4, math.Ceil(*rate*0.25*2)))
+		rtt := probe(*base)
+		*workers = int(math.Min(4096, math.Max(8, math.Ceil(*rate*rtt.Seconds()*3))))
+		log.Info("sized the pool", "measured_rtt", rtt.Round(time.Millisecond), "workers", *workers)
 	}
 
 	w := &walker{
