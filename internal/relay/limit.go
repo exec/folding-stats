@@ -40,11 +40,17 @@ var (
 //
 // Behind the DMZ proxy the connection always comes from nginx, so RemoteAddr is
 // useless and X-Real-IP is what nginx resolved — which, with the Cloudflare real-ip
-// snippet in front of it, is the actual client. The header is only trustworthy
-// because this listener is on an internal interface and the proxy is the only route
-// to it; it is not something to believe on a public socket.
+// snippet in front of it, is the actual client. Through a Cloudflare tunnel there is
+// no nginx and RemoteAddr is cloudflared on loopback; the edge sets CF-Connecting-IP
+// instead, and without reading it every client on earth would share one failure
+// bucket and twenty bad handshakes would lock out the world. Both headers are only
+// trustworthy because this listener is on an internal interface and the proxy or
+// tunnel is the only route to it; neither is something to believe on a public socket.
 func realIP(r *http.Request) string {
 	if v := r.Header.Get("X-Real-IP"); v != "" {
+		return v
+	}
+	if v := r.Header.Get("CF-Connecting-IP"); v != "" {
 		return v
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
