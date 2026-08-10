@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,12 +15,21 @@ import (
 )
 
 func (s *Server) status(snap *Snapshot, _ *http.Request) (any, *PageInfo, error) {
+	// Published here because this route is already no-store and already bypasses the
+	// CDN — it exists so a poller sees a publish the moment it lands. A live figure
+	// needs exactly that, so it needs no cache rule of its own.
+	perSec, last60 := s.rate.rate(time.Now())
 	return map[string]any{
 		"cycles_retained":  snap.Members.Cycles(),
 		"history_span_sec": int64(snap.Members.Span().Seconds()),
 		"teams":            len(snap.State.Teams),
 		"donors":           len(snap.Ranks.Donors),
 		"members":          len(snap.State.Members),
+		// Requests this process served in the last minute, and that as a rate. Not
+		// what the world asked for: the CDN answers the hottest URLs from cache and
+		// those never arrive here. /v1/status itself is excluded.
+		"requests_last_60s":   last60,
+		"requests_per_second": math.Round(perSec*100) / 100,
 	}, nil, nil
 }
 

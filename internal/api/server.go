@@ -25,6 +25,9 @@ const (
 type Server struct {
 	snap atomic.Pointer[Snapshot]
 	mux  *http.ServeMux
+	// rate is how busy the API is over the last minute; see rate.go for what it does
+	// and does not count.
+	rate rateCounter
 }
 
 // NewServer returns a Server with no snapshot published yet; requests will report
@@ -95,6 +98,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.Add("Vary", "Access-Control-Request-Headers")
 		w.WriteHeader(http.StatusNoContent)
 		return
+	}
+
+	// Counted here rather than per route, so a route added later is counted without
+	// anybody remembering to. /v1/status is the freshness probe and is where this
+	// figure is published, so counting it would have the docs page inflating the
+	// number it displays every ten seconds.
+	if p := r.URL.Path; p != "/v1/status" && (strings.HasPrefix(p, "/v1/") || p == "/mcp") {
+		s.rate.add(time.Now())
 	}
 
 	s.mux.ServeHTTP(w, r)

@@ -1597,6 +1597,53 @@ export async function apiDocs(view) {
   const snap = await api.status().catch(() => null);
   const base = location.origin;
 
+  /**
+   * How busy the API is, live.
+   *
+   * Read from /v1/status, which is already no-store and already bypasses the CDN so a
+   * poller sees a publish the moment it lands — exactly the property a live figure
+   * needs, so this costs no cache rule of its own.
+   *
+   * The figure counts requests reaching the origin, not requests the world made: the
+   * CDN answers the hottest URLs from cache and those never arrive. Saying so in the
+   * subtitle matters more than the number does. "Requests per second" with an unstated
+   * denominator is precisely the sort of thing that gets quoted back as something it
+   * never measured, and this one is published on a page inviting people to build
+   * against it.
+   *
+   * /v1/status is excluded from the count at the origin, so this tile polling every
+   * ten seconds does not inflate the number it is displaying.
+   */
+  const liveTile = el('div.stat',
+    el('div.stat-label', { title: 'Requests reaching the origin over the last 60 seconds. ' +
+      'Cached responses are served by the CDN and never counted.' }, 'Right now'),
+    el('div.stat-value.num'), el('div.stat-sub'));
+  const liveValue = liveTile.querySelector('.stat-value');
+  const liveSub = liveTile.querySelector('.stat-sub');
+
+  const paintLive = (d) => {
+    if (!d || d.requests_per_second === undefined) {
+      liveValue.textContent = '—';
+      liveSub.textContent = 'not reporting';
+      return;
+    }
+    liveValue.textContent = `${d.requests_per_second} /s`;
+    liveSub.textContent = `${n(d.requests_last_60s)} in the last minute, origin only`;
+  };
+  paintLive(snap?.data);
+
+  // Ten seconds, as a compromise: the window is sixty, so anything faster redraws a
+  // figure that has barely moved, and slower makes a "right now" that visibly is not.
+  const liveTimer = setInterval(async () => {
+    try {
+      paintLive((await api.status()).data);
+    } catch {
+      // A failed poll is not worth blanking a good reading over — the next one is ten
+      // seconds away, and a tile flickering to "—" on one dropped request reads as the
+      // API being down when it is not.
+    }
+  }, 10000);
+
   // Placeholders resolve to entities that exist in every corpus, so each row is a
   // link you can actually follow: team 0 is "Default (No team specified)", the
   // largest team, and Anonymous is the most widely shared donor name. The column
@@ -1638,6 +1685,7 @@ export async function apiDocs(view) {
   );
 
   view.append(el('section.section', el('div.stats',
+    liveTile,
     statTile('Auth', 'None', 'no key required'),
     statTile('Rate limit', 'None yet', 'and not before it is needed'),
     statTile('Format', 'JSON', 'one envelope for every route'),
@@ -1881,6 +1929,11 @@ export async function apiDocs(view) {
           style: 'margin:0;overflow-x:auto;font-family:var(--mono);font-size:12px;color:var(--ink-secondary)',
         }, JSON.stringify(snap, null, 2))))));
   }
+
+  // Handed to the router, which calls it when the reader navigates away. Without it
+  // the poll outlives the page and keeps requesting for the life of the tab — and,
+  // being a request counter, would go on inflating a figure nobody is looking at.
+  return () => clearInterval(liveTimer);
 }
 
 /* -------------------------------------------------------------- policies --- */

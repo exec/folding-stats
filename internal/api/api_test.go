@@ -2710,3 +2710,59 @@ func TestInTeamRivalsRefuseWhatTheyCannotAnswer(t *testing.T) {
 		}
 	}
 }
+
+func TestRequestCounterExcludesTheProbeItIsPublishedOn(t *testing.T) {
+	// The docs page reads this figure from /v1/status every ten seconds. If that route
+	// were counted, every open tab would be inflating the number it was displaying —
+	// a counter measuring its own audience.
+	srv := fixture(t)
+	hit := func(path string) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	}
+	read := func() (float64, int64) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/status", nil))
+		var env struct {
+			Data struct {
+				PerSecond float64 `json:"requests_per_second"`
+				Last60    int64   `json:"requests_last_60s"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+			t.Fatal(err)
+		}
+		return env.Data.PerSecond, env.Data.Last60
+	}
+
+	// Reading it repeatedly must not move it.
+	read()
+	read()
+	if _, n := read(); n != 0 {
+		t.Errorf("polling /v1/status alone counted %d requests; it must not count itself", n)
+	}
+
+	// Real API calls do count.
+	for range 5 {
+		hit("/v1/summary")
+	}
+	if _, n := read(); n != 5 {
+		t.Errorf("counted %d after five /v1/summary calls, want 5", n)
+	}
+
+	// So does MCP, which is the other public surface.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	srv.ServeHTTP(rec, req)
+	if _, n := read(); n != 6 {
+		t.Errorf("counted %d after an MCP call, want 6", n)
+	}
+
+	// The site's own pages are not the API and are not counted.
+	hit("/teams")
+	hit("/robots.txt")
+	if _, n := read(); n != 6 {
+		t.Errorf("counted %d after non-API paths, want 6", n)
+	}
+}
