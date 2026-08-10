@@ -63,6 +63,7 @@ func main() {
 		rate    = flag.Float64("rate", 1, "requests per second to offer")
 		workers = flag.Int("workers", 0, "concurrent requests in flight (0 picks from the rate)")
 		perPage = flag.Int("per-page", 10, "how many entries a listing page holds")
+		start   = flag.Int("start", 1, "first page to walk (a high offset lands on paths no cache has seen)")
 		kinds   = flag.String("kinds", "donors,teams", "which listings to walk, in order")
 		dur     = flag.Duration("duration", 0, "stop after this long (0 runs until interrupted)")
 		every   = flag.Duration("report", 15*time.Second, "how often to report")
@@ -84,7 +85,7 @@ func main() {
 	}
 
 	w := &walker{
-		base: strings.TrimRight(*base, "/"), perPage: *perPage,
+		base: strings.TrimRight(*base, "/"), perPage: *perPage, page: *start,
 		log: log, verbose: *verbose,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
@@ -233,7 +234,14 @@ func (w *walker) next() string {
 	if w.page == 0 {
 		w.page = 1
 	}
-	return fmt.Sprintf("/v1/%s?page=%d&per_page=%d", w.kinds[w.kind], w.page, w.perPage)
+	// Advanced here, not when the response lands. Waiting for absorb() meant every
+	// worker that asked during a listing's round trip was handed the same URL — at two
+	// thousand a second that is two hundred identical requests, one miss and the rest
+	// answered by the CDN. The walk collapsed onto a single path and the origin saw
+	// almost nothing, which is precisely the traffic this tool exists not to generate.
+	page := w.page
+	w.page++
+	return fmt.Sprintf("/v1/%s?page=%d&per_page=%d", w.kinds[w.kind], page, w.perPage)
 }
 
 // absorb reads a listing response and queues the names on it. Called by whichever
@@ -256,7 +264,12 @@ func (w *walker) absorb(body []byte) {
 	// An empty page is the end whatever the pagination claims, and total_pages is the
 	// end when it is known. Either wraps to the next listing, and the last wraps to the
 	// first — so this runs for as long as it is left running.
-	last := env.Page != nil && env.Page.TotalPages > 0 && w.page >= env.Page.TotalPages
+	//
+	// The test is against what has been *handed out*, not against this response's own
+	// page: with hundreds in flight the replies arrive out of order, and several will
+	// report the end at once. Resetting page to 1 makes the condition false for the
+	// stragglers, so a wrap happens once rather than skipping a listing per late reply.
+	last := env.Page != nil && env.Page.TotalPages > 0 && w.page > env.Page.TotalPages
 	if len(rows) == 0 || last {
 		w.kind = (w.kind + 1) % len(w.kinds)
 		w.page = 1
