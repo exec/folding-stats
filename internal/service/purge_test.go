@@ -67,7 +67,7 @@ func testPurger(t *testing.T, cdn *fakeCDN) *purger {
 	t.Helper()
 	srv := httptest.NewServer(cdn.handler())
 	t.Cleanup(srv.Close)
-	p := newPurger("zone", "token", "https://folding.exec.codes", quietLog())
+	p := newPurger("zone", "token", "https://foldingstats.org", quietLog())
 	if p == nil {
 		t.Fatal("purger is nil despite full configuration")
 	}
@@ -97,7 +97,7 @@ func TestPurgeFiresOncePerSnapshot(t *testing.T) {
 		t.Fatalf("purged %d urls, expected %d", len(files), len(purgePaths))
 	}
 	for _, f := range files {
-		if !strings.HasPrefix(f, "https://folding.exec.codes/v1/") {
+		if !strings.HasPrefix(f, "https://foldingstats.org/v1/") {
 			t.Errorf("purge url %q is not an absolute url on the site", f)
 		}
 	}

@@ -33,11 +33,14 @@ const (
 // purgePaths are the URLs purged on publish, and they are exactly the ones the site
 // itself requests on its busiest pages.
 //
-// Purging by URL rather than everything, because the token's zone covers all of
-// exec.codes while this service is one subdomain of it. purge_everything would evict
-// every other cached object in the zone once an hour, forever, including for
-// whatever gets added to it later. Purge by hostname or prefix would be the right
-// tool and is Enterprise-only.
+// Purging by URL rather than everything. That began as a hard constraint — the zone
+// was a shared one holding a dozen unrelated services, and purge_everything would have
+// evicted all of them hourly, forever. On a zone of this site's own it would now be
+// merely wasteful rather than destructive, but the URL list is still the better tool:
+// it evicts exactly what a publish invalidated and leaves every other object warm,
+// where purge_everything would throw away a full cache once an hour to replace nine
+// objects. Purge by hostname or prefix is the tool that would beat both, and is
+// Enterprise-only.
 //
 // The query strings must match byte for byte: the CDN's cache key includes them, so
 // "?per_page=10" and "?per_page=10&page=1" are different objects. That couples this

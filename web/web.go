@@ -18,6 +18,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"os"
 	"path"
 	"regexp"
 	"strings"
@@ -58,6 +59,9 @@ type site struct {
 	// routes are the client-side routes, read out of app.js rather than restated
 	// here. A path matching none of them gets the shell with a 404 status.
 	routes []*regexp.Regexp
+	// canonical is the hostname pages should be served under, empty when the site
+	// answers to whatever it is asked for.
+	canonical string
 }
 
 // jsRoute pulls one route pattern out of the router's table in app.js.
@@ -100,6 +104,25 @@ func (s *site) isRoute(clean string) bool {
 		}
 	}
 	return false
+}
+
+// canonicalRedirect returns where this request should be sent instead, or "" to serve
+// it here.
+//
+// Driven by FOLDING_CANONICAL_HOST rather than a constant, so moving the site is a
+// change to a unit file rather than to this file. Unset — which is every development
+// run and every deployment that has not moved — it returns "" and nothing changes.
+//
+// The query string is carried across. A shared link to a leaderboard page is mostly
+// query string, and dropping it would land the reader on a different view of the site
+// than the one they were sent.
+func (s *site) canonicalRedirect(r *http.Request) string {
+	if s.canonical == "" || r.Host == "" || strings.EqualFold(r.Host, s.canonical) {
+		return ""
+	}
+	u := *r.URL
+	u.Scheme, u.Host = "https", s.canonical
+	return u.String()
 }
 
 // isAsset reports whether a path addresses the embedded asset tree rather than a
@@ -177,6 +200,7 @@ func newSite() (*site, error) {
 	if s.routes, err = clientRoutes(s.files["/app.js"]); err != nil {
 		return nil, err
 	}
+	s.canonical = strings.TrimSpace(os.Getenv("FOLDING_CANONICAL_HOST"))
 
 	s.assetExts = map[string]bool{}
 	s.assetDirs = map[string]bool{}
@@ -284,6 +308,21 @@ func Handler() (http.Handler, error) {
 			w.Header().Set("Content-Type", contentType(clean))
 			s.setCache(w, r)
 			http.ServeContent(w, r, clean, time.Time{}, strings.NewReader(string(body)))
+			return
+		}
+
+		// Reached by an old name: send a person to the current one.
+		//
+		// Pages only. The API, the MCP endpoint and the relay all keep answering on
+		// every name this service has ever had, and that is not tidiness — agents
+		// compiled months ago carry their relay URL as a default, and the websocket
+		// dialer treats anything that is not a 101 as a failed handshake rather than
+		// following it. A redirect there would strand every machine already enrolled,
+		// including rented ones nobody can log into to fix. So the old host keeps
+		// serving them for as long as any agent might still dial it, and only the
+		// human-facing shell moves.
+		if to := s.canonicalRedirect(r); to != "" {
+			http.Redirect(w, r, to, http.StatusMovedPermanently)
 			return
 		}
 

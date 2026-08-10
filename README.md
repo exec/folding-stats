@@ -2,7 +2,7 @@
 
 Folding@home donor and team statistics, with a free public API.
 
-**Live at [folding.exec.codes](https://folding.exec.codes)** — no key, no account, no challenge page,
+**Live at [foldingstats.org](https://foldingstats.org)** — no key, no account, no challenge page,
 and [no rate limit](#rate-limits) for now.
 
 Folding@home publishes cumulative totals as two large text files. Everything anyone
@@ -445,7 +445,7 @@ Purging is an optional refinement on top, closing the last ~30 seconds. Set all 
 and it turns itself on:
 
 ```ini
-Environment=FOLDING_SITE_URL=https://folding.exec.codes
+Environment=FOLDING_SITE_URL=https://foldingstats.org
 EnvironmentFile=/etc/folding/cf.env    # 0600: zone id and token
 ```
 

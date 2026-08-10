@@ -239,7 +239,7 @@ func TestSecurityTxt(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/security.txt", nil)
-	req.Host = "folding.exec.codes"
+	req.Host = "foldingstats.org"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -278,8 +278,8 @@ func TestSecurityTxt(t *testing.T) {
 	// Canonical and Policy should point at the host that served it, so a fork is
 	// self-consistent rather than advertising this deployment.
 	for _, want := range []string{
-		"Canonical: https://folding.exec.codes/.well-known/security.txt",
-		"Policy: https://folding.exec.codes/disclaimer",
+		"Canonical: https://foldingstats.org/.well-known/security.txt",
+		"Policy: https://foldingstats.org/disclaimer",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q:\n%s", want, body)

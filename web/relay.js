@@ -13,7 +13,20 @@
 
 import { MachineState } from '/fah.js';
 
-const RELAY_URL = 'wss://folding.exec.codes/relay/browser';
+/**
+ * The relay, on whatever host served this page.
+ *
+ * Derived rather than written down. The relay is part of this site, so the page
+ * already knows where it is — and a literal hostname here is one that has to be found
+ * and changed the day the site moves, by somebody who will not think to look in a file
+ * about websockets. It also makes the page work unchanged on a second domain, on
+ * localhost, and behind whatever a developer is testing through.
+ *
+ * A function rather than a constant so importing this module never touches `location`,
+ * which is how it stays loadable outside a browser.
+ */
+const relayURL = () =>
+  `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/relay/browser`;
 
 const AUTH_CONTEXT = 'folding-relay-auth\0';
 const ENROL_CONTEXT = 'folding-relay-enrol\0';
@@ -179,7 +192,7 @@ export async function mintToken(id, lifeSeconds = 1800) {
  * the readers on a base class.
  */
 export class RelayLink {
-  constructor(url = RELAY_URL) {
+  constructor(url = relayURL()) {
     this.url = url;
     this.machines = new Map(); // key -> RelayMachine
     this.listeners = new Set();

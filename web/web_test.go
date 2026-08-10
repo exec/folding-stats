@@ -266,3 +266,39 @@ func TestIconIsFingerprintedAndReal(t *testing.T) {
 		t.Error("icon does not use the site accent")
 	}
 }
+
+// TestFrontendNeverNamesItsOwnHost keeps the pages portable.
+//
+// The site moved from one domain to another and the frontend held the old name twice:
+// in the relay's websocket URL, and — much worse — in the allowed-origins snippet the
+// setup card tells a reader to paste into their folding client. That snippet is the one
+// thing standing between somebody and a working page, and naming the wrong host in it
+// produces the least debuggable failure available: they paste it, the client goes on
+// refusing the connection, and nothing anywhere says why.
+//
+// Both are derivable, because a page always knows where it was served from. So the rule
+// is narrow and permanent: the browser bundle may name any host in the world except one
+// of ours. Naming other services is ordinary and stays unpoliced — an allowlist of them
+// would only have to be extended by whoever adds the next link.
+func TestFrontendNeverNamesItsOwnHost(t *testing.T) {
+	names, err := scriptNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Every name this site has answered to. A retired one is worth keeping: it is
+	// exactly what a copied-and-pasted snippet would still be carrying.
+	ours := []string{"foldingstats.org", "folding.exec.codes"}
+
+	for _, name := range names {
+		src, err := assets.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, h := range ours {
+			if strings.Contains(string(src), h) {
+				t.Errorf("%s names %q — derive it from location instead, or it breaks "+
+					"silently the next time the site moves", name, h)
+			}
+		}
+	}
+}

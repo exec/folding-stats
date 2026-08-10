@@ -25,7 +25,7 @@ func liveBot(t *testing.T) *Bot {
 	t.Helper()
 	base := os.Getenv("FOLDING_API")
 	if base == "" {
-		base = "https://folding.exec.codes"
+		base = "https://foldingstats.org"
 	}
 	c := NewClient(base)
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -279,7 +279,7 @@ func TestLinkRoundTrip(t *testing.T) {
 func TestCacheHoldsForOneSnapshot(t *testing.T) {
 	base := os.Getenv("FOLDING_API")
 	if base == "" {
-		base = "https://folding.exec.codes"
+		base = "https://foldingstats.org"
 	}
 	var hits int
 	c := NewClient(base)

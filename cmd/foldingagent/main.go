@@ -1,7 +1,7 @@
 // Command foldingagent puts one machine's folding client on your dashboard.
 //
 // Install it on any machine that folds — your desktop, a box in a cupboard, a rented
-// GPU — and it appears at https://folding.exec.codes/fold beside the rest. It reads
+// GPU — and it appears at https://foldingstats.org/fold beside the rest. It reads
 // the folding client on 127.0.0.1 and holds one outbound connection to the relay, so
 // it needs no inbound port, no port forwarding, no certificate and no change to the
 // folding client's own configuration.
@@ -32,7 +32,7 @@ var version = "dev"
 func main() {
 	host, _ := os.Hostname()
 	var (
-		relay = flag.String("relay", envOr("FOLDING_RELAY", "wss://folding.exec.codes/relay/agent"),
+		relay = flag.String("relay", envOr("FOLDING_RELAY", "wss://foldingstats.org/relay/agent"),
 			"relay endpoint")
 		local = flag.String("local", envOr("FOLDING_CLIENT", "ws://127.0.0.1:7396/api/websocket"),
 			"the folding client on this machine")

@@ -11,7 +11,7 @@ import (
 
 // SiteURL is the public site, used only for links in embeds. The bot itself talks to
 // the private address; a reader clicking through needs the name they can reach.
-var SiteURL = "https://folding.exec.codes"
+var SiteURL = "https://foldingstats.org"
 
 const (
 	colourNormal = 0x3987e5

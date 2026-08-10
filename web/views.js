@@ -3071,9 +3071,14 @@ function unitCard(u) {
 
 /** The card somebody sees before they have let us in — which is everybody, once. */
 function setupCard(fleet) {
+  // The origin serving this page, not a literal. The client refuses any origin it has
+  // not been told to trust, so this snippet is the one thing standing between a reader
+  // and a working page — and if the site is reached by another name, a hardcoded one
+  // here tells them to trust a host they are not on. They would paste it, the client
+  // would keep refusing, and nothing would say why.
   const xml =
     '<config>\n' +
-    '  <allowed-origins>https://folding.exec.codes</allowed-origins>\n' +
+    `  <allowed-origins>${location.origin}</allowed-origins>\n` +
     '</config>';
 
   const local = fleet && fleet.local;
