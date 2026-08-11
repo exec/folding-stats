@@ -1,0 +1,15 @@
+# Provider binaries and local run data.
+.terraform/
+
+# State. Nothing in this directory manages a credential, so state here is dull — but it
+# still describes live infrastructure and is not something the repo should carry.
+*.tfstate
+*.tfstate.*
+crash.log
+
+# Any local variable overrides.
+*.tfvars
+
+# .terraform.lock.hcl is deliberately NOT ignored: it pins the provider version and its
+# hashes, so everyone plans against the same provider and an upstream release cannot
+# quietly change what an apply does.
