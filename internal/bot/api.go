@@ -124,18 +124,42 @@ func asAPIError(err error, out **APIError) bool {
 // duration would be either wrong or a guess, while the snapshot time is exact. A busy
 // channel firing the same command repeatedly costs one request an hour.
 func (c *Client) Get(ctx context.Context, path string, out any) (Snapshot, error) {
-	if body, snap, ok := c.cached(path); ok {
-		if out != nil {
-			if err := json.Unmarshal(body, out); err != nil {
-				return snap, err
-			}
+	env, err := c.envelope(ctx, path)
+	if err != nil {
+		return env.Snapshot, err
+	}
+	if out != nil {
+		if err := json.Unmarshal(env.Data, out); err != nil {
+			return env.Snapshot, fmt.Errorf("decoding the data: %w", err)
 		}
-		return snap, nil
+	}
+	return env.Snapshot, nil
+}
+
+// GetEnvelope is Get for callers that also want the snapshot or the page block.
+func (c *Client) GetEnvelope(ctx context.Context, path string) (Envelope, error) {
+	return c.envelope(ctx, path)
+}
+
+// envelope returns the whole response for a path, from cache when it is still good.
+//
+// One fetch path for both callers. They used to differ, and the difference was a bug:
+// the cache handed back the inner data object, GetEnvelope unmarshalled that into an
+// Envelope, and every field it wanted — the snapshot above all — came back zero. The
+// alert watcher compares snapshot times to decide whether a publish happened, so with
+// a zero time it compared zero against zero on every tick and no alert could ever fire.
+func (c *Client) envelope(ctx context.Context, path string) (Envelope, error) {
+	var env Envelope
+	if body, ok := c.cached(path); ok {
+		if err := json.Unmarshal(body, &env); err != nil {
+			return env, fmt.Errorf("decoding the cached response: %w", err)
+		}
+		return env, nil
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Base+path, nil)
 	if err != nil {
-		return Snapshot{}, err
+		return env, err
 	}
 	req.Header.Set("Accept", "application/json")
 	// Accept-Encoding is deliberately not set. net/http negotiates gzip and
@@ -146,62 +170,50 @@ func (c *Client) Get(ctx context.Context, path string, out any) (Snapshot, error
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("reaching the statistics service: %w", err)
+		return env, fmt.Errorf("reaching the statistics service: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return Snapshot{}, err
+		return env, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		e := &APIError{Status: resp.StatusCode}
 		_ = json.Unmarshal(body, e)
-		return Snapshot{}, e
+		return Envelope{}, e
 	}
 
-	var env Envelope
 	if err := json.Unmarshal(body, &env); err != nil {
-		return Snapshot{}, fmt.Errorf("decoding the response: %w", err)
+		return Envelope{}, fmt.Errorf("decoding the response: %w", err)
 	}
 	c.store(path, env.Snapshot, body)
-
-	if out != nil {
-		if err := json.Unmarshal(env.Data, out); err != nil {
-			return env.Snapshot, fmt.Errorf("decoding the data: %w", err)
-		}
-	}
-	return env.Snapshot, nil
+	return env, nil
 }
 
-// GetEnvelope is Get for callers that also want the page block.
-func (c *Client) GetEnvelope(ctx context.Context, path string) (Envelope, error) {
-	var env Envelope
-	if body, _, ok := c.cached(path); ok {
-		err := json.Unmarshal(body, &env)
-		return env, err
-	}
-	if _, err := c.Get(ctx, path, nil); err != nil {
-		return env, err
-	}
-	body, _, _ := c.cached(path)
-	err := json.Unmarshal(body, &env)
-	return env, err
-}
+// statusPath is the freshness probe, and it is the one route never answered from cache.
+//
+// Its entire job is to report that everything else is out of date, so serving it from
+// the cache is a loop with no way out: the watcher polls it, is handed the copy stored
+// under the snapshot it is trying to move on from, concludes nothing has published, and
+// therefore never makes the request that would have refreshed anything. The bot then
+// serves one snapshot until the process restarts — observed on 11 August 2026 answering
+// with figures nine and a half hours old.
+//
+// The origin already says so: it marks this route no-store precisely so that pollers
+// see publishes. Caching it was ignoring the one instruction it sends.
+const statusPath = "/v1/status"
 
-func (c *Client) cached(path string) ([]byte, Snapshot, bool) {
+// cached returns the stored response body — the whole envelope, not the data inside it.
+func (c *Client) cached(path string) ([]byte, bool) {
+	if path == statusPath {
+		return nil, false
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	body, ok := c.cache[path]
-	if !ok {
-		return nil, Snapshot{}, false
-	}
-	var env Envelope
-	if json.Unmarshal(body, &env) != nil {
-		return nil, Snapshot{}, false
-	}
-	return env.Data, env.Snapshot, true
+	return body, ok
 }
 
 // store keeps the entry, dropping everything older first.
