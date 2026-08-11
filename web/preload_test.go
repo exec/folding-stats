@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/xml"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -8,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"folding/content"
 )
 
 // TestPreloadLinkMatchesTheShell holds the Early Hints header to the document it
@@ -344,5 +347,96 @@ func TestRobotsTxt(t *testing.T) {
 	}
 	if strings.Contains(body, "ai-train") {
 		t.Error("ai-train is stated; it was deliberately left unspecified")
+	}
+}
+
+// TestSitemap checks the published URL list against the site that actually exists.
+//
+// A sitemap is the one document whose errors are recorded by somebody else. The
+// failure worth catching is drift: a route renamed in app.js while the list here
+// keeps advertising the old URL, so every crawler that trusts us walks into a 404 and
+// remembers. So rather than pin an expected list, this asks the handler whether each
+// URL it publishes still resolves — which stays true as pages come and go.
+func TestSitemap(t *testing.T) {
+	h, err := Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/sitemap.xml", nil)
+	req.Host = "foldingstats.org"
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/xml") {
+		t.Errorf("content type %q, want application/xml", ct)
+	}
+
+	var doc struct {
+		URLs []struct {
+			Loc     string `xml:"loc"`
+			LastMod string `xml:"lastmod"`
+		} `xml:"url"`
+	}
+	if err := xml.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("sitemap is not well-formed XML: %v\n%s", err, rec.Body.String())
+	}
+	if len(doc.URLs) < 5 {
+		t.Fatalf("only %d urls; the route extraction has probably stopped working", len(doc.URLs))
+	}
+
+	seen := map[string]bool{}
+	for _, u := range doc.URLs {
+		if !strings.HasPrefix(u.Loc, "https://foldingstats.org/") {
+			t.Errorf("loc %q is not an absolute URL on the requested host", u.Loc)
+			continue
+		}
+		p := strings.TrimPrefix(u.Loc, "https://foldingstats.org")
+		seen[p] = true
+
+		// Nothing parameterised may escape into the document.
+		if strings.ContainsAny(p, `()[]{}*+?|\^$`) {
+			t.Errorf("loc %q contains regexp syntax; a route pattern leaked through", u.Loc)
+		}
+
+		// The invariant: every URL advertised is a page that answers.
+		r := httptest.NewRecorder()
+		h.ServeHTTP(r, httptest.NewRequest(http.MethodGet, p, nil))
+		if r.Code != http.StatusOK {
+			t.Errorf("sitemap advertises %s but it returns %d", p, r.Code)
+		}
+	}
+
+	for _, want := range []string{"/", "/api", "/agents", "/fold", "/teams", "/donors"} {
+		if !seen[want] {
+			t.Errorf("%s missing from the sitemap", want)
+		}
+	}
+	// A form with no query is not a page worth indexing.
+	if seen["/search"] {
+		t.Error("/search is listed; it renders an empty box and indexes nothing")
+	}
+	// Posts are the content most worth finding, and they carry a real date.
+	for _, p := range content.Published() {
+		loc := "/blog/" + p.Slug
+		if !seen[loc] {
+			t.Errorf("published post %s missing from the sitemap", loc)
+		}
+	}
+	for _, u := range doc.URLs {
+		if strings.Contains(u.Loc, "/blog/") && u.LastMod == "" {
+			t.Errorf("%s has no lastmod; a post has a known date", u.Loc)
+		}
+	}
+
+	// robots.txt must point at it, or nothing finds it in the first place.
+	rr := httptest.NewRecorder()
+	rq := httptest.NewRequest(http.MethodGet, "/robots.txt", nil)
+	rq.Host = "foldingstats.org"
+	h.ServeHTTP(rr, rq)
+	if !strings.Contains(rr.Body.String(), "Sitemap: https://foldingstats.org/sitemap.xml") {
+		t.Errorf("robots.txt does not advertise the sitemap:\n%s", rr.Body.String())
 	}
 }

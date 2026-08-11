@@ -14,6 +14,7 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"io/fs"
@@ -23,6 +24,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"folding/content"
 )
 
 //go:embed index.html icon.svg app.css app.js api.js ui.js views.js charts.js countdown.js clock.js format.js fah.js relay.js vendor
@@ -59,6 +62,9 @@ type site struct {
 	// routes are the client-side routes, read out of app.js rather than restated
 	// here. A path matching none of them gets the shell with a 404 status.
 	routes []*regexp.Regexp
+	// staticPaths are the routes that take no parameter, so each names exactly one
+	// URL — the pages a sitemap can list.
+	staticPaths []string
 	// canonical is the hostname pages should be served under, empty when the site
 	// answers to whatever it is asked for.
 	canonical string
@@ -94,6 +100,88 @@ func clientRoutes(appJS []byte) ([]*regexp.Regexp, error) {
 		return nil, fmt.Errorf("web: found only %d client routes in app.js; the router's shape must have changed", len(out))
 	}
 	return out, nil
+}
+
+// sitemapSkip lists routes that resolve but are not worth a crawler's time.
+//
+// /search is a form. With no query it renders an empty box, and every result it could
+// produce is already reachable at its own URL — listing it only invites something to
+// index a page that says nothing.
+var sitemapSkip = map[string]bool{"/search": true}
+
+// staticRoutes returns the URL of every route that takes no parameter.
+//
+// Read out of the router's table for the same reason isRoute is: a hand-written list
+// would drift the first time somebody adds a page to app.js and not here. For a
+// sitemap that failure is worse than for the router, because the divergence is
+// published — a stale sitemap advertises 404s to precisely the audience that keeps
+// score of them.
+func staticRoutes(appJS []byte) []string {
+	var out []string
+	for _, m := range jsRoute.FindAllSubmatch(appJS, -1) {
+		if p := staticPath(string(m[1])); p != "" && !sitemapSkip[p] {
+			out = append(out, p)
+		}
+	}
+	sortStrings(out)
+	return out
+}
+
+// staticPath converts one route pattern to the single URL it matches, or returns ""
+// when the route takes a parameter and so names no particular page.
+//
+// Anything left holding regexp syntax after the two literal forms are unwrapped is
+// treated as parameterised. That is deliberately the conservative direction: a
+// pattern this does not understand drops out of the sitemap, where the alternative
+// would be publishing a URL containing raw regexp.
+func staticPath(pattern string) string {
+	p := strings.TrimSuffix(strings.TrimPrefix(pattern, "^"), "$")
+	p = strings.TrimSuffix(p, `\/?`)
+	p = strings.ReplaceAll(p, `\/`, "/")
+	if p == "" {
+		p = "/"
+	}
+	if strings.ContainsAny(p, `()[]{}.*+?|\^$`) {
+		return ""
+	}
+	return p
+}
+
+// sitemapPath is where a crawler looks for the list of pages.
+const sitemapPath = "/sitemap.xml"
+
+// sitemapXML lists every page that has a fixed URL.
+//
+// Donors and teams are deliberately absent. There are 2.1M of them, which is forty
+// times the 50,000-URL limit of a single sitemap, and they are the part of the site
+// least served by being crawled page by page — the API returns the same data in bulk
+// and robots.txt says so. What belongs here is the handful of pages a person would
+// want to arrive at, plus the posts.
+//
+// Static pages carry no lastmod. Their content changes when the binary does and
+// nothing here knows when that was; an invented date is worse than an absent one,
+// because a crawler believes it.
+func (s *site) sitemapXML(base string) string {
+	var b strings.Builder
+	b.WriteString(xml.Header)
+	b.WriteString(`<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">` + "\n")
+	add := func(loc string, mod time.Time) {
+		b.WriteString("  <url><loc>")
+		xml.EscapeText(&b, []byte(base+loc))
+		b.WriteString("</loc>")
+		if !mod.IsZero() {
+			b.WriteString("<lastmod>" + mod.UTC().Format("2006-01-02") + "</lastmod>")
+		}
+		b.WriteString("</url>\n")
+	}
+	for _, p := range s.staticPaths {
+		add(p, time.Time{})
+	}
+	for _, p := range content.Published() {
+		add("/blog/"+p.Slug, p.Date)
+	}
+	b.WriteString("</urlset>\n")
+	return b.String()
 }
 
 // isRoute reports whether the SPA has a page for this path.
@@ -200,6 +288,7 @@ func newSite() (*site, error) {
 	if s.routes, err = clientRoutes(s.files["/app.js"]); err != nil {
 		return nil, err
 	}
+	s.staticPaths = staticRoutes(s.files["/app.js"])
 	s.canonical = strings.TrimSpace(os.Getenv("FOLDING_CANONICAL_HOST"))
 
 	s.assetExts = map[string]bool{}
@@ -285,7 +374,14 @@ func Handler() (http.Handler, error) {
 		if clean == robotsPath {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.Header().Set("Cache-Control", "public, max-age=86400")
-			io.WriteString(w, robotsTxt())
+			io.WriteString(w, robotsTxt(baseURL(r)))
+			return
+		}
+
+		if clean == sitemapPath {
+			w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+			w.Header().Set("Cache-Control", "public, max-age=86400")
+			io.WriteString(w, s.sitemapXML(baseURL(r)))
 			return
 		}
 
@@ -393,6 +489,21 @@ func contentType(p string) string {
 	}
 }
 
+// baseURL is the origin to write into documents that must state absolute URLs.
+//
+// Taken from the request rather than configured, so the same binary is correct behind
+// the tunnel, on a staging hostname and on localhost without being told which it is.
+// https unless this is plainly a local plaintext request — a proxied request arrives
+// without TLS but carries X-Forwarded-Proto, and calling that http would publish a
+// sitemap full of URLs that redirect.
+func baseURL(r *http.Request) string {
+	scheme := "https"
+	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") == "" && strings.HasPrefix(r.Host, "127.0.0.1") {
+		scheme = "http"
+	}
+	return scheme + "://" + r.Host
+}
+
 // securityTxtPath is where RFC 9116 says to look for a security contact.
 const securityTxtPath = "/.well-known/security.txt"
 
@@ -416,11 +527,7 @@ func securityTxt(now time.Time, r *http.Request) string {
 	u := now.UTC()
 	expires := time.Date(u.Year(), u.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(1, 0, 0)
 
-	scheme := "https"
-	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") == "" && strings.HasPrefix(r.Host, "127.0.0.1") {
-		scheme = "http"
-	}
-	base := scheme + "://" + r.Host
+	base := baseURL(r)
 
 	return "# Security contact for " + r.Host + "\n" +
 		"#\n" +
@@ -454,7 +561,7 @@ const robotsPath = "/robots.txt"
 // signal neither grants nor restricts, which is the honest position for a decision
 // nobody has actually made: "reachable by AI agents" and "licensed for model
 // training" are different questions, and only the first one has been answered.
-func robotsTxt() string {
+func robotsTxt(base string) string {
 	agents := []string{
 		"ClaudeBot", "Claude-User", "Claude-SearchBot", "GPTBot", "OAI-SearchBot",
 		"CCBot", "Google-Extended", "Applebot-Extended", "Amazonbot", "Bytespider",
@@ -477,5 +584,9 @@ func robotsTxt() string {
 	for _, a := range agents {
 		b.WriteString("\nUser-agent: " + a + "\nAllow: /\n")
 	}
+	// Last, and unindented: Sitemap is a global directive rather than part of any
+	// group, so it belongs outside them where no crawler can read it as scoped to
+	// the final User-agent above.
+	b.WriteString("\nSitemap: " + base + sitemapPath + "\n")
 	return b.String()
 }
