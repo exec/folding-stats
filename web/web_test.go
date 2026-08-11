@@ -9,7 +9,7 @@ import (
 )
 
 func TestServesAssetsAndRoutes(t *testing.T) {
-	h, err := Handler()
+	h, err := Handler(nil)
 	if err != nil {
 		t.Fatalf("Handler: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestServesAssetsAndRoutes(t *testing.T) {
 // TestVersionedAssetsAreImmutable is the other half of the cache contract: a URL
 // stamped with the current build never changes, so it is safe to keep for a year.
 func TestVersionedAssetsAreImmutable(t *testing.T) {
-	h, _ := Handler()
+	h, _ := Handler(nil)
 	build := Build()
 	if build == "" {
 		t.Fatal("Build() is empty")
@@ -83,7 +83,7 @@ func TestVersionedAssetsAreImmutable(t *testing.T) {
 // in the graph is unversioned, a browser may satisfy it from cache and run one
 // deploy's module against another's — which surfaces as a blank page, not an error.
 func TestModuleGraphIsVersionedTogether(t *testing.T) {
-	h, _ := Handler()
+	h, _ := Handler(nil)
 	build := Build()
 
 	for _, p := range []string{"/", "/app.js", "/views.js", "/charts.js", "/countdown.js"} {
@@ -109,7 +109,7 @@ func TestModuleGraphIsVersionedTogether(t *testing.T) {
 func TestShellReferencesItsAssets(t *testing.T) {
 	// Catch an asset renamed without updating index.html: the page would load and
 	// then silently do nothing.
-	h, _ := Handler()
+	h, _ := Handler(nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	body := rec.Body.String()
@@ -159,7 +159,7 @@ func TestEveryAssetIsEmbedded(t *testing.T) {
 // probing for /openapi.json or /llms.txt is told it found one. On a site that invites
 // automated clients in robots.txt and publishes an MCP endpoint, that matters.
 func TestUnknownPathsAre404(t *testing.T) {
-	h, err := Handler()
+	h, err := Handler(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestClientRoutesComeFromAppJS(t *testing.T) {
 // go:embed line, the reference rewriter and the shell had disagreed about it. The
 // symptom would have been a missing tab icon, which nobody files a bug about.
 func TestIconIsFingerprintedAndReal(t *testing.T) {
-	h, err := Handler()
+	h, err := Handler(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

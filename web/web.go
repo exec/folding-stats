@@ -68,6 +68,11 @@ type site struct {
 	// canonical is the hostname pages should be served under, empty when the site
 	// answers to whatever it is asked for.
 	canonical string
+	// shellHead and shellTail bracket the metadata block in index.html; the block
+	// between them is rendered per request. See meta.go.
+	shellHead, shellTail []byte
+	// meta looks up per-page metadata, nil when nothing supplied one.
+	meta MetaFunc
 }
 
 // jsRoute pulls one route pattern out of the router's table in app.js.
@@ -284,6 +289,9 @@ func newSite() (*site, error) {
 		return nil, fmt.Errorf("web: index.html missing from embedded assets")
 	}
 	s.preload = preloadLink(s.index)
+	if s.shellHead, s.shellTail, err = splitShell(s.index); err != nil {
+		return nil, err
+	}
 
 	if s.routes, err = clientRoutes(s.files["/app.js"]); err != nil {
 		return nil, err
@@ -362,11 +370,16 @@ func sortStrings(s []string) {
 
 // Handler serves the frontend. Real files get cache headers; anything else falls
 // through to index.html so client-side routes deep-link.
-func Handler() (http.Handler, error) {
+//
+// meta supplies the per-page title and description written into that shell, and may
+// be nil — the site then serves its own defaults everywhere, which is what it did
+// before any of this existed.
+func Handler(meta MetaFunc) (http.Handler, error) {
 	s, err := newSite()
 	if err != nil {
 		return nil, err
 	}
+	s.meta = meta
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clean := path.Clean(r.URL.Path)
@@ -437,7 +450,11 @@ func Handler() (http.Handler, error) {
 		// probing for /openapi.json or /llms.txt is told it found one.
 		if !s.isRoute(clean) {
 			w.WriteHeader(http.StatusNotFound)
-			io.WriteString(w, string(s.index))
+			io.WriteString(w, s.shell(baseURL(r), clean, Meta{
+				Title:       "Not found — Folding@home Stats",
+				Description: defaultMeta.Description,
+				NoIndex:     true,
+			}))
 			return
 		}
 
@@ -447,7 +464,7 @@ func Handler() (http.Handler, error) {
 		if s.preload != "" {
 			w.Header().Set("Link", s.preload)
 		}
-		http.ServeContent(w, r, "index.html", time.Time{}, strings.NewReader(string(s.index)))
+		http.ServeContent(w, r, "index.html", time.Time{}, strings.NewReader(s.shell(baseURL(r), clean, s.metaFor(clean))))
 	}), nil
 }
 

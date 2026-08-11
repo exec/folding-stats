@@ -75,7 +75,18 @@ func run(dir, addr, ua string, poll, compactAfter, keepDaily, keepRaw time.Durat
 
 	// The API owns /v1; everything else is the frontend, including client-side
 	// routes that must deep-link.
-	site, err := web.Handler()
+	//
+	// The frontend renders client-side, so the only thing a crawler reads without
+	// running JavaScript is the head of the shell. This is where it gets filled in
+	// per URL: web knows how to render a title, the API knows what the page is about,
+	// and neither has to import the other to say so.
+	site, err := web.Handler(func(p string) (web.Meta, bool) {
+		m, ok := srv.PageMeta(p)
+		if !ok {
+			return web.Meta{}, false
+		}
+		return web.Meta{Title: m.Title, Description: m.Description, NoIndex: m.NoIndex}, true
+	})
 	if err != nil {
 		return err
 	}

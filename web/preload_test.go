@@ -94,7 +94,7 @@ func TestPreloadIgnoresInlineData(t *testing.T) {
 // TestShellResponseCarriesTheLinkHeader checks the wiring, not the string: the header
 // has to be on the shell (which a CDN replays as a 103) and on nothing else.
 func TestShellResponseCarriesTheLinkHeader(t *testing.T) {
-	h, err := Handler()
+	h, err := Handler(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestShellResponseCarriesTheLinkHeader(t *testing.T) {
 // direct load: the page worked when clicked through inside the app and broke the
 // instant anyone pasted the link, which is the entire purpose of a stats page.
 func TestDottedRoutesReachTheShell(t *testing.T) {
-	h, err := Handler()
+	h, err := Handler(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestDottedRoutesReachTheShell(t *testing.T) {
 // the computation stays inside the year the RFC asks for and does not change on every
 // request, which would make the document uncacheable.
 func TestSecurityTxt(t *testing.T) {
-	h, err := Handler()
+	h, err := Handler(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +310,7 @@ func TestSecurityTxt(t *testing.T) {
 // shell and returned an HTML document under a 200, so a crawler parsing it found no
 // directives at all and every rule here was simply absent.
 func TestRobotsTxt(t *testing.T) {
-	h, err := Handler()
+	h, err := Handler(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +358,7 @@ func TestRobotsTxt(t *testing.T) {
 // remembers. So rather than pin an expected list, this asks the handler whether each
 // URL it publishes still resolves — which stays true as pages come and go.
 func TestSitemap(t *testing.T) {
-	h, err := Handler()
+	h, err := Handler(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
