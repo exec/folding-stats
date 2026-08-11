@@ -1757,13 +1757,57 @@ export async function apiDocs(view) {
     return p;
   };
 
-  const endpoint = (method, path, desc) => {
+  /**
+   * One endpoint: the line naming it, then its parameters underneath.
+   *
+   * The path links to a worked example rather than to itself. Placeholders resolve to
+   * entities present in every corpus, so every row is a request that returns something
+   * — documentation you can click is documentation that gets checked.
+   */
+  const endpoint = ({ path, summary, params = [] }) => {
     const ex = exampleOf(path);
-    return el('tr',
-      el('td.left', el('code', { style: 'color:var(--series-3)' }, method)),
-      el('td.left', el('a', { href: base + ex, title: `Example: ${ex}` }, el('code', path))),
-      el('td.left.muted', desc));
+    const rows = [];
+    for (const p of params) {
+      rows.push(
+        el('div.param-name', '?' + p.name, p.required ? el('span.param-req', 'required') : null),
+        el('div.param-values', p.values || ''),
+        el('div.param-note', p.note)
+      );
+    }
+    return el('div.endpoint',
+      el('div.endpoint-head',
+        el('span.endpoint-method', 'GET'),
+        el('a.endpoint-path', { href: base + ex, title: `Try it: ${ex}` }, path),
+        el('span.endpoint-sum', summary)),
+      rows.length ? el('div.params', ...rows) : null);
   };
+
+  /** A group of endpoints under one heading, with a line saying what they are for. */
+  const group = (title, blurb, ...items) =>
+    el('section.section', card(title,
+      el('div.card-body',
+        blurb ? el('p', blurb) : null,
+        ...items.map(endpoint))));
+
+  // Parameters shared by whole families of routes, defined once. Repeating them per
+  // endpoint is how a page like this drifts: the tenth copy is the one that keeps
+  // saying per_page maxes out at 500 after it stopped being true.
+  const PAGING = [
+    { name: 'page', values: 'integer', note: 'Which page, from 1. Defaults to 1.' },
+    { name: 'per_page', values: '1\u20131000', note: 'Items per page. Defaults to 100.' },
+  ];
+  const SORT = (extra) => ({
+    name: 'sort',
+    values: 'lifetime | per_day | today | this_week | this_month | last_24h | wus' + (extra ? ' | ' + extra : ''),
+    note: 'Ordering, always descending. Defaults to lifetime.',
+  });
+  const HISTORY = [
+    { name: 'granularity', values: 'hourly | daily | weekly | monthly',
+      note: 'Bucket size. Defaults to hourly. "cycle" is accepted as the old name for hourly.' },
+    { name: 'from', values: 'RFC 3339', note: 'Start of the range. The default window depends on granularity.' },
+    { name: 'to', values: 'RFC 3339', note: 'End of the range. Must be after from.' },
+    { name: 'metric', values: 'points | wus', note: 'Which series to return. Defaults to points.' },
+  ];
 
   view.append(
     el('div.page-head',
@@ -1780,26 +1824,64 @@ export async function apiDocs(view) {
     statTile('Refresh', 'Hourly', 'matching upstream')
   )));
 
-  view.append(el('section.section', card('Endpoints',
-    el('div.table-wrap', el('table.data',
-      el('thead', el('tr', el('th.left', 'Method'), el('th.left', 'Path'), el('th.left', ''))),
-      el('tbody',
-        endpoint('GET', '/v1/summary', 'Project-wide totals'),
-        endpoint('GET', '/v1/status', 'Snapshot and corpus size'),
-        endpoint('GET', '/v1/summary/history', 'Project-wide production over time'),
-        endpoint('GET', '/v1/teams', 'Team leaderboard, paginated. ?sort= any numeric column'),
-        endpoint('GET', '/v1/teams/{id}', 'One team'),
-        endpoint('GET', '/v1/teams/{id}/members', 'Team roster, ?active_only=true, ?sort= any numeric column'),
-        endpoint('GET', '/v1/teams/{id}/history', '?granularity=hourly|daily|weekly|monthly'),
-        endpoint('GET', '/v1/teams/{id}/rivals', 'Ranking around this team with projected overtakes; opens on its own page'),
-        endpoint('GET', '/v1/donors', 'Donor leaderboard, paginated. ?sort= any numeric column'),
-        endpoint('GET', '/v1/donors/{name}', 'Per-team breakdown, ?sort=production'),
-        endpoint('GET', '/v1/donors/{name}/teams', 'Full team list, paginated'),
-        endpoint('GET', '/v1/donors/{name}/history', '?team_id= to scope to one team, same granularities'),
-        endpoint('GET', '/v1/donors/{name}/rivals', '?team_id= to rank them inside one team instead of the whole site'),
-        endpoint('GET', '/v1/search', '?q= name prefix, exact name, or team ID'),
-        endpoint('GET', '/v1/changes', 'Only what moved. ?since= a snapshot time, ?kind=teams|donors|members')
-      ))))));
+  view.append(group('Project', 'Everything the site tracks, in aggregate.',
+    { path: '/v1/summary', summary: 'Totals across every team and donor.' },
+    { path: '/v1/status',
+      summary: 'Freshness and corpus size. Never cached — poll this, not the data.' },
+    { path: '/v1/summary/history', summary: 'Project-wide production over time.',
+      params: HISTORY }));
+
+  view.append(group('Teams', 'A team is identified by its Folding@home number.',
+    { path: '/v1/teams', summary: 'Team leaderboard.',
+      params: [SORT('members'), ...PAGING] },
+    { path: '/v1/teams/{id}', summary: 'One team, with its standing and streak.' },
+    { path: '/v1/teams/{id}/members', summary: 'The team roster.',
+      params: [
+        { name: 'active_only', values: 'true', note: 'Only members who produced in the last 7 days.' },
+        SORT(), ...PAGING] },
+    { path: '/v1/teams/{id}/history', summary: 'One team\u2019s production over time.',
+      params: HISTORY },
+    { path: '/v1/teams/{id}/rivals',
+      summary: 'The ranking either side of this team, with projected overtakes.',
+      params: PAGING }));
+
+  view.append(group('Donors',
+    'A donor is a name, aggregated across every team they fold for \u2014 so one person ' +
+    'folding for three teams is one donor whose totals are the sum.',
+    { path: '/v1/donors', summary: 'Donor leaderboard.',
+      params: [SORT('teams'), ...PAGING] },
+    { path: '/v1/donors/{name}',
+      summary: 'One donor, with their per-team breakdown embedded.',
+      params: [{ name: 'sort', values: 'production',
+        note: 'Order the breakdown by recent output instead of lifetime points. ' +
+          'A donor\u2019s biggest teams by career total are routinely dormant.' }] },
+    { path: '/v1/donors/{name}/teams', summary: 'Their full team list, for donors with more teams than fit inline.',
+      params: PAGING },
+    { path: '/v1/donors/{name}/history', summary: 'One donor\u2019s production over time.',
+      params: [
+        { name: 'team_id', values: 'integer', note: 'Scope to what they produced for one team.' },
+        ...HISTORY] },
+    { path: '/v1/donors/{name}/rivals',
+      summary: 'The ranking either side of this donor.',
+      params: [
+        { name: 'team_id', values: 'integer',
+          note: 'Rank them within that team\u2019s roster instead of against every donor. ' +
+            'A different question: 7th of 340 teammates is not 48,213rd of two million.' },
+        ...PAGING] }));
+
+  view.append(group('Finding things', null,
+    { path: '/v1/search', summary: 'Look up a team or a donor by name.',
+      params: [
+        { name: 'q', values: 'string', required: true,
+          note: 'A name prefix, an exact name, or a team number. Exact matches lead.' },
+        { name: 'type', values: 'team | donor', note: 'Restrict to one kind. Both by default.' },
+        { name: 'limit', values: '1\u201350', note: 'How many results. Defaults to 8.' }] },
+    { path: '/v1/changes',
+      summary: 'Only what moved since a snapshot \u2014 the endpoint to mirror from.',
+      params: [
+        { name: 'since', values: 'RFC 3339', required: true,
+          note: 'Exclusive. Pass back the snapshot.at of your last response; there is no other state to keep. Reaches 7 days back.' },
+        { name: 'kind', values: 'teams | donors | members', note: 'Which collection. All three by default.' }] }));
 
   view.append(el('section.section', card('MCP — for AI agents',
     el('div.card-body',

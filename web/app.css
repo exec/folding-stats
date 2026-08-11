@@ -558,6 +558,52 @@ footer a { text-decoration: underline; text-underline-offset: 2px; }
    tile as having anything to click. */
 .stat-sub .linkish { font-size: inherit; }
 
+/* ----------------------------------------------------------- API reference --- */
+
+/* One endpoint, as a block rather than a table row.
+   The table this replaced put the summary and the query parameters in one cell, so a
+   route with three parameters became a paragraph wedged into a third of the width
+   while the Method column held four characters. Parameters are the part people came
+   for; they get their own space here, and the row above stays one readable line. */
+.endpoint { padding: var(--s4) 0; border-top: 1px solid var(--line); }
+.endpoint:first-child { padding-top: 0; border-top: 0; }
+.endpoint:last-child { padding-bottom: 0; }
+
+.endpoint-head { display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; }
+.endpoint-method {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--series-3);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  flex: none;
+}
+.endpoint-path { font-family: var(--mono); font-size: 13.5px; }
+/* The summary is pushed to its own line once the path is long enough that the two
+   would otherwise collide, which is most of the deeper routes. */
+.endpoint-sum { color: var(--ink-secondary); font-size: 13px; flex: 1 1 240px; }
+
+/* name | values | meaning. Three columns while there is room for three, one when
+   there is not — a parameter table that scrolls sideways is one nobody reads. */
+/* The values column is capped rather than max-content: `sort` lists eight keys, and
+   sized to its widest row that one parameter would set the column width for every
+   other, pushing every note off to the right. Capped, it wraps at its own separators
+   and the rest of the table stays where the eye expects it. */
+.params { margin-top: var(--s3); display: grid; gap: var(--s2) var(--s4); grid-template-columns: max-content minmax(0, 22ch) 1fr; align-items: baseline; }
+.params > .param-note { color: var(--ink-muted); font-size: 13px; }
+.param-name { font-family: var(--mono); font-size: 12.5px; color: var(--ink); white-space: nowrap; }
+.param-values { font-family: var(--mono); font-size: 12.5px; color: var(--series-4); white-space: normal; }
+.param-req { color: var(--critical); font-size: 11px; margin-left: 4px; }
+
+@media (max-width: 720px) {
+  .params { grid-template-columns: 1fr; gap: var(--s1); }
+  .params > .param-note { margin-bottom: var(--s2); }
+  .param-values { color: var(--series-4); }
+}
+
 .hero-value {
   font-size: 40px;
   font-weight: 660;
