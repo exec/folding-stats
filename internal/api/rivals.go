@@ -88,13 +88,14 @@ func (s *Server) teamRivals(snap *Snapshot, r *http.Request) (any, *PageInfo, er
 		// No projection against oneself. The gap is zero by definition, and the tie
 		// branch would otherwise report "level now" on the reader's own row.
 		if near != slot {
-			gap, days, at = projectOvertake(now, self.PointsTotal, self.PointsPerDay7dAvg,
-				v.PointsTotal, v.PointsPerDay7dAvg)
+			gap, days, at = projectOvertake(now, self.PointsTotal, self.PointsPerDay24hAvg,
+				v.PointsTotal, v.PointsPerDay24hAvg)
 		}
 		out.Rivals = append(out.Rivals, Rival{
 			Rank: v.Rank, Name: v.Name, TeamID: &teamID, Self: near == slot,
 			PointsTotal: v.PointsTotal, PointsPerDay7dAvg: v.PointsPerDay7dAvg,
-			PointsGap: gap, OvertakeDays: days, OvertakeAt: at,
+			PointsPerDay24hAvg: v.PointsPerDay24hAvg,
+			PointsGap:          gap, OvertakeDays: days, OvertakeAt: at,
 		})
 	}
 	return out, page, nil
@@ -136,15 +137,16 @@ func (s *Server) donorTeamRivals(snap *Snapshot, r *http.Request, name string, t
 		v := snap.memberView(near, false)
 		gap, days, at := int64(0), (*float64)(nil), (*time.Time)(nil)
 		if near != slot { // see the note on the team path
-			gap, days, at = projectOvertake(now, self.PointsTotal, self.PointsPerDay7dAvg,
-				v.PointsTotal, v.PointsPerDay7dAvg)
+			gap, days, at = projectOvertake(now, self.PointsTotal, self.PointsPerDay24hAvg,
+				v.PointsTotal, v.PointsPerDay24hAvg)
 		}
 		out.Rivals = append(out.Rivals, Rival{
 			// The in-team position, not the global one: a list ranked 1..n against
 			// ranks in the hundred-thousands would read as a different table.
 			Rank: v.RankInTeam, Name: v.Name, Self: near == slot,
 			PointsTotal: v.PointsTotal, PointsPerDay7dAvg: v.PointsPerDay7dAvg,
-			PointsGap: gap, OvertakeDays: days, OvertakeAt: at,
+			PointsPerDay24hAvg: v.PointsPerDay24hAvg,
+			PointsGap:          gap, OvertakeDays: days, OvertakeAt: at,
 		})
 	}
 	return out, page, nil
@@ -179,13 +181,14 @@ func (s *Server) donorRivals(snap *Snapshot, r *http.Request) (any, *PageInfo, e
 		v := snap.donorView(int32(i), false)
 		gap, days, at := int64(0), (*float64)(nil), (*time.Time)(nil)
 		if int32(i) != idx { // see the note on the team path
-			gap, days, at = projectOvertake(now, self.PointsTotal, self.PointsPerDay7dAvg,
-				v.PointsTotal, v.PointsPerDay7dAvg)
+			gap, days, at = projectOvertake(now, self.PointsTotal, self.PointsPerDay24hAvg,
+				v.PointsTotal, v.PointsPerDay24hAvg)
 		}
 		out.Rivals = append(out.Rivals, Rival{
 			Rank: v.Rank, Name: v.Name, Self: int32(i) == idx,
 			PointsTotal: v.PointsTotal, PointsPerDay7dAvg: v.PointsPerDay7dAvg,
-			PointsGap: gap, OvertakeDays: days, OvertakeAt: at,
+			PointsPerDay24hAvg: v.PointsPerDay24hAvg,
+			PointsGap:          gap, OvertakeDays: days, OvertakeAt: at,
 		})
 	}
 	return out, page, nil

@@ -622,7 +622,8 @@ func (s *Snapshot) mcpDonor(ctx context.Context, name string) (string, error) {
 	}
 	fmt.Fprintf(&b, "\n  Lifetime      %s points, %s work units\n", fmtInt(d.PointsTotal), fmtInt(d.WUsTotal))
 	b.WriteString(mcpPerWU(d.PointsPerWU, d.Recent))
-	fmt.Fprintf(&b, "  Per day       %s   (seven-day average)\n", fmtInt(d.PointsPerDay7dAvg))
+	fmt.Fprintf(&b, "  Per day       %s   (rolling 24h; %s over 7d)\n",
+		fmtInt(d.PointsPerDay24hAvg), fmtInt(d.PointsPerDay7dAvg))
 	fmt.Fprintf(&b, "  Last 24h      %s\n", fmtInt(d.PointsLast24h))
 	fmt.Fprintf(&b, "  Today (UTC)   %s\n", fmtInt(d.PointsTodayUTC))
 	fmt.Fprintf(&b, "  This week     %s   (weeks start Sunday, UTC)\n", fmtInt(d.PointsThisWeekUTC))
@@ -671,7 +672,8 @@ func (s *Snapshot) mcpTeam(ctx context.Context, id *int32, members int, sortKey 
 		fmtInt(int64(t.Rank)), fmtInt(int64(s.Totals.Teams)))
 	fmt.Fprintf(&b, "\n  Lifetime      %s points, %s work units\n", fmtInt(t.PointsTotal), fmtInt(t.WUsTotal))
 	b.WriteString(mcpPerWU(t.PointsPerWU, t.Recent))
-	fmt.Fprintf(&b, "  Per day       %s   (seven-day average)\n", fmtInt(t.PointsPerDay7dAvg))
+	fmt.Fprintf(&b, "  Per day       %s   (rolling 24h; %s over 7d)\n",
+		fmtInt(t.PointsPerDay24hAvg), fmtInt(t.PointsPerDay7dAvg))
 	fmt.Fprintf(&b, "  Last 24h      %s\n", fmtInt(t.PointsLast24h))
 	fmt.Fprintf(&b, "  Today (UTC)   %s\n", fmtInt(t.PointsTodayUTC))
 	fmt.Fprintf(&b, "  This month    %s\n", fmtInt(t.PointsThisMonthUTC))
@@ -747,7 +749,7 @@ func (s *Snapshot) mcpLeaderboard(kind, sortKey string, limit int) (string, erro
 	var b strings.Builder
 	blurb := map[rank.SortKey]string{
 		rank.Lifetime:  "cumulative points since the beginning",
-		rank.PerDay:    "seven-day average, points per day",
+		rank.PerDay:    "seven-day average, points per day (the site's per_day ordering)",
 		rank.Today:     "points since 00:00 UTC today",
 		rank.ThisWeek:  "points since Sunday 00:00 UTC",
 		rank.ThisMonth: "points since the 1st, UTC",
@@ -926,14 +928,14 @@ func (s *Snapshot) mcpCompare(kind, aRef, bRef string) (string, error) {
 				return side{}, fmt.Errorf("no team numbered %d", id)
 			}
 			t := s.teamView(slot)
-			return side{t.Name, t.PointsTotal, t.PointsPerDay7dAvg, t.Rank}, nil
+			return side{t.Name, t.PointsTotal, t.PointsPerDay24hAvg, t.Rank}, nil
 		case "donors":
 			idx, ok := s.donorIndexByName(ref)
 			if !ok {
 				return side{}, fmt.Errorf("no donor named %q — use search first", ref)
 			}
 			d := s.donorView(idx, false)
-			return side{d.Name, d.PointsTotal, d.PointsPerDay7dAvg, d.Rank}, nil
+			return side{d.Name, d.PointsTotal, d.PointsPerDay24hAvg, d.Rank}, nil
 		}
 		return side{}, fmt.Errorf("kind must be \"teams\" or \"donors\"")
 	}
@@ -976,7 +978,7 @@ func (s *Snapshot) mcpCompare(kind, aRef, bRef string) (string, error) {
 		fmt.Fprintf(&b, "  At current rates %s would overtake in about %s (around %s).\n",
 			truncate(behind.name, 30), humanDays(*days), at.Format("2 January 2006"))
 		b.WriteString("\n  That is a projection, not a forecast: it assumes both sides hold today's\n" +
-			"  seven-day average forever, which nobody with a job or a power bill does.\n")
+			"  rolling-day rate forever, which nobody with a job or a power bill does.\n")
 	}
 	return b.String() + s.mcpFooter(), nil
 }
@@ -1002,14 +1004,14 @@ func (s *Snapshot) mcpEntity(kind, ref string) (entity, error) {
 			return entity{}, fmt.Errorf("no team numbered %d", id)
 		}
 		v := s.teamView(slot)
-		return entity{fmt.Sprintf("%s (team %d)", v.Name, v.TeamID), v.PointsTotal, v.PointsPerDay7dAvg, v.Rank}, nil
+		return entity{fmt.Sprintf("%s (team %d)", v.Name, v.TeamID), v.PointsTotal, v.PointsPerDay24hAvg, v.Rank}, nil
 	case "donors":
 		idx, ok := s.donorIndexByName(ref)
 		if !ok {
 			return entity{}, fmt.Errorf("no donor named %q — use search first", ref)
 		}
 		v := s.donorView(idx, false)
-		return entity{v.Name, v.PointsTotal, v.PointsPerDay7dAvg, v.Rank}, nil
+		return entity{v.Name, v.PointsTotal, v.PointsPerDay24hAvg, v.Rank}, nil
 	}
 	return entity{}, fmt.Errorf("kind must be \"teams\" or \"donors\"")
 }
@@ -1023,13 +1025,13 @@ func (s *Snapshot) atRank(kind string, r int) (entity, error) {
 			return entity{}, fmt.Errorf("rank %d is outside the %s teams there are", r, fmtInt(int64(len(order))))
 		}
 		v := s.teamView(order[r-1])
-		return entity{fmt.Sprintf("%s (team %d)", v.Name, v.TeamID), v.PointsTotal, v.PointsPerDay7dAvg, v.Rank}, nil
+		return entity{fmt.Sprintf("%s (team %d)", v.Name, v.TeamID), v.PointsTotal, v.PointsPerDay24hAvg, v.Rank}, nil
 	case "donors":
 		if r < 1 || r > len(s.Ranks.Donors) {
 			return entity{}, fmt.Errorf("rank %d is outside the %s donors there are", r, fmtInt(int64(len(s.Ranks.Donors))))
 		}
 		v := s.donorView(int32(r-1), false)
-		return entity{v.Name, v.PointsTotal, v.PointsPerDay7dAvg, v.Rank}, nil
+		return entity{v.Name, v.PointsTotal, v.PointsPerDay24hAvg, v.Rank}, nil
 	}
 	return entity{}, fmt.Errorf("kind must be \"teams\" or \"donors\"")
 }
@@ -1198,7 +1200,7 @@ func (s *Snapshot) mcpGoal(kind, who string, targetRank int, targetPoints int64,
 }
 
 func goalCaveat(goal entity) string {
-	s := "\nThis is arithmetic, not a forecast. It assumes the seven-day averages hold, which\n" +
+	s := "\nThis is arithmetic, not a forecast. It assumes the rolling-day rates hold, which\n" +
 		"nobody's does"
 	if goal.rate > 0 {
 		s += ", and it already includes what the target adds in the meantime — so the\n" +
@@ -1553,7 +1555,7 @@ func (s *Snapshot) mcpRivals(kind, who string, span int, teamID *int32) (string,
 	}
 
 	b.WriteString("\nGaps are lifetime points. The times are projections that assume both sides hold\n" +
-		"today's seven-day average forever, which nobody does; \"not converging\" means the\n" +
+		"today's rolling-day rate forever, which nobody does; \"not converging\" means the\n" +
 		"gap is widening or would take longer than a decade to close.\n")
 	return b.String() + s.mcpFooter(), nil
 }

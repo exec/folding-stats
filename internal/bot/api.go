@@ -253,33 +253,35 @@ type Streak struct {
 }
 
 type Team struct {
-	TeamID        int64     `json:"team_id"`
-	Name          string    `json:"name"`
-	Rank          int64     `json:"rank"`
-	RankChange24h int64     `json:"rank_change_24h"`
-	MembersTotal  int64     `json:"members_total"`
-	MembersActive int64     `json:"members_active"`
-	PointsTotal   int64     `json:"points_total"`
-	WUsTotal      int64     `json:"wus_total"`
-	PointsLast24h int64     `json:"points_last_24h"`
-	PointsPerDay  int64     `json:"points_per_day_7d_avg"`
-	PointsToday   int64     `json:"points_today_utc"`
-	PointsPerWU   int64     `json:"points_per_wu"`
-	Standing      *Standing `json:"standing,omitempty"`
-	Streak        *Streak   `json:"streak,omitempty"`
+	TeamID         int64     `json:"team_id"`
+	Name           string    `json:"name"`
+	Rank           int64     `json:"rank"`
+	RankChange24h  int64     `json:"rank_change_24h"`
+	MembersTotal   int64     `json:"members_total"`
+	MembersActive  int64     `json:"members_active"`
+	PointsTotal    int64     `json:"points_total"`
+	WUsTotal       int64     `json:"wus_total"`
+	PointsLast24h  int64     `json:"points_last_24h"`
+	PointsPerDay   int64     `json:"points_per_day_24h_avg"`
+	PointsPerDay7d int64     `json:"points_per_day_7d_avg"`
+	PointsToday    int64     `json:"points_today_utc"`
+	PointsPerWU    int64     `json:"points_per_wu"`
+	Standing       *Standing `json:"standing,omitempty"`
+	Streak         *Streak   `json:"streak,omitempty"`
 }
 
 type Donor struct {
-	Name          string `json:"name"`
-	Rank          int64  `json:"rank"`
-	RankChange24h int64  `json:"rank_change_24h"`
-	TeamCount     int64  `json:"team_count"`
-	PointsTotal   int64  `json:"points_total"`
-	WUsTotal      int64  `json:"wus_total"`
-	PointsLast24h int64  `json:"points_last_24h"`
-	PointsPerDay  int64  `json:"points_per_day_7d_avg"`
-	PointsToday   int64  `json:"points_today_utc"`
-	PointsPerWU   int64  `json:"points_per_wu"`
+	Name           string `json:"name"`
+	Rank           int64  `json:"rank"`
+	RankChange24h  int64  `json:"rank_change_24h"`
+	TeamCount      int64  `json:"team_count"`
+	PointsTotal    int64  `json:"points_total"`
+	WUsTotal       int64  `json:"wus_total"`
+	PointsLast24h  int64  `json:"points_last_24h"`
+	PointsPerDay   int64  `json:"points_per_day_24h_avg"`
+	PointsPerDay7d int64  `json:"points_per_day_7d_avg"`
+	PointsToday    int64  `json:"points_today_utc"`
+	PointsPerWU    int64  `json:"points_per_wu"`
 	// LikelyNotAPerson marks names shared by implausibly many teams, which the
 	// bot has to surface: replying with Anonymous's aggregate as though it were one
 	// folder would be the most misleading thing it could do.
@@ -297,12 +299,13 @@ type Donor struct {
 // former and calling it the team renders as the donor's own name listed once per
 // team, which is exactly what it looked like.
 type Membership struct {
-	TeamID       int64  `json:"team_id"`
-	TeamName     string `json:"team_name"`
-	Donor        string `json:"name"`
-	RankInTeam   int64  `json:"rank_in_team"`
-	PointsTotal  int64  `json:"points_total"`
-	PointsPerDay int64  `json:"points_per_day_7d_avg"`
+	TeamID         int64  `json:"team_id"`
+	TeamName       string `json:"team_name"`
+	Donor          string `json:"name"`
+	RankInTeam     int64  `json:"rank_in_team"`
+	PointsTotal    int64  `json:"points_total"`
+	PointsPerDay   int64  `json:"points_per_day_24h_avg"`
+	PointsPerDay7d int64  `json:"points_per_day_7d_avg"`
 }
 
 type SearchResult struct {
@@ -372,11 +375,12 @@ type Rivals struct {
 }
 
 type Rival struct {
-	Rank         int64  `json:"rank"`
-	Name         string `json:"name"`
-	TeamID       int64  `json:"team_id,omitempty"`
-	PointsTotal  int64  `json:"points_total"`
-	PointsPerDay int64  `json:"points_per_day_7d_avg"`
+	Rank           int64  `json:"rank"`
+	Name           string `json:"name"`
+	TeamID         int64  `json:"team_id,omitempty"`
+	PointsTotal    int64  `json:"points_total"`
+	PointsPerDay   int64  `json:"points_per_day_24h_avg"`
+	PointsPerDay7d int64  `json:"points_per_day_7d_avg"`
 	// PointsGap is unsigned: the distance between the two, whichever is ahead.
 	PointsGap int64 `json:"points_gap"`
 	// OvertakeDays is absent when no crossing is projected inside the horizon —

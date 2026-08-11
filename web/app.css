@@ -553,6 +553,10 @@ footer a { text-decoration: underline; text-underline-offset: 2px; }
   line-height: 1.15;
 }
 .stat-sub { margin-top: 2px; font-size: 12px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+/* The PPD window switcher sits in a subtitle, so it takes the subtitle's size rather
+   than .linkish's own — but keeps the accent, which is the only thing marking a stat
+   tile as having anything to click. */
+.stat-sub .linkish { font-size: inherit; }
 
 .hero-value {
   font-size: 40px;

@@ -93,9 +93,9 @@ type Rivals struct {
 	TeamName string `json:"team_name,omitempty"`
 
 	// HorizonDays is how far ahead a projection is reported at all. Past it,
-	// overtake_days is null rather than a number: a seven-day average extrapolated
-	// over decades is arithmetic, not information, and printing "412 years" would
-	// dress a rounding artefact up as a finding.
+	// overtake_days is null rather than a number: a daily rate extrapolated over
+	// decades is arithmetic, not information, and printing "412 years" would dress a
+	// rounding artefact up as a finding.
 	HorizonDays int `json:"horizon_days"`
 
 	Rivals []Rival `json:"rivals"`
@@ -104,8 +104,9 @@ type Rivals struct {
 // Rival is one entity near the subject, ordered best-first alongside it.
 //
 // Every figure here except the projection is measured. The projection is not: it
-// assumes both parties keep producing at exactly their current seven-day average
-// forever, which nobody does. It is reported because "how far away is that" is the
+// assumes both parties keep producing at exactly their current rolling-day rate
+// forever, which nobody does — and over a day rather than a week that assumption is
+// livelier and correspondingly more fragile. It is reported because "how far away is that" is the
 // question people actually have, and a gap in points alone does not answer it.
 type Rival struct {
 	Rank int32  `json:"rank"`
@@ -116,8 +117,13 @@ type Rival struct {
 	// neighbourhood rather than as two lists the client has to splice.
 	Self bool `json:"self,omitempty"`
 
-	PointsTotal       int64 `json:"points_total"`
-	PointsPerDay7dAvg int64 `json:"points_per_day_7d_avg"`
+	PointsTotal int64 `json:"points_total"`
+	// PointsPerDay24hAvg is the rate the projection below was built on. Both are
+	// reported because they routinely disagree, and the gap between them is the
+	// warning: a rival whose day is far above their week is having a good day, not
+	// necessarily arriving when overtake_at says.
+	PointsPerDay24hAvg int64 `json:"points_per_day_24h_avg"`
+	PointsPerDay7dAvg  int64 `json:"points_per_day_7d_avg"`
 
 	// PointsGap is the lifetime difference to the subject, always positive. Zero on
 	// the subject's own row, and for anyone exactly tied with it.
@@ -170,6 +176,29 @@ type Standings struct {
 // a work unit earns have inflated enormously since the project began. This window is
 // the version that can be compared between entities, since they are all facing the
 // same work units now.
+// PerDayWindow is one averaging window over the same underlying rate.
+//
+// The list exists so a reader can switch between them without the service having to
+// guess which one they wanted, and so adding a window later is a new element rather
+// than a new field every consumer has to learn about.
+//
+// CoversSec is the load-bearing part. A window is a request, not a promise: this
+// service began collecting on 2 August 2026, so for its first month a thirty-day
+// average is a ten-day average wearing a thirty-day label, and that is precisely the
+// misnaming this project refuses to repeat — see the note on PointsPerDay7dAvg about
+// EOC's "24hr Avg". Read CoversSec, not the name, when the number has to be trusted.
+type PerDayWindow struct {
+	// Window is the nominal window: "24h", "7d" or "30d".
+	Window string `json:"window"`
+	// PointsPerDay over the period actually covered, not over the nominal window —
+	// dividing by days an entity did not exist for reports a fraction of a real rate.
+	PointsPerDay int64 `json:"points_per_day"`
+	// CoversSec is what was really averaged over.
+	CoversSec int64 `json:"covers_sec"`
+	// Partial marks a window the record is not yet long enough to fill.
+	Partial bool `json:"partial,omitempty"`
+}
+
 type Recent struct {
 	// Days is the window covered: thirty, or the whole record while it is shorter.
 	// Reported rather than assumed, because a ratio over four days and a ratio over
@@ -240,6 +269,16 @@ type Production struct {
 	PointsTodayUTC    int64 `json:"points_today_utc"`
 	PointsThisWeekUTC int64 `json:"points_this_week_utc"`
 
+	// PointsPerDay24hAvg is production in the rolling day as a daily rate.
+	//
+	// The same question as the seven-day figure over a window a seventh as long, and
+	// the livelier of the two: a machine switched on this morning appears here today
+	// and takes most of a week to move its neighbour. The cost is the other side of
+	// that — one good night reads as a permanent rate. Both are published so they can
+	// be read against each other, and every projection on this service is built on
+	// this one.
+	PointsPerDay24hAvg int64 `json:"points_per_day_24h_avg"`
+
 	// PointsPerDay7dAvg is production over the last seven days as a daily rate,
 	// rounded to nearest. This is the figure EOC labels "24hr Avg".
 	//
@@ -299,10 +338,15 @@ type Team struct {
 	MembersTotal  int32 `json:"members_total"`
 	MembersActive int32 `json:"members_active"`
 
-	// Standing, Streak and Recent are present on the detail endpoint only.
-	Standing *Standings `json:"standing,omitempty"`
-	Streak   *Streak    `json:"streak,omitempty"`
-	Recent   *Recent    `json:"recent,omitempty"`
+	// Standing, Streak, Recent and PerDay are present on the detail endpoint only.
+	//
+	// PerDay is absent from listings on purpose: the thirty-day window is read from
+	// the daily rollup, which is one query per entity, and a page of fifty rows would
+	// turn a single response into fifty round trips for a figure nobody sorted by.
+	Standing *Standings     `json:"standing,omitempty"`
+	Streak   *Streak        `json:"streak,omitempty"`
+	Recent   *Recent        `json:"recent,omitempty"`
+	PerDay   []PerDayWindow `json:"points_per_day,omitempty"`
 
 	Production
 }
@@ -346,10 +390,15 @@ type Donor struct {
 	// than hidden so totals still reconcile.
 	LikelyNotAPerson bool `json:"likely_not_a_person"`
 
-	// Standing, Streak and Recent are present on the detail endpoint only.
-	Standing *Standings `json:"standing,omitempty"`
-	Streak   *Streak    `json:"streak,omitempty"`
-	Recent   *Recent    `json:"recent,omitempty"`
+	// Standing, Streak, Recent and PerDay are present on the detail endpoint only.
+	//
+	// PerDay is absent from listings on purpose: the thirty-day window is read from
+	// the daily rollup, which is one query per entity, and a page of fifty rows would
+	// turn a single response into fifty round trips for a figure nobody sorted by.
+	Standing *Standings     `json:"standing,omitempty"`
+	Streak   *Streak        `json:"streak,omitempty"`
+	Recent   *Recent        `json:"recent,omitempty"`
+	PerDay   []PerDayWindow `json:"points_per_day,omitempty"`
 
 	Production
 

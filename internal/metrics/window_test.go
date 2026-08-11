@@ -497,3 +497,43 @@ func TestGrowKeepsAllocationProportionate(t *testing.T) {
 		t.Error("grown tail is not zero")
 	}
 }
+
+// PointsPerDay24h is the basis every projection on the service is built on, so the two
+// things that can quietly be wrong about it are worth pinning: it must not smooth, and
+// it must not understate an entity younger than the window it is named for.
+func TestPointsPerDay24hDoesNotSmoothAcrossTheWeek(t *testing.T) {
+	w := New(2)
+	// Seven days of steady work, then one much busier day.
+	for i := range 7 {
+		w.Push(mon(0).AddDate(0, 0, i), deltas(d(0, 1_000)))
+	}
+	w.Push(mon(0).AddDate(0, 0, 7), deltas(d(0, 8_000)))
+
+	got24, got7d := w.PointsPerDay24h(0), w.PointsPerDay(0)
+	if got24 != 8_000 {
+		t.Errorf("PointsPerDay24h = %d, want 8000 — the rolling day must show the busy day whole", got24)
+	}
+	if got24 <= got7d {
+		t.Errorf("PointsPerDay24h (%d) must lead the 7-day average (%d) after a surge; "+
+			"if it does not, the projection basis is smoothing exactly what it exists to expose", got24, got7d)
+	}
+}
+
+// An entity first seen three hours ago has three hours of production in the rolling
+// day. Reporting that as a full day's work would understate its rate eightfold, which
+// is the same error PointsPerDay avoids over the week.
+func TestPointsPerDay24hDividesByTheSpanObserved(t *testing.T) {
+	w := New(2)
+	w.Push(mon(9), deltas(d(0, 250)))
+	w.Push(mon(12), deltas(d(0, 250)))
+
+	// Observed for three hours, 500 points in them: eight three-hour blocks in a day.
+	if got, want := w.PointsPerDay24h(0), int64(4_000); got != want {
+		t.Errorf("PointsPerDay24h = %d, want %d for 500 points over 3 observed hours", got, want)
+	}
+	// Past a full day the span stops growing, so the figure is the window itself.
+	w.Push(mon(9).AddDate(0, 0, 2), deltas(d(0, 900)))
+	if got, want := w.PointsPerDay24h(0), int64(900); got != want {
+		t.Errorf("PointsPerDay24h = %d, want %d once more than a day has been observed", got, want)
+	}
+}

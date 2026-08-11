@@ -124,13 +124,14 @@ type Table struct {
 	// by 17 MB, because that memory was already being allocated on every publish and
 	// only thrown away afterwards. The publish itself is where the full amount shows,
 	// since the next set is built while this one is still being served.
-	donorMonth  []int64
-	donorDay    []int64
-	donorWeek   []int64
-	donorLast24 []int64
-	donorLast7d []int64
-	donorUpdate []int64
-	donorPerDay []int64
+	donorMonth    []int64
+	donorDay      []int64
+	donorWeek     []int64
+	donorLast24   []int64
+	donorLast7d   []int64
+	donorUpdate   []int64
+	donorPerDay   []int64
+	donorPerDay24 []int64
 
 	buf sortBuf
 }
@@ -265,10 +266,18 @@ func (t *Table) BuildOrders(st *model.State, members, teams *metrics.Window,
 		}
 	}
 	perDay := make([]int64, n)
+	perDay24 := make([]int64, n)
 	wus := make([]int64, n)
 	teamCount := make([]int64, n)
 	for d := range t.Donors {
 		perDay[d] = metrics.PerDay(last7d[d], observed[d])
+		// Capped at the window itself: points in the last day are already a daily
+		// rate, and only a donor younger than a day has less than one to divide by.
+		span := observed[d]
+		if span > 24*time.Hour {
+			span = 24 * time.Hour
+		}
+		perDay24[d] = metrics.PerDay(last24[d], span)
 		wus[d] = t.Donors[d].WUs
 		teamCount[d] = int64(t.Donors[d].TeamCount)
 	}
@@ -284,6 +293,7 @@ func (t *Table) BuildOrders(st *model.State, members, teams *metrics.Window,
 
 	t.donorMonth, t.donorDay, t.donorWeek = month, day, week
 	t.donorLast24, t.donorLast7d, t.donorUpdate, t.donorPerDay = last24, last7d, update, perDay
+	t.donorPerDay24 = perDay24
 
 	t.buf = sortBuf{}
 }
@@ -297,6 +307,8 @@ type DonorTotals struct {
 	ThisWeek   int64
 	ThisMonth  int64
 	PerDay     int64
+	// PerDay24h is the same rate over the rolling day rather than the week.
+	PerDay24h int64
 }
 
 // DonorTotals returns a donor's summed production, and whether it is available.
@@ -316,6 +328,7 @@ func (t *Table) DonorTotals(i int32) (DonorTotals, bool) {
 		ThisWeek:   t.donorWeek[i],
 		ThisMonth:  t.donorMonth[i],
 		PerDay:     t.donorPerDay[i],
+		PerDay24h:  t.donorPerDay24[i],
 	}, true
 }
 

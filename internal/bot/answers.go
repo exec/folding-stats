@@ -100,7 +100,7 @@ func (b *Bot) cmdRivals(ctx context.Context, kind, who string) (*discordgo.Messa
 		URL:   entityURL(kind, id),
 		Color: colourNormal,
 		Footer: &discordgo.MessageEmbedFooter{
-			Text: footer(snap).Text + " · projections hold both sides at their 7-day average",
+			Text: footer(snap).Text + " · projections hold both sides at their rolling 24h rate",
 		},
 	}
 
@@ -173,7 +173,7 @@ func (b *Bot) cmdCompare(ctx context.Context, kind, a, bb string) (*discordgo.Me
 			field("Gap", fmt.Sprintf("**%s**\n%s ahead", short(gap), mdEsc(clip(lead.Name, 30))), false),
 		},
 		Footer: &discordgo.MessageEmbedFooter{
-			Text: footer(snap).Text + " · projection holds both at their 7-day average",
+			Text: footer(snap).Text + " · projection holds both at their rolling 24h rate",
 		},
 	}
 

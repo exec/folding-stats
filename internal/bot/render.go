@@ -236,7 +236,7 @@ func DonorEmbed(d Donor, s Snapshot) *discordgo.MessageEmbed {
 		Fields: []*discordgo.MessageEmbedField{
 			field("Rank", fmt.Sprintf("**#%s**\n%s", n(d.Rank), movement(d.RankChange24h)), true),
 			field("Points", fmt.Sprintf("**%s**\n%s", short(d.PointsTotal), n(d.PointsTotal)), true),
-			field("Per day", fmt.Sprintf("**%s**\n7-day average", short(d.PointsPerDay)), true),
+			field("Per day", fmt.Sprintf("**%s**\nrolling 24h · %s over 7d", short(d.PointsPerDay), short(d.PointsPerDay7d)), true),
 			field("Last 24h", short(d.PointsLast24h), true),
 			field("Today (UTC)", short(d.PointsToday), true),
 			field("Work units", n(d.WUsTotal), true),
@@ -277,7 +277,7 @@ func TeamEmbed(t Team, s Snapshot) *discordgo.MessageEmbed {
 		Fields: []*discordgo.MessageEmbedField{
 			field("Rank", fmt.Sprintf("**#%s**\n%s", n(t.Rank), movement(t.RankChange24h)), true),
 			field("Points", fmt.Sprintf("**%s**\n%s", short(t.PointsTotal), n(t.PointsTotal)), true),
-			field("Per day", fmt.Sprintf("**%s**\n7-day average", short(t.PointsPerDay)), true),
+			field("Per day", fmt.Sprintf("**%s**\nrolling 24h · %s over 7d", short(t.PointsPerDay), short(t.PointsPerDay7d)), true),
 			field("Last 24h", short(t.PointsLast24h), true),
 			field("Members", fmt.Sprintf("%s producing\nof %s", n(t.MembersActive), n(t.MembersTotal)), true),
 			field("Team", fmt.Sprintf("#%d", t.TeamID), true),

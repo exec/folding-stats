@@ -17,6 +17,7 @@ import (
 	"math"
 	"time"
 
+	"folding/internal/metrics"
 	"folding/internal/store"
 )
 
@@ -159,6 +160,59 @@ func (s *Snapshot) donorDaily(ctx context.Context, members []int32) (*Streak, *R
 	return s.daily(days)
 }
 
+// perDayWindows assembles the same rate over every window this service can honestly
+// answer for.
+//
+// The first two come from the in-memory rolling windows and are already on every row;
+// they are repeated here so a reader switching between windows finds one list rather
+// than two fields and a special case. The thirty-day figure exists only here, because
+// it is read from the daily rollup — one query per entity, already paid for by the
+// streak on this page, and not something to run fifty times for a listing.
+//
+// Each window reports what it actually covered. A window is a request rather than a
+// promise: collection began on 2 August 2026, so a thirty-day average is a ten-day
+// average for the first month of this service's life, and saying "30d" without saying
+// so would be the same misnaming this project declines to inherit from EOC.
+func (s *Snapshot) perDayWindows(observed time.Duration, last24, last7d int64, recent *Recent) []PerDayWindow {
+	// A span is measured between cycle timestamps, so a window holding a full seven
+	// days of hourly cycles spans 167 hours and not 168 — one interval short, for as
+	// long as the service runs. Comparing that against the nominal window directly
+	// marks every full week partial forever, which is worse than not reporting it at
+	// all: a permanent warning is one readers learn to ignore, including on the day it
+	// starts being true.
+	slack := s.NextExpected.Sub(s.At)
+	if slack <= 0 || slack > time.Hour {
+		slack = time.Hour
+	}
+	win := func(name string, nominal time.Duration, points int64, span time.Duration) PerDayWindow {
+		if span > nominal {
+			span = nominal
+		}
+		return PerDayWindow{
+			Window:       name,
+			PointsPerDay: metrics.PerDay(points, span),
+			CoversSec:    int64(span / time.Second),
+			Partial:      span < nominal-slack,
+		}
+	}
+	out := []PerDayWindow{
+		win("24h", 24*time.Hour, last24, observed),
+		win("7d", 7*24*time.Hour, last7d, observed),
+	}
+	// Absent when the rollup could not be read or produced nothing to average — the
+	// window is dropped rather than reported as a rate of zero, which would read as
+	// "this entity is idle" instead of "we cannot say".
+	if recent != nil && recent.Days > 0 {
+		out = append(out, PerDayWindow{
+			Window:       "30d",
+			PointsPerDay: metrics.PerDay(recent.Points, time.Duration(recent.Days)*24*time.Hour),
+			CoversSec:    int64(recent.Days) * 24 * 60 * 60,
+			Partial:      recent.Days < recentWindowDays,
+		})
+	}
+	return out
+}
+
 // teamDetailView is teamView plus the figures only a team's own page needs.
 //
 // Separate from teamView rather than a flag on it, because teamView also builds every
@@ -169,6 +223,7 @@ func (s *Snapshot) teamDetailView(ctx context.Context, slot int32) Team {
 	t := s.teamView(slot)
 	t.Standing = s.teamStandings(slot, t.Rank)
 	t.Streak, t.Recent = s.teamDaily(ctx, slot)
+	t.PerDay = s.perDayWindows(s.Teams.ObservedSpan(slot), t.PointsLast24h, t.PointsLast7d, t.Recent)
 	return t
 }
 
@@ -177,5 +232,15 @@ func (s *Snapshot) teamDetailView(ctx context.Context, slot int32) Team {
 func (s *Snapshot) donorDetailView(ctx context.Context, idx int32) Donor {
 	d := s.donorView(idx, true)
 	d.Streak, d.Recent = s.donorDaily(ctx, s.Ranks.DonorMembers(idx))
+	// A donor has been observed since the first of their members was, matching how
+	// donorView derives the seven-day rate — the shortest span would restart the clock
+	// every time a long-standing donor joined another team.
+	var observed time.Duration
+	for _, slot := range s.Ranks.DonorMembers(idx) {
+		if span := s.Members.ObservedSpan(slot); span > observed {
+			observed = span
+		}
+	}
+	d.PerDay = s.perDayWindows(observed, d.PointsLast24h, d.PointsLast7d, d.Recent)
 	return d
 }

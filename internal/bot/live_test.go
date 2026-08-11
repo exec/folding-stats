@@ -130,7 +130,7 @@ func TestLiveCommands(t *testing.T) {
 		if len(e.Fields) == 0 && e.Description == "" {
 			t.Error("rivals returned nothing at all")
 		}
-		mustCaveat(t, "rivals", e, "7-day average")
+		mustCaveat(t, "rivals", e, "rolling 24h rate")
 	})
 
 	t.Run("compare", func(t *testing.T) {

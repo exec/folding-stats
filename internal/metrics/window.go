@@ -345,6 +345,28 @@ func (w *Window) PointsPerDay(id int32) int64 {
 	return PerDay(w.get(w.last7d, id), w.ObservedSpan(id))
 }
 
+// PointsPerDay24h is production in the rolling day, expressed as points per day.
+//
+// The same question as PointsPerDay over a window a seventh as long, which makes it a
+// far livelier number: a machine switched on this morning shows up here today and takes
+// most of a week to move the seven-day figure. That is the point, and so is the cost —
+// one good night reads as a permanent rate, and a projection built on it will say so.
+// Both are published so the two can be read against each other; where they disagree by
+// a lot, something changed recently.
+//
+// Points in the last twenty-four hours are already a daily rate, so there is nothing to
+// divide in the ordinary case. The span still matters at the edge: an entity first seen
+// three hours ago has three hours of production in this window, and reporting that as a
+// day's work would understate it by eight times. Only the period actually observed
+// counts, capped at the window itself.
+func (w *Window) PointsPerDay24h(id int32) int64 {
+	span := w.ObservedSpan(id)
+	if span > day {
+		span = day
+	}
+	return PerDay(w.get(w.last24, id), span)
+}
+
 // PerDay divides production by the period it was observed over, as points per day.
 //
 // A full window keeps exact integer arithmetic, because that path is checked against

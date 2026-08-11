@@ -118,6 +118,12 @@ const SHAPES = [
  * windows: `today` reads low just after 00:00 UTC because it answers "produced
  * today". `per_day` is the seven-day average, and `last_24h` the rolling day — three
  * different questions that are easy to mistake for one.
+ *
+ * A listing sorts by the column it shows. `per_day` therefore stays on the seven-day
+ * figure, because that is what the server orders `sort=per_day` by, and a column
+ * displaying one number while ranked by another is a lie that looks like a rendering
+ * bug. The rolling-day rate is on every row as `points_per_day_24h_avg` and is what the
+ * PPD tile, every projection and the bot are built on.
  */
 const COLUMNS = [
   { key: 'members', label: 'Members', kind: 'team', title: 'Active of total members' },
@@ -174,7 +180,7 @@ function sortHeader(col, sort, onPick) {
 /**
  * How long until an overtake, in the coarsest unit that still says something.
  *
- * The input is a seven-day average projected forward, so precision past the leading
+ * The input is a rolling-day rate projected forward, so precision past the leading
  * couple of digits is invented. "in 3 days" is a claim worth making; "in 3.17 days"
  * dresses the same guess up as a measurement.
  */
@@ -619,17 +625,73 @@ function detailStats(d, extra = []) {
   return el('section.section', bar, host);
 }
 
+/**
+ * The averaging windows a PPD figure can be read over, longest-lived first.
+ *
+ * The order is the order the control cycles in, and it starts at the shortest because
+ * that is the one that answers "what is this machine doing now". The seven-day figure
+ * is the one EOC publishes — mislabelled there as "24hr Avg" — so it is worth keeping
+ * a click away rather than hiding: it is what a donor comparing against that site will
+ * have in front of them.
+ */
+const PPD_WINDOWS = {
+  '24h': { label: '24-hour average', nominal: 86400 },
+  '7d': { label: '7-day average', nominal: 7 * 86400 },
+  '30d': { label: '30-day average', nominal: 30 * 86400 },
+};
+
+/**
+ * Points per day, over a window the reader chooses.
+ *
+ * The tile carries one number and a control, rather than a tile per window, because
+ * these are one figure asked three ways — three tiles would invite reading them as
+ * three different quantities that happen to be nearby.
+ *
+ * `covers_sec` is what makes the subtitle honest. A window is a request, not a promise:
+ * collection began on 2 August 2026, so "30-day average" is a ten-day average for this
+ * service's first month, and printing the nominal name over a partial window is the
+ * exact misnaming this project declines to inherit. When the two differ the subtitle
+ * says what was really measured.
+ */
+function ppdTile(d) {
+  const windows = (d.points_per_day || []).filter((w) => PPD_WINDOWS[w.window]);
+  // Listings carry the scalar only; there is nothing to switch between there.
+  if (windows.length === 0) {
+    return statTile('PPD', short(d.points_per_day_24h_avg),
+      complete() ? '24-hour average' : `over ${activeWindow()} so far`,
+      'Points per day over the rolling 24 hours');
+  }
+
+  let i = 0;
+  const tile = el('div.stat');
+  function draw() {
+    const w = windows[i];
+    const meta = PPD_WINDOWS[w.window];
+    const sub = w.partial
+      ? `${meta.label} · only ${span(w.covers_sec)} collected`
+      : meta.label;
+    clear(tile).append(
+      el('div.stat-label', { title: 'Points per day. Click the window to change it.' }, 'PPD'),
+      el('div.stat-value.num', { title: n(w.points_per_day) }, short(w.points_per_day)),
+      el('div.stat-sub',
+        el('button.linkish', {
+          text: sub,
+          title: windows.length > 1 ? 'Switch averaging window' : undefined,
+          onclick: () => { i = (i + 1) % windows.length; draw(); },
+        }))
+    );
+  }
+  draw();
+  return tile;
+}
+
 /** The production figures every entity shares, as a row of stat tiles. */
 function productionStats(d, extra = []) {
   return el(
     'div.stats',
     ...extra,
+    ppdTile(d),
     statTile('Points', short(d.points_total), n(d.points_total)),
-    // Both windows read low until enough history exists to fill them, so the
-    // subtitle names what was actually measured rather than the nominal window.
-    statTile('Per day', short(d.points_per_day_7d_avg),
-      complete() ? '7-day average' : `over ${activeWindow()} so far`,
-      'Total points over the last 7 days divided by 7'),
     statTile('Last 24 hours', short(d.points_last_24h),
       complete() ? 'rolling window' : `only ${activeWindow()} collected`),
     statTile('Today', short(d.points_today_utc), 'since 00:00 UTC'),
@@ -1810,7 +1872,22 @@ export async function apiDocs(view) {
       el('p',
         el('strong', 'Field names say what they mean. '),
         el('code', 'points_per_day_7d_avg'),
-        ' is the last 7 days divided by 7 — the figure other sites label “24hr avg”, which it is not.'),
+        ' is the last 7 days divided by 7 — the figure other sites label “24hr avg”, which it is not. ',
+        el('code', 'points_per_day_24h_avg'),
+        ' is the rolling day, and is what every projection here is built on: it moves the ' +
+        'day a machine is switched on, where the 7-day figure takes most of a week. Both ' +
+        'are on every row so they can be read against each other — where they disagree ' +
+        'sharply, something changed recently.'),
+      el('p',
+        el('strong', 'A window is a request, not a promise. '),
+        'Detail responses carry ', el('code', 'points_per_day'), ' — the same rate over ',
+        el('code', '24h'), ', ', el('code', '7d'), ' and ', el('code', '30d'), ', each with a ',
+        el('code', 'covers_sec'), ' saying what was really averaged over and a ',
+        el('code', 'partial'), ' flag when the record is not yet long enough to fill it. ' +
+        'Collection began on 2 August 2026, so a 30-day average is a shorter one wearing ' +
+        'a 30-day label until September. Read ', el('code', 'covers_sec'),
+        ', not the name, when the number has to be trusted. It is on detail endpoints only: ' +
+        'the 30-day window comes from the daily rollup, which is a query per entity.'),
       el('p',
         el('strong', 'Mirroring? Use '), el('code', '/v1/changes'), el('strong', ', not the collections. '),
         'About 1,100 members produce in any given hour, out of 2.7 million — so ',
@@ -2990,7 +3067,7 @@ function totalsCard(donor) {
       el('div.stats',
         statTile('Rank', '#' + n(donor.rank), movementText(donor.rank_change_24h)),
         statTile('Points', short(donor.points_total), n(donor.points_total)),
-        statTile('Per day', short(donor.points_per_day_7d_avg), '7-day average, all machines'),
+        statTile('PPD', short(donor.points_per_day_24h_avg), '24-hour average, all machines'),
         statTile('Work units', short(donor.wus_total), 'returned in total')))));
 }
 
@@ -3348,7 +3425,7 @@ export async function agentsPage(view) {
       el('p',
         el('code', 'compare'), ' answers it in one call, and states the assumption in ' +
         'the same breath as the number: the projection holds both sides at their ' +
-        'current seven-day average forever, which nobody does. A caveat that travels ' +
+        'current rolling-day rate forever, which nobody does. A caveat that travels ' +
         'separately from the figure it qualifies is a caveat nobody repeats.'),
       el('p',
         'Every answer also carries the age of the data it came from. A model quoting a ' +

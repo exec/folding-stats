@@ -53,6 +53,7 @@ func (s *Snapshot) teamView(slot int32) Team {
 			PointsThisWeekUTC:  s.Teams.ThisWeek(slot),
 			PointsThisMonthUTC: rollup(s.TeamMonth, slot),
 			PointsPerDay7dAvg:  s.Teams.PointsPerDay(slot),
+			PointsPerDay24hAvg: s.Teams.PointsPerDay24h(slot),
 			PointsPerWU:        perWU(t.Score, t.WUs),
 		},
 	}
@@ -76,6 +77,7 @@ func (s *Snapshot) memberView(slot int32, withTeamName bool) Member {
 			PointsThisWeekUTC:  s.Members.ThisWeek(slot),
 			PointsThisMonthUTC: rollup(s.MemberMonth, slot),
 			PointsPerDay7dAvg:  s.Members.PointsPerDay(slot),
+			PointsPerDay24hAvg: s.Members.PointsPerDay24h(slot),
 			PointsPerWU:        perWU(m.Score, m.WUs),
 		},
 	}
@@ -122,6 +124,7 @@ func (s *Snapshot) donorView(idx int32, detail bool) Donor {
 		out.PointsThisWeekUTC = p.ThisWeek
 		out.PointsThisMonthUTC = p.ThisMonth
 		out.PointsPerDay7dAvg = p.PerDay
+		out.PointsPerDay24hAvg = p.PerDay24h
 	} else {
 		// No prebuilt totals (a Table assembled without BuildOrders): sum them here.
 		// A donor has been observed since the first of their members was, so the
@@ -144,6 +147,11 @@ func (s *Snapshot) donorView(idx int32, detail bool) Donor {
 		// Averaging the summed week, not summing per-member averages: rounding each
 		// member separately then adding would drift by up to half a point per team.
 		out.PointsPerDay7dAvg = metrics.PerDay(out.PointsLast7d, observed)
+		day24 := observed
+		if day24 > 24*time.Hour {
+			day24 = 24 * time.Hour
+		}
+		out.PointsPerDay24hAvg = metrics.PerDay(out.PointsLast24h, day24)
 	}
 
 	if detail {
