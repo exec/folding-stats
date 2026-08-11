@@ -320,10 +320,36 @@ async function rivalsSection(load, kind, href) {
  * How many teams get their own tab on a donor's Rivals card.
  *
  * A shared placeholder name folds for thousands, and nobody is competing on all of
- * them. The teams are ordered by the donor's own points, so the ones that get a tab
- * are the ones they actually fold for rather than the ones they once touched.
+ * them.
  */
 const RIVAL_TEAM_TABS = 4;
+
+/**
+ * The teams that get a tab, most recently active first.
+ *
+ * These used to be the first four of the breakdown, which the API orders by lifetime
+ * points — and that quietly answered a different question. A donor's biggest teams by
+ * career total are routinely ones they left years ago, so the card offered tabs for
+ * competitions they are no longer in while the team they folded for this morning had
+ * none. On a real donor it produced two dormant teams out of four.
+ *
+ * The server already draws this distinction for the production view of the same
+ * breakdown — "a donor's largest teams by lifetime total are routinely dormant, so
+ * ordering a production view by lifetime points selects exactly the teams with nothing
+ * to plot" — and it applies with more force here, where only four rows exist to spend.
+ *
+ * Seven days rather than the rolling day: a team folded for yesterday but not since
+ * midnight is still one you are competing on, and a 24-hour window drops it. Sort is
+ * stable, so the ties — which are most of them, since most of a wide donor's teams have
+ * produced nothing at all — keep the incoming lifetime order. A donor whose teams are
+ * all dormant therefore still gets their largest, which is the best available answer
+ * rather than an empty row.
+ */
+export function rivalTeamTabs(teams) {
+  return [...teams]
+    .sort((a, b) => (b.points_last_7d ?? 0) - (a.points_last_7d ?? 0))
+    .slice(0, RIVAL_TEAM_TABS);
+}
 
 /**
  * A donor's rivals, in whichever competition they mean.
@@ -340,7 +366,7 @@ const RIVAL_TEAM_TABS = 4;
  */
 async function donorRivalsSection(donor, teams) {
   const tabs = [{ value: '', label: 'All donors' },
-    ...teams.slice(0, RIVAL_TEAM_TABS).map((t) => ({
+    ...rivalTeamTabs(teams).map((t) => ({
       value: String(t.team_id),
       label: t.team_name || `Team ${t.team_id}`,
       title: `Where ${donor.name} stands among this team\u2019s members`,
