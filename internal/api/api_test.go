@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1512,7 +1513,7 @@ func TestEveryNumericColumnIsSortable(t *testing.T) {
 		}
 	}
 
-	// per_day orders by the seven-day average, which is a different question from
+	// per_day orders by the rolling-day rate, which is a different question from
 	// lifetime: surging out-produces steady while trailing it on cumulative points.
 	if got := names("/v1/donors?sort=per_day"); got[0] != "surging" {
 		t.Errorf("sort=per_day leader = %s, want surging", got[0])
@@ -2764,5 +2765,104 @@ func TestRequestCounterExcludesTheProbeItIsPublishedOn(t *testing.T) {
 	hit("/robots.txt")
 	if _, n := read(); n != 6 {
 		t.Errorf("counted %d after non-API paths, want 6", n)
+	}
+}
+
+// A column has to be ordered by the number it displays.
+//
+// The site's PPD column shows points_per_day_24h_avg and its header sorts by per_day.
+// Those were two different figures for a day: the ordering ran on the seven-day
+// average while the cell showed the rolling day, so the board arrived visibly
+// unsorted — the complaint that found it was "per day still uses 7d".
+//
+// The fixture is built so the two windows disagree. "lastweek" did all its work four
+// days ago and none since; "today" did all of its in the last hour. Ranked over seven
+// days lastweek leads, over the rolling day today does — so an ordering wired to the
+// wrong one puts the rows in an order this test can see. A fixture whose cycles all
+// sit inside both windows cannot: the first version of this test passed against the
+// very bug it was written for.
+func TestPerDaySortMatchesTheDisplayedRate(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "w.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	state := model.NewState()
+	memberWin, teamWin := metrics.New(0), metrics.New(0)
+	ctx := context.Background()
+	day := func(d, h int) time.Time { return time.Date(2026, 8, 3+d, h, 0, 0, 0, time.UTC) }
+
+	// Totals are cumulative upstream, so each cycle restates them; the deltas between
+	// successive cycles are what the windows are built from.
+	cycles := []struct {
+		when                    time.Time
+		lastweek, today, steady int64
+	}{
+		{day(0, 0), 100, 100, 100},
+		{day(0, 1), 900_000, 100, 200_000}, // lastweek's burst, four days before the end
+		{day(4, 0), 900_000, 100, 400_000}, // quiet days for lastweek, steady keeps going
+		{day(4, 12), 900_000, 500_000, 600_000},
+	}
+	for _, c := range cycles {
+		teams := []parse.TeamRow{tr(1, "lastweek", c.lastweek), tr(2, "today", c.today), tr(3, "steady", c.steady)}
+		users := []parse.UserRow{u("lastweek", c.lastweek, 1), u("today", c.today, 2), u("steady", c.steady, 3)}
+		cy := state.Apply(c.when, teams, users)
+		if err := st.WriteCycle(ctx, state, cy, store.CycleMeta{
+			TeamSnapshotAt: c.when, UserSnapshotAt: c.when}); err != nil {
+			t.Fatal(err)
+		}
+		memberWin.Grow(len(state.Members))
+		memberWin.Push(c.when, cy.MemberDeltas)
+		teamWin.Grow(len(state.Teams))
+		teamWin.Push(c.when, cy.TeamDeltas)
+	}
+
+	end := day(4, 12)
+	teamMonth, err := st.MonthTotals(ctx, "team", end, len(state.Teams))
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberMonth, err := st.MonthTotals(ctx, "member", end, len(state.Members))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tbl := rank.Build(state, end, rank.DefaultConfig)
+	tbl.BuildOrders(state, memberWin, teamWin, teamMonth, memberMonth)
+	snap := Build(state, memberWin, teamWin, tbl, st, end, day(4, 13), "window-etag")
+	snap.TeamMonth, snap.MemberMonth = teamMonth, memberMonth
+	srv := NewServer()
+	srv.Publish(snap)
+
+	for _, ep := range []string{"/v1/teams", "/v1/donors"} {
+		rec, env := get(t, srv, ep+"?sort=per_day")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d", ep, rec.Code)
+		}
+		rows := env.Data.([]any)
+		if len(rows) < 3 {
+			t.Fatalf("%s: %d rows, too few to check an ordering", ep, len(rows))
+		}
+
+		// The ordering is by the rolling day, so the entity that worked today leads —
+		// even though another produced far more across the week.
+		if got := rows[0].(map[string]any)["name"]; got != "today" {
+			t.Errorf("%s?sort=per_day leader = %v, want today; the ordering is not on the rolling day", ep, got)
+		}
+
+		prev := math.Inf(1)
+		for i, r := range rows {
+			row := r.(map[string]any)
+			got, ok := row["points_per_day_24h_avg"].(float64)
+			if !ok {
+				t.Fatalf("%s row %d has no points_per_day_24h_avg; the column would render blank", ep, i)
+			}
+			if got > prev {
+				t.Errorf("%s?sort=per_day row %d (%v) has %.0f, above the row before it (%.0f) — "+
+					"the ordering and the displayed figure are not the same number",
+					ep, i, row["name"], got, prev)
+			}
+			prev = got
+		}
 	}
 }

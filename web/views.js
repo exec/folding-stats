@@ -116,20 +116,25 @@ const SHAPES = [
  *
  * `today`, `this_week` and `this_month` are calendar buckets in UTC, not rolling
  * windows: `today` reads low just after 00:00 UTC because it answers "produced
- * today". `per_day` is the seven-day average, and `last_24h` the rolling day — three
- * different questions that are easy to mistake for one.
+ * today". `per_day` is points per day over the rolling 24 hours; `last_24h` is that
+ * same window as a total rather than a rate — three different questions that are easy
+ * to mistake for one.
  *
- * A listing sorts by the column it shows. `per_day` therefore stays on the seven-day
- * figure, because that is what the server orders `sort=per_day` by, and a column
- * displaying one number while ranked by another is a lie that looks like a rendering
- * bug. The rolling-day rate is on every row as `points_per_day_24h_avg` and is what the
- * PPD tile, every projection and the bot are built on.
+ * A listing sorts by the column it shows, so this and `sort=per_day` moved to the
+ * rolling day together. `points_per_day_7d_avg` is still on every row: it is the figure
+ * EOC publishes, mislabelled there as "24hr Avg", and it stays reconcilable with them.
+ *
+ * Name colours do not follow it. `tier()` reads the seven-day figure, because the
+ * colour characterises the entity rather than its morning — driving it from the rolling
+ * day would repaint the whole board hourly and mark anyone who paused overnight "Idle".
+ * A colour ramp that is not monotonic down the page is already normal here under every
+ * sort except lifetime.
  */
 const COLUMNS = [
   { key: 'members', label: 'Members', kind: 'team', title: 'Active of total members' },
   { key: 'teams', label: 'Teams', kind: 'donor', title: 'Teams this donor folds for' },
-  { key: 'per_day', label: 'Per day', field: 'points_per_day_7d_avg',
-    title: 'Points over the last 7 days divided by 7' },
+  { key: 'per_day', label: 'PPD', field: 'points_per_day_24h_avg',
+    title: 'Points per day over the rolling 24 hours' },
   { key: 'today', label: 'Today', field: 'points_today_utc', title: 'Points since 00:00 UTC' },
   { key: 'this_week', label: 'This week', field: 'points_this_week_utc',
     title: 'Points since Sunday 00:00 UTC' },
@@ -142,7 +147,7 @@ const COLUMNS = [
 
 const SORT_BLURB = {
   lifetime: 'lifetime points',
-  per_day: 'the 7-day average',
+  per_day: 'points per day over the rolling 24 hours',
   today: 'points since 00:00 UTC today',
   this_week: 'points since Sunday 00:00 UTC',
   this_month: 'points since the 1st of the month, UTC',
@@ -227,7 +232,7 @@ function rivalsTable(data, kind) {
       el('td.rank', n(r.rank)),
       el('td.left.name-cell', nameEl, r.self ? el('span.rival-you', 'you') : null),
       el('td.num', { title: n(r.points_total) }, short(r.points_total)),
-      el('td.num', { title: n(r.points_per_day_7d_avg) }, short(r.points_per_day_7d_avg)),
+      el('td.num', { title: n(r.points_per_day_24h_avg) }, short(r.points_per_day_24h_avg)),
       el('td.num', r.self ? '—' : el('span', { title: n(r.points_gap) }, short(r.points_gap))),
       r.self
         ? el('td.left.muted', '—')
@@ -244,7 +249,7 @@ function rivalsTable(data, kind) {
       el('th.left', 'Rank'),
       el('th.left', kind === 'team' ? 'Team' : 'Donor'),
       el('th', 'Points'),
-      el('th', 'Per day'),
+      el('th', 'PPD'),
       el('th', 'Gap'),
       el('th.left', 'Overtake'))),
     body));
@@ -1580,7 +1585,7 @@ function teamsCard(donor, teams) {
         'tr',
         el('td.left.name-cell', link),
         el('td.num', `#${n(t.rank_in_team)}`),
-        el('td.num', { title: n(t.points_per_day_7d_avg) }, short(t.points_per_day_7d_avg)),
+        el('td.num', { title: n(t.points_per_day_24h_avg) }, short(t.points_per_day_24h_avg)),
         el('td.num', { title: n(t.points_total) }, short(t.points_total))
       )
     );
@@ -1589,7 +1594,7 @@ function teamsCard(donor, teams) {
     'div.table-wrap',
     el('table.data',
       el('thead', el('tr',
-        el('th.left', 'Team'), el('th', 'Rank in team'), el('th', 'Per day'), el('th', 'Points'))),
+        el('th.left', 'Team'), el('th', 'Rank in team'), el('th', 'PPD'), el('th', 'Points'))),
       body)
   );
   const node = card(`Teams (${n(donor.team_count)})`, table);
@@ -1970,7 +1975,7 @@ export async function apiDocs(view) {
       el('tbody',
         ...[
           ['lifetime', 'Points', 'points_total — the default'],
-          ['per_day', 'Per day', 'points_per_day_7d_avg — the 7-day average'],
+          ['per_day', 'PPD', 'points_per_day_24h_avg — points per day over the rolling 24h'],
           ['today', 'Today', 'points_today_utc — calendar day, resets 00:00 UTC'],
           ['this_week', 'This week', 'points_this_week_utc — resets Sunday 00:00 UTC'],
           ['this_month', 'This month', 'points_this_month_utc — resets on the 1st, UTC'],

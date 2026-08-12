@@ -146,10 +146,16 @@ const (
 	// not a rate.
 	Lifetime SortKey = "lifetime"
 
-	// PerDay is points_per_day_7d_avg — the seven-day moving average. It is the
-	// column most people actually rank by, and it is deliberately not called "daily":
-	// Today is a calendar bucket and this is an average over a window, and conflating
-	// the two is the mistake the field naming exists to prevent.
+	// PerDay is points_per_day_24h_avg — the rolling day. It is the column most
+	// people actually rank by, and it is deliberately not called "daily": Today is a
+	// calendar bucket and this is an average over a window, and conflating the two is
+	// the mistake the field naming exists to prevent.
+	//
+	// It ordered by the seven-day average until 11 August 2026. The site's Per day
+	// column shows this ordering's own figure, so the two have to be the same one: a
+	// column ranked by a number it is not displaying reads as a rendering bug, and the
+	// seven-day figure is smoothed enough that a machine switched on this morning does
+	// not appear near the top of a board sorted by "per day" for most of a week.
 	PerDay SortKey = "per_day"
 
 	// Today, ThisWeek and ThisMonth are calendar buckets in UTC, not rolling windows —
@@ -223,7 +229,7 @@ func (t *Table) BuildOrders(st *model.State, members, teams *metrics.Window,
 		key SortKey
 		val func(int32) int64
 	}{
-		{PerDay, teams.PointsPerDay},
+		{PerDay, teams.PointsPerDay24h},
 		{Today, teams.Today},
 		{ThisWeek, teams.ThisWeek},
 		{ThisMonth, func(i int32) int64 { return tMonth[i] }},
@@ -283,7 +289,7 @@ func (t *Table) BuildOrders(st *model.State, members, teams *metrics.Window,
 	}
 
 	t.donorOrders[Lifetime] = identity(n) // Donors is already in lifetime order
-	t.donorOrders[PerDay] = t.orderBy(perDay)
+	t.donorOrders[PerDay] = t.orderBy(perDay24)
 	t.donorOrders[Today] = t.orderBy(day)
 	t.donorOrders[ThisWeek] = t.orderBy(week)
 	t.donorOrders[ThisMonth] = t.orderBy(month)

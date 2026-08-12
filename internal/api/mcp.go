@@ -749,7 +749,7 @@ func (s *Snapshot) mcpLeaderboard(kind, sortKey string, limit int) (string, erro
 	var b strings.Builder
 	blurb := map[rank.SortKey]string{
 		rank.Lifetime:  "cumulative points since the beginning",
-		rank.PerDay:    "seven-day average, points per day (the site's per_day ordering)",
+		rank.PerDay:    "points per day over the rolling 24 hours",
 		rank.Today:     "points since 00:00 UTC today",
 		rank.ThisWeek:  "points since Sunday 00:00 UTC",
 		rank.ThisMonth: "points since the 1st, UTC",
@@ -790,7 +790,7 @@ func (s *Snapshot) mcpLeaderboard(kind, sortKey string, limit int) (string, erro
 func mcpSortValue(p Production, k rank.SortKey, count int64) int64 {
 	switch k {
 	case rank.PerDay:
-		return p.PointsPerDay7dAvg
+		return p.PointsPerDay24hAvg
 	case rank.Today:
 		return p.PointsTodayUTC
 	case rank.ThisWeek:
