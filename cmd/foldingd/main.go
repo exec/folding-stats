@@ -204,18 +204,73 @@ func follow(ctx context.Context, svc *service.Service, poll time.Duration, log *
 	}
 }
 
+// How the daily maintenance pass is scheduled.
+//
+// It used to be a bare 24-hour ticker created at startup, and it had therefore never
+// run once. Every restart put the next pass a full day away, and this service is
+// restarted by every deploy — several times on a busy day. Both -compact-after and
+// -keep-raw described an intention rather than a behaviour, and the raw archive grew
+// unthinned at 748 MB a day against retention settings nothing ever applied.
+//
+// So the last run is recorded in the database instead, and the wait is computed from
+// it. A restart now resumes the schedule rather than restarting it.
+const (
+	maintenanceKey = "last_maintenance_at"
+	// Long enough to stay out of the way of the initial ingest, which is the heaviest
+	// thing this process does and happens immediately after the start this delay is
+	// measured from.
+	maintenanceDelay = 5 * time.Minute
+	maintenanceEvery = 24 * time.Hour
+	// A failed pass is retried well before the next daily one, without recording a
+	// run — but not immediately, because the likeliest causes (a locked database, a
+	// full disk) are not fixed by trying again a second later.
+	maintenanceRetry = time.Hour
+)
+
+// nextDue is when the next maintenance pass should happen, given the recorded time of
+// the last one and the time now.
+//
+// Floored at maintenanceDelay even when a pass is overdue, so a restart cannot land a
+// compaction on top of the initial ingest — which is the heaviest thing this process
+// does and starts moments before this is called.
+//
+// An unreadable marker is treated as no marker. It means one extra pass, which is
+// idempotent, where trusting it could wedge the schedule permanently on a bad value.
+func nextDue(last string, now time.Time) time.Time {
+	due := now.Add(maintenanceDelay)
+	if last == "" {
+		return due
+	}
+	t, err := time.Parse(time.RFC3339, last)
+	if err != nil {
+		return due
+	}
+	if n := t.Add(maintenanceEvery); n.After(due) {
+		return n
+	}
+	return due
+}
+
 // maintain compacts the database and thins the raw archive once a day.
 func maintain(ctx context.Context, svc *service.Service, db *store.Store, archive *feed.Archive,
 	compactAfter, keepDaily, keepRaw time.Duration, log *slog.Logger) {
 
-	compact := time.NewTicker(24 * time.Hour)
-	defer compact.Stop()
+	last, err := db.Meta(ctx, maintenanceKey)
+	if err != nil {
+		log.Warn("maintenance: reading the last run", "err", err)
+	}
+	due := nextDue(last, time.Now())
 
 	for {
+		wait := time.Until(due)
+		if wait < 0 {
+			wait = 0
+		}
+		log.Info("next maintenance", "in", wait.Round(time.Second), "at", due.UTC())
 		select {
 		case <-ctx.Done():
 			return
-		case <-compact.C:
+		case <-time.After(wait):
 			start := time.Now()
 			now := time.Now().UTC()
 			policy := store.CompactPolicy{RawBefore: now.Add(-compactAfter)}
@@ -225,6 +280,7 @@ func maintain(ctx context.Context, svc *service.Service, db *store.Store, archiv
 			res, err := db.Compact(ctx, policy)
 			if err != nil {
 				log.Error("compaction failed", "err", err)
+				due = time.Now().Add(maintenanceRetry)
 				continue
 			}
 			log.Info("compacted",
@@ -244,6 +300,7 @@ func maintain(ctx context.Context, svc *service.Service, db *store.Store, archiv
 				}, time.Now().UTC())
 				if err != nil {
 					log.Error("archive prune failed", "err", err)
+					due = time.Now().Add(maintenanceRetry)
 					continue
 				}
 				if err := archive.PruneEmptyDirs(); err != nil {
@@ -254,6 +311,14 @@ func maintain(ctx context.Context, svc *service.Service, db *store.Store, archiv
 					"freed_mb", pr.Freed/(1<<20),
 					"took", time.Since(start).Round(time.Millisecond))
 			}
+
+			// Recorded only after both halves succeeded, so a pass that failed is
+			// retried rather than counted. Written before the next wait is computed
+			// because that wait is read back from here.
+			if err := db.SetMeta(ctx, maintenanceKey, time.Now().UTC().Format(time.RFC3339)); err != nil {
+				log.Warn("maintenance: recording the run", "err", err)
+			}
+			due = time.Now().Add(maintenanceEvery)
 		}
 	}
 }

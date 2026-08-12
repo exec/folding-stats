@@ -9,6 +9,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -412,4 +413,30 @@ func (s *Store) RecentCycles(ctx context.Context, n int) ([]time.Time, error) {
 		out = append(out, time.Unix(ts, 0).UTC())
 	}
 	return out, rows.Err()
+}
+
+// Meta reads a small named value, returning "" when it has never been set.
+//
+// The table already existed for the project-rollup backfill marker. It is the right
+// home for anything a restart must not forget and that does not deserve a table of its
+// own — a schedule's last run, a one-off migration's completion.
+func (s *Store) Meta(ctx context.Context, key string) (string, error) {
+	var v string
+	err := s.w.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("store: reading meta %q: %w", key, err)
+	}
+	return v, nil
+}
+
+// SetMeta records one, replacing any previous value.
+func (s *Store) SetMeta(ctx context.Context, key, value string) error {
+	if _, err := s.w.ExecContext(ctx,
+		`INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)`, key, value); err != nil {
+		return fmt.Errorf("store: writing meta %q: %w", key, err)
+	}
+	return nil
 }
