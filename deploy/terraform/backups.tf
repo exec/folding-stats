@@ -91,3 +91,16 @@ output "backup_bucket" {
   description = "Bucket the n100's backup timer writes to."
   value       = cloudflare_r2_bucket.backups.name
 }
+
+# The credentials are NOT managed here, deliberately.
+#
+# R2 does not issue S3 keys; it derives them from a Cloudflare API token — the access
+# key is the token's id and the secret is the SHA-256 of its value, which is shown once
+# at creation and never again. Managing the token in Terraform would therefore put a
+# live credential in terraform.tfstate in plaintext, to save one API call that happens
+# once in the life of the bucket.
+#
+# The token in use is account-owned, named "foldingstats-backups n100", and scoped with
+# the bucket-level permission groups (Workers R2 Storage Bucket Item Read + Write) to
+# this bucket alone. Recreate it the same way if it is ever lost: a token that can write
+# every bucket in the account is a strictly worse thing to leave on a machine.

@@ -13,8 +13,24 @@ mistake but not a disk.
 | `folding-backup.service` | → `/etc/systemd/system/`, oneshot, runs as `folding` |
 | `folding-backup.timer` | → `/etc/systemd/system/`, daily at 04:17 UTC ±15m, `Persistent=true` |
 | `/etc/folding/rclone.conf` | the R2 credentials, root:folding 0640 — **not in this repo** |
+| `rclone` | **install the current build, not the distro package** — see below |
 
 The bucket and its retention rules are Terraform, in `../terraform/backups.tf`.
+
+## rclone
+
+Debian 13 packages rclone 1.60, from 2022, and it is not good enough here: against R2
+every upload failed once with a 501 and succeeded on retry, and `purge` returned 403.
+Data survived the round trip intact, so it would have looked like it worked while
+doubling every request and filling the journal with errors. Install the current release
+from `downloads.rclone.org` instead — 1.75 does the same work with no retries.
+
+The credentials are a Cloudflare API token scoped to this **one bucket**, so it cannot
+touch anything else in the account. Two consequences worth knowing before they look like
+faults: `rclone lsd r2:` fails with AccessDenied, because listing buckets is an
+account-level operation the token deliberately lacks, and `rclone purge` on the bucket
+root fails for the same reason. Listing *inside* the bucket, reading, writing and
+deleting objects all work, which is everything the backup and a restore need.
 
 ## What it copies, and how far back
 
