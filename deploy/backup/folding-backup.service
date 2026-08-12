@@ -15,6 +15,13 @@ ExecStart=/usr/local/bin/folding-backup.sh
 
 # Reading a WAL-mode database means touching its -shm file, so this runs as the owner
 # of the data rather than as root reaching in.
+# Reading seven gigabytes of archive fills the page cache with it — the first run was
+# accounted 7G peak, all of it reclaimable cache rather than anything leaked. The cost
+# is not memory pressure but eviction: it pushes foldingd's cached database pages out,
+# so the site runs cold for a while after every nightly backup. Capping the cgroup makes
+# the kernel reclaim this job's own cache instead of somebody else's.
+MemoryHigh=512M
+
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict

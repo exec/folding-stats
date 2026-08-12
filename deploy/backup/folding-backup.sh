@@ -53,7 +53,12 @@ cp -a "$DATA/state.json" "$STAGE/state.json"
 # --bwlimit because this shares one 41 Mbit/s uplink with the site itself, and the
 # tunnel carries every response over it. The first raw/ upload is ~6 GB; unthrottled it
 # would saturate the link for half an hour and make the site look broken from outside.
-RC=(rclone --bwlimit 3M --stats-one-line --stats 30s)
+#
+# --stats-log-level NOTICE because rclone prints its periodic stats at INFO, which is
+# suppressed unless -v is passed: the first real run uploaded for two hours and logged
+# nothing between "snapshot ok" and "backup complete". A long transfer with no progress
+# output is one you cannot tell from a stalled one.
+RC=(rclone --bwlimit 3M --stats-one-line --stats 5m --stats-log-level NOTICE)
 
 "${RC[@]}" copyto "$STAGE/history.db" "$BUCKET/db/history-$TS.db"
 "${RC[@]}" copyto "$STAGE/state.json" "$BUCKET/db/state-$TS.json"
