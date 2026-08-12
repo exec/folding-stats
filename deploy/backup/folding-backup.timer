@@ -1,0 +1,17 @@
+[Unit]
+Description=Daily offsite backup of the folding stats data
+
+[Timer]
+# Early morning UTC, away from the hourly ingest which lands around :50 and from the
+# archive thinner. The randomised delay keeps it off a round number, which matters only
+# because every other cron on earth fires at :00.
+OnCalendar=*-*-* 04:17:00
+RandomizedDelaySec=900
+
+# Persistent so a box that was off at 04:17 backs up when it comes back, rather than
+# silently skipping a day. The n100 is a single machine with no failover; missed days
+# are exactly the ones worth catching up.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

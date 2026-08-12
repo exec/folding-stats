@@ -1,0 +1,32 @@
+[Unit]
+Description=Offsite backup of the folding stats data to R2
+After=network-online.target
+Wants=network-online.target
+# No Restart= and no StartLimit override on purpose. A backup that failed should stay
+# failed and visible in `systemctl list-units --failed` until someone looks, rather
+# than retrying quietly until the timer comes round again anyway.
+
+[Service]
+Type=oneshot
+User=folding
+Group=folding
+Environment=RCLONE_CONFIG=/etc/folding/rclone.conf
+ExecStart=/usr/local/bin/folding-backup.sh
+
+# Reading a WAL-mode database means touching its -shm file, so this runs as the owner
+# of the data rather than as root reaching in.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/var/lib/folding
+ReadWritePaths=/var/tmp
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
