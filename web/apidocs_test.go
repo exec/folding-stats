@@ -105,6 +105,34 @@ need('param-name', 30);
 need('param-values', 30);
 need('param-note', 30);
 
+// The stability caveat. It is the first thing a prospective caller should read, so it
+// has to be present and it has to be above the reference — a warning below the
+// endpoints reaches somebody who has already finished reading and started typing.
+const notices = [];
+(function walk(n){
+  if (typeof n === 'string') return;
+  if ((n.classList || new Set()).has('notice')) notices.push(n.textContent);
+  for (const c of n.children || []) walk(c);
+})(view);
+if (!notices.some((t) => /not frozen/i.test(t))) {
+  console.log('FAIL no stability caveat on the page');
+  bad++;
+}
+{
+  const flat = [];
+  (function walk(n){
+    if (typeof n === 'string') return;
+    const cls = n.classList || new Set();
+    if (cls.has('notice')) flat.push('notice');
+    if (cls.has('endpoint')) flat.push('endpoint');
+    for (const c of n.children || []) walk(c);
+  })(view);
+  if (flat.indexOf('notice') > flat.indexOf('endpoint')) {
+    console.log('FAIL the stability caveat renders below the endpoints');
+    bad++;
+  }
+}
+
 // The regression this layout exists to prevent: a summary and its query parameters
 // sharing one cell. Nothing may put a '?' in the summary line any more.
 const sums = [];

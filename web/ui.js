@@ -197,8 +197,15 @@ export function segmented(options, current, onPick) {
   return wrap;
 }
 
-export function notice(text) {
-  return el('div.notice', el('span', '⚠'), el('span', text));
+/**
+ * A warning beside a ⚠, for something the reader needs before they act on the page.
+ *
+ * Variadic rather than one string so a notice can carry a link or an emphasised lead —
+ * a caveat people are meant to act on usually has somewhere to send them. Passing a
+ * single string still builds exactly what it always did.
+ */
+export function notice(...body) {
+  return el('div.notice', el('span', '⚠'), el('span', ...body));
 }
 
 /** Link that routes through the SPA rather than reloading. */

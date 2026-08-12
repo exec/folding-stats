@@ -1816,6 +1816,28 @@ export async function apiDocs(view) {
         'Free, public, and unauthenticated. No key, no sign-up, and nothing your browser has to solve first.'))
   );
 
+  // Above the endpoints, not below them: a caveat about stability is worthless to
+  // somebody who has already finished reading the reference and started typing. It is
+  // deliberately not dismissible — a warning people can make go away is one they make
+  // go away.
+  view.append(el('section.section', notice(
+    el('strong', 'v1 is not frozen yet. '),
+    'Fields may be added, renamed or removed, and behaviour may change between deploys \u2014 ' +
+    'including regressions. There is no deprecation window and no version negotiation: ' +
+    'v1 is the only version, and it moves. ',
+    'Most of this API is exercised by this site\u2019s own frontend, and that is what it is ' +
+    'tested against, so the corners it never asks for \u2014 unusual sort, granularity and ' +
+    'pagination pairings, and any route the site does not itself call \u2014 are the least ' +
+    'travelled and the likeliest to be wrong. ',
+    'If you are building on it, ',
+    el('a', {
+      href: 'https://github.com/exec/folding-stats/issues',
+      target: '_blank', rel: 'noopener noreferrer',
+    }, 'open an issue'),
+    ' saying what you depend on. Knowing who relies on what is what turns this into a ' +
+    'spec worth freezing.'
+  )));
+
   view.append(el('section.section', el('div.stats',
     liveTile,
     statTile('Auth', 'None', 'no key required'),

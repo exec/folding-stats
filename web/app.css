@@ -88,6 +88,11 @@
   --series-8: #e34948;
   --accent-quiet: rgba(42, 120, 214, 0.12);
   --good: #006300;
+  /* The dark theme's amber is #fab219, which is 1.8:1 on this theme's white surfaces —
+     below even the 3:1 asked of a border, and it is used as text by .countdown.overdue
+     and .badge.warn as well as by the notice rule. Darkened to 4.6:1 here only, so the
+     dark theme keeps the amber that works on its own background. */
+  --warning: #a06a00;
 }
 
 * { box-sizing: border-box; }
