@@ -116,9 +116,16 @@ const SHAPES = [
  *
  * `today`, `this_week` and `this_month` are calendar buckets in UTC, not rolling
  * windows: `today` reads low just after 00:00 UTC because it answers "produced
- * today". `per_day` is points per day over the rolling 24 hours; `last_24h` is that
- * same window as a total rather than a rate — three different questions that are easy
- * to mistake for one.
+ * today". `per_day` is points per day over the rolling 24 hours — which for anything
+ * observed for a full day is arithmetically the same number as `last_24h`, a total over
+ * the same window. Both are on every row of the API and only the rate is shown: a
+ * column headed "PPD" beside one headed "Last 24h" was the same figure printed twice,
+ * on every listing and again on every detail page.
+ *
+ * They part company for an entity younger than a day, where the rate divides by the
+ * hours actually observed and the total does not. That is the honest reading of a
+ * newcomer and the reason `last_24h` stays in the API rather than being removed with
+ * the column.
  *
  * A listing sorts by the column it shows, so this and `sort=per_day` moved to the
  * rolling day together. `points_per_day_7d_avg` is still on every row: it is the figure
@@ -140,7 +147,6 @@ const COLUMNS = [
     title: 'Points since Sunday 00:00 UTC' },
   { key: 'this_month', label: 'This month', field: 'points_this_month_utc',
     title: 'Points since the 1st, 00:00 UTC' },
-  { key: 'last_24h', label: 'Last 24h', field: 'points_last_24h', title: 'Rolling 24 hours' },
   { key: 'wus', label: 'WUs', field: 'wus_total', title: 'Work units completed' },
   { key: 'lifetime', label: 'Points', field: 'points_total', title: 'Cumulative points, all time' },
 ];
@@ -151,7 +157,6 @@ const SORT_BLURB = {
   today: 'points since 00:00 UTC today',
   this_week: 'points since Sunday 00:00 UTC',
   this_month: 'points since the 1st of the month, UTC',
-  last_24h: 'points in the rolling last 24 hours',
   wus: 'work units',
   members: 'member count',
   teams: 'team count',
@@ -723,8 +728,6 @@ function productionStats(d, extra = []) {
     ...extra,
     ppdTile(d),
     statTile('Points', short(d.points_total), n(d.points_total)),
-    statTile('Last 24 hours', short(d.points_last_24h),
-      complete() ? 'rolling window' : `only ${activeWindow()} collected`),
     statTile('Today', short(d.points_today_utc), 'since 00:00 UTC'),
     // The ratio rides on the tile holding the number it is derived from, rather than
     // taking a tile of its own: it is a property of the work units, not a sixth
@@ -1116,7 +1119,7 @@ async function teamMembersCard(teamID, nav) {
  * in the team is actually derived from.
  */
 const ROSTER_COLUMNS = COLUMNS.filter((c) =>
-  ['per_day', 'last_24h', 'this_week', 'this_month', 'lifetime'].includes(c.key));
+  ['per_day', 'this_week', 'this_month', 'lifetime'].includes(c.key));
 
 function memberTable(members, sort, onSort) {
   const body = el('tbody');
@@ -1979,7 +1982,7 @@ export async function apiDocs(view) {
           ['today', 'Today', 'points_today_utc — calendar day, resets 00:00 UTC'],
           ['this_week', 'This week', 'points_this_week_utc — resets Sunday 00:00 UTC'],
           ['this_month', 'This month', 'points_this_month_utc — resets on the 1st, UTC'],
-          ['last_24h', 'Last 24h', 'points_last_24h — rolling, not a calendar bucket'],
+          ['last_24h', '—', 'points_last_24h — the same window as per_day, as a total rather than a rate'],
           ['wus', 'WUs', 'wus_total'],
           ['members', 'Members', 'members_total — teams only'],
           ['teams', 'Teams', 'team_count — donors only'],
@@ -2077,7 +2080,11 @@ export async function apiDocs(view) {
         el('code', 'monthly'), ' history buckets and the leaderboard ',
         el('code', 'sort'), ' orderings. They are calendar periods, not rolling windows: ',
         el('code', 'points_today_utc'), ' reads low just after midnight, while ',
-        el('code', 'points_last_24h'), ' is the rolling figure.'),
+        el('code', 'points_last_24h'), ' is the rolling figure. It and ',
+        el('code', 'points_per_day_24h_avg'),
+        ' cover the same window and are the same number for anything watched for a full ' +
+        'day; they differ only for an entity younger than that, where the rate divides ' +
+        'by the hours actually observed and the total does not.'),
       el('p',
         el('strong', 'A rank means nothing without its field. '),
         el('code', '/rivals'), ' ranks a donor across every donor tracked; add ',
