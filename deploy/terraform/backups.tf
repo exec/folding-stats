@@ -45,31 +45,25 @@ resource "cloudflare_r2_bucket_lifecycle" "backups" {
   account_id  = var.account_id
   bucket_name = cloudflare_r2_bucket.backups.name
 
+  # Order matters, and it is the API's order rather than a tidy one. The provider
+  # compares this list positionally, so listing these the other way round — expiry
+  # first, as they were written — made every plan propose rewriting both rules
+  # forever. Perpetual drift is worse than untidiness: it teaches whoever reads the
+  # next plan to skim past it, which is where a real change goes unnoticed.
+  #
+  # One cosmetic diff survives that and cannot be closed from here: the API echoes an
+  # empty transition object back for whichever transition each rule does not use, and
+  # the provider reports removing it. Applying does not converge — the same empty
+  # objects come back on the next read.
+  #
+  # Do NOT silence it by declaring those empty transitions in config. An empty
+  # delete_objects_transition on a bucket holding the only offsite backup is not a
+  # tidy no-op to guess at, and the live rules are already exactly right: verified
+  # against the API as abort-after-1-day on everything and delete-after-7-days on db/.
+  # A one-line known diff is the cheaper of the two risks.
   rules = [
-    # Database snapshots roll. Each one is a complete 173 MB copy of a database that is
-    # itself derived from raw/, so keeping many is paying to store the same answer over
-    # and over. A week is enough to notice corruption and step back behind it.
-    {
-      id      = "expire-db-snapshots"
-      enabled = true
-      conditions = {
-        prefix = "db/"
-      }
-      delete_objects_transition = {
-        condition = {
-          type    = "Age"
-          max_age = 604800 # 7 days, in seconds
-        }
-      }
-    },
-
-    # No expiry rule for raw/ anywhere in this file, on purpose. That archive is the one
-    # asset that cannot be reconstructed — history accrues in real time, so a gap in it
-    # is permanent — and the uploader uses `rclone copy` rather than `sync` so that
-    # thinning the local copy never propagates a deletion up here.
-
     # Multipart uploads that died halfway still occupy billable space and are invisible
-    # in a normal listing. A 6 GB archive sync over a 41 Mbit uplink has plenty of
+    # in a normal listing. A 7 GB archive upload over a 41 Mbit uplink has plenty of
     # opportunity to be interrupted.
     {
       id      = "abort-stale-multipart"
@@ -81,6 +75,28 @@ resource "cloudflare_r2_bucket_lifecycle" "backups" {
         condition = {
           type    = "Age"
           max_age = 86400 # 1 day, in seconds
+        }
+      }
+    },
+
+    # Database snapshots roll. Each one is a complete ~166 MB copy of a database that is
+    # itself derived from raw/, so keeping many is paying to store the same answer over
+    # and over. A week is enough to notice corruption and step back behind it.
+    #
+    # There is no expiry rule for raw/ anywhere in this file, on purpose. That archive is
+    # the one asset that cannot be reconstructed — history accrues in real time, so a gap
+    # in it is permanent — and the uploader uses `rclone copy` rather than `sync` so that
+    # thinning the local copy never propagates a deletion up here.
+    {
+      id      = "expire-db-snapshots"
+      enabled = true
+      conditions = {
+        prefix = "db/"
+      }
+      delete_objects_transition = {
+        condition = {
+          type    = "Age"
+          max_age = 604800 # 7 days, in seconds
         }
       }
     },

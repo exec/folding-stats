@@ -15,7 +15,10 @@ mistake but not a disk.
 | `/etc/folding/rclone.conf` | the R2 credentials, root:folding 0640 — **not in this repo** |
 | `rclone` | **install the current build, not the distro package** — see below |
 
-The bucket and its retention rules are Terraform, in `../terraform/backups.tf`.
+The bucket and its retention rules are Terraform, in `../terraform/backups.tf`. That
+plan shows one standing diff on the lifecycle rules — an empty transition object the API
+echoes back and the provider wants to remove. It never converges and it is documented in
+place; the live rules are correct. Everything else should plan clean.
 
 ## rclone
 
