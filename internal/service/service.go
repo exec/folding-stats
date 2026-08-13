@@ -315,6 +315,13 @@ func (s *Service) applyCycle(ctx context.Context, p snapshotPair) error {
 	s.guard.Lock()
 	cycle := s.state.Apply(p.at, teamRows, userRows)
 	s.guard.Unlock()
+	// Unreachable while the ValidateSnapshot above runs on the same rows, and checked
+	// anyway: cycle is dereferenced a few lines down and again by the windows, so if
+	// the two checks ever drift apart the symptom is a panic in the ingest loop rather
+	// than a rejected cycle. One comparison an hour is a cheap way to never find out.
+	if cycle == nil {
+		return fmt.Errorf("rejecting unsafe snapshot: state declined to apply it")
+	}
 
 	// The commit deliberately outlives a cancelled parent.
 	//

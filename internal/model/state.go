@@ -135,6 +135,13 @@ func (s *State) TeamSlot(teamID int32) (int32, bool) {
 // real — 6,984 of them in the reference corpus — and summing is what reconciles
 // against the authoritative team totals. Deduplicating instead would silently drop
 // production.
+//
+// It returns nil for a snapshot whose totals cannot be summed without overflowing
+// int64. Callers must check: the returned cycle is dereferenced immediately by every
+// path that uses one, so an unchecked nil is a panic in the ingest loop rather than a
+// rejected cycle. Callers that want the reason rather than a bare nil should run
+// ValidateSnapshot themselves first, which is what service.applyCycle does — this
+// guard exists so that a caller which forgets cannot corrupt the model instead.
 func (s *State) Apply(at time.Time, teams []parse.TeamRow, users []parse.UserRow) *Cycle {
 	if ValidateSnapshot(teams, users) != nil {
 		return nil

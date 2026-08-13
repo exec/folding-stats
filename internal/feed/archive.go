@@ -63,7 +63,12 @@ func (a *Archive) Store(ctx context.Context, f *Fetcher, k Kind, prev Validator)
 	tmpName := tmp.Name()
 	defer func() {
 		tmp.Close()
-		os.Remove(tmpName) // no-op once renamed away
+		// Load-bearing, despite reading like cleanup for the failure path. The payload
+		// is published with os.Link rather than os.Rename — so that an existing
+		// snapshot is never silently overwritten — and a link leaves the temporary
+		// name in place. Without this every archived snapshot would strand a
+		// .partial-* file beside it forever.
+		os.Remove(tmpName)
 	}()
 
 	// zstd over gzip: ~15% smaller and several times faster to decompress, which
