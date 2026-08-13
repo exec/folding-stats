@@ -54,6 +54,7 @@ const (
 type conn struct {
 	ws    *websocket.Conn
 	send  chan []byte
+	done  chan struct{}
 	key   string // this party's public key
 	owner string // the owner it belongs to; for a browser, itself
 	agent bool
@@ -61,7 +62,7 @@ type conn struct {
 }
 
 func (c *conn) close() {
-	c.once.Do(func() { close(c.send) })
+	c.once.Do(func() { close(c.done) })
 }
 
 // push queues a frame, dropping the connection rather than blocking the hub.
@@ -75,6 +76,8 @@ func (c *conn) push(v any) {
 		return
 	}
 	select {
+	case <-c.done:
+		return
 	case c.send <- b:
 	default:
 		c.close()
@@ -83,10 +86,8 @@ func (c *conn) push(v any) {
 
 // Hub routes frames between owners and their machines.
 type Hub struct {
-	store  *Store
-	log    *slog.Logger
-	nonces *nonces
-
+	store   *Store
+	log     *slog.Logger
 	mu      sync.RWMutex
 	agents  map[string]*conn   // machine key -> agent
 	owners  map[string][]*conn // owner key  -> browsers
@@ -98,7 +99,6 @@ func New(store *Store, log *slog.Logger) *Hub {
 	return &Hub{
 		store:  store,
 		log:    log,
-		nonces: newNonces(),
 		limit:  newLimiter(),
 		agents: map[string]*conn{},
 		owners: map[string][]*conn{},
@@ -171,6 +171,13 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request, agent bool) {
 		ws.Close()
 		return
 	}
+	if !h.limit.admit(ip, agent) {
+		_ = ws.SetWriteDeadline(time.Now().Add(writeWait))
+		_ = ws.WriteJSON(Frame{Type: p.TypeError, Error: "too many active relay connections"})
+		ws.Close()
+		return
+	}
+	defer h.limit.release(ip, agent)
 	h.limit.succeeded(ip)
 
 	// Success has to say so. Without an acknowledgement a client cannot tell an
@@ -225,7 +232,7 @@ func (h *Hub) authenticate(ws *websocket.Conn, agent bool) (*conn, error) {
 	}
 
 	now := time.Now().UTC()
-	c := &conn{ws: ws, send: make(chan []byte, 64), key: f.Key, agent: agent}
+	c := &conn{ws: ws, send: make(chan []byte, 64), done: make(chan struct{}), key: f.Key, agent: agent}
 
 	if !agent {
 		// A browser owns itself. There is nothing to enrol and nothing to look up: the
@@ -243,10 +250,7 @@ func (h *Hub) authenticate(ws *websocket.Conn, agent bool) (*conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !h.nonces.use(f.Enrol.Nonce, f.Enrol.Exp, now) {
-			return nil, errText("enrolment token has already been used")
-		}
-		if m, err = h.store.Enrol(f.Key, b64(owner), f.Name, now); err != nil {
+		if m, err = h.store.EnrolToken(f.Key, b64(owner), f.Name, f.Enrol.Nonce, f.Enrol.Exp, now); err != nil {
 			return nil, err
 		}
 		h.log.Info("machine enrolled", "machine", short(f.Key), "owner", short(m.Owner), "name", f.Name)
@@ -442,12 +446,11 @@ func (h *Hub) writer(c *conn) {
 	}()
 	for {
 		select {
-		case b, ok := <-c.send:
-			if !ok {
-				_ = c.ws.SetWriteDeadline(time.Now().Add(writeWait))
-				_ = c.ws.WriteMessage(websocket.CloseMessage, nil)
-				return
-			}
+		case <-c.done:
+			_ = c.ws.SetWriteDeadline(time.Now().Add(writeWait))
+			_ = c.ws.WriteMessage(websocket.CloseMessage, nil)
+			return
+		case b := <-c.send:
 			_ = c.ws.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.ws.WriteMessage(websocket.TextMessage, b); err != nil {
 				return

@@ -53,6 +53,87 @@ func testHub(t *testing.T) (*httptest.Server, *Hub) {
 	return httptest.NewServer(h.Handler()), h
 }
 
+func TestPushAfterQueueClosureDoesNotPanic(t *testing.T) {
+	c := &conn{send: make(chan []byte, 1), done: make(chan struct{})}
+	c.push([]byte("fills queue"))
+	c.push([]byte("closes connection"))
+	c.push([]byte("must not send to a closed channel"))
+}
+
+func TestAuthenticatedConnectionsAreBounded(t *testing.T) {
+	oldGlobal, oldAddress, oldOwners := MaxActiveConnections, MaxActivePerAddress, MaxActiveOwners
+	MaxActiveConnections, MaxActivePerAddress, MaxActiveOwners = 3, 2, 1
+	t.Cleanup(func() { MaxActiveConnections, MaxActivePerAddress, MaxActiveOwners = oldGlobal, oldAddress, oldOwners })
+
+	l := newLimiter()
+	if !l.admit("a", false) || l.admit("b", false) {
+		t.Fatal("owner reserve was not enforced")
+	}
+	if !l.admit("a", true) || l.admit("a", true) || !l.admit("b", true) || l.admit("c", true) {
+		t.Fatal("active connection limits were not enforced")
+	}
+	l.release("a", true)
+	if !l.admit("c", true) {
+		t.Fatal("released capacity was not reusable")
+	}
+}
+
+func TestEnrolmentTokenRemainsSpentAfterForgetAndRestart(t *testing.T) {
+	path := t.TempDir() + "/machines.json"
+	now := time.Now().UTC()
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EnrolToken("machine-1", "owner", "one", "nonce", now.Add(time.Hour).Unix(), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Forget("machine-1", "owner"); err != nil {
+		t.Fatal(err)
+	}
+	s, err = OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EnrolToken("machine-2", "owner", "two", "nonce", now.Add(time.Hour).Unix(), now); err == nil {
+		t.Fatal("spent token became reusable after forget and restart")
+	}
+}
+
+func TestStoreBoundsPersistentResources(t *testing.T) {
+	oldMachines, oldName, oldNonce, oldSpent, oldRate := MaxMachines, MaxNameBytes, MaxNonceBytes, MaxSpentNonces, MaxEnrolmentsPerMinute
+	MaxMachines, MaxNameBytes, MaxNonceBytes, MaxSpentNonces, MaxEnrolmentsPerMinute = 1, 4, 4, 1, 1
+	t.Cleanup(func() {
+		MaxMachines, MaxNameBytes, MaxNonceBytes, MaxSpentNonces, MaxEnrolmentsPerMinute = oldMachines, oldName, oldNonce, oldSpent, oldRate
+	})
+	s, err := OpenStore(t.TempDir() + "/machines.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Enrol("one", "owner", "12345", time.Now()); err == nil {
+		t.Fatal("overlong persistent name was accepted")
+	}
+	if _, err := s.Enrol("one", "owner", "ok", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Enrol("two", "another", "ok", time.Now()); err == nil {
+		t.Fatal("global machine cap was not enforced")
+	}
+	if _, err := s.EnrolToken("two", "owner", "ok", "12345", time.Now().Add(time.Hour).Unix(), time.Now()); err == nil {
+		t.Fatal("overlong persistent nonce was accepted")
+	}
+	if _, err := s.EnrolToken("one", "owner", "ok", "1234", time.Now().Add(time.Hour).Unix(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EnrolToken("one", "owner", "ok", "abcd", time.Now().Add(time.Hour).Unix(), time.Now()); err == nil {
+		t.Fatal("spent nonce cardinality cap was not enforced")
+	}
+	MaxSpentNonces = 2
+	if _, err := s.EnrolToken("one", "owner", "ok", "abcd", time.Now().Add(time.Hour).Unix(), time.Now()); err == nil || !strings.Contains(err.Error(), "rate limit") {
+		t.Fatalf("enrolment rate limit error = %v", err)
+	}
+}
+
 // dial connects and completes the challenge, returning the socket and any refusal.
 func dial(t *testing.T, srv *httptest.Server, path string, p party, role string, f func(*Frame)) (*websocket.Conn, string) {
 	t.Helper()

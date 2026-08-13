@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"path/filepath"
 	"testing"
 	"time"
@@ -86,5 +87,12 @@ func TestMaintenanceMarkerRoundTrips(t *testing.T) {
 	if due := nextDue(got, time.Date(2026, 8, 12, 5, 0, 0, 0, time.UTC)); !due.Equal(
 		time.Date(2026, 8, 13, 4, 17, 0, 0, time.UTC)) {
 		t.Errorf("a restart moved the next pass to %v, want the day after the last run", due)
+	}
+}
+
+func TestHTTPServerBoundsSlowRequestBodies(t *testing.T) {
+	srv := newHTTPServer(":0", http.NewServeMux())
+	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 {
+		t.Fatalf("request timeouts are not bounded: header=%v body=%v", srv.ReadHeaderTimeout, srv.ReadTimeout)
 	}
 }

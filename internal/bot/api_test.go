@@ -99,3 +99,23 @@ func TestOrdinaryRoutesStayCached(t *testing.T) {
 		t.Errorf("origin saw %d requests, want 1 — the data is immutable between publishes", n)
 	}
 }
+
+func TestAttackerChosenSearchesAreNeverCached(t *testing.T) {
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		fmt.Fprint(w, `{"snapshot":{"at":"2026-08-11T06:51:11Z"},"data":[]}`)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	for range 3 {
+		var got []any
+		if _, err := c.Get(context.Background(), "/v1/search?q=attacker-controlled", &got); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := hits.Load(); n != 3 {
+		t.Fatalf("search origin saw %d requests, want 3; attacker-controlled keys entered the cache", n)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"io/fs"
 	"os"
@@ -101,10 +102,22 @@ func (a *Archive) Store(ctx context.Context, f *Fetcher, k Kind, prev Validator)
 	if err := tmp.Close(); err != nil {
 		return Result{}, err
 	}
-	if err := os.Rename(tmpName, filepath.Join(dir, base+payloadExt)); err != nil {
-		return Result{}, err
+	payloadPath := filepath.Join(dir, base+payloadExt)
+	if err := os.Link(tmpName, payloadPath); err != nil {
+		if !errors.Is(err, fs.ErrExist) {
+			return Result{}, err
+		}
+		var existing Meta
+		if err := readJSON(filepath.Join(dir, base+metaExt), &existing); err != nil {
+			return Result{}, fmt.Errorf("feed %s: snapshot collision without readable metadata: %w", k, err)
+		}
+		if existing.SHA256 != res.Meta.SHA256 {
+			return Result{}, fmt.Errorf("feed %s: conflicting snapshot already exists at %s", k, res.Meta.SnapshotAt.Format(time.RFC3339))
+		}
+		return Result{Feed: k, NotModified: true, Meta: existing}, nil
 	}
 	if err := writeJSON(filepath.Join(dir, base+metaExt), res.Meta); err != nil {
+		_ = os.Remove(payloadPath)
 		return Result{}, err
 	}
 	return res, nil
@@ -202,7 +215,7 @@ func (s Snapshot) Open() (io.ReadCloser, error) {
 		f.Close()
 		return nil, err
 	}
-	return &zstdReadCloser{dec: dec, f: f}, nil
+	return &zstdReadCloser{dec: dec, f: f, meta: s.Meta, digest: sha256.New()}, nil
 }
 
 // skipDir reports whether a date-shard directory lies entirely before since.
@@ -237,11 +250,45 @@ func (a *Archive) base(k Kind, at time.Time) string {
 }
 
 type zstdReadCloser struct {
-	dec *zstd.Decoder
-	f   *os.File
+	dec    *zstd.Decoder
+	f      *os.File
+	meta   Meta
+	digest hash.Hash
+	n      int64
+	err    error
 }
 
-func (z *zstdReadCloser) Read(p []byte) (int, error) { return z.dec.Read(p) }
+func (z *zstdReadCloser) Read(p []byte) (int, error) {
+	if z.err != nil {
+		return 0, z.err
+	}
+	remaining := maxDecodedBytes - z.n
+	if remaining < 0 {
+		z.err = fmt.Errorf("archive payload exceeds %d decoded bytes", maxDecodedBytes)
+		return 0, z.err
+	}
+	if int64(len(p)) > remaining+1 {
+		p = p[:remaining+1]
+	}
+	n, err := z.dec.Read(p)
+	if z.n+int64(n) > maxDecodedBytes {
+		z.err = fmt.Errorf("archive payload exceeds %d decoded bytes", maxDecodedBytes)
+		return 0, z.err
+	}
+	z.n += int64(n)
+	_, _ = z.digest.Write(p[:n])
+	if err == io.EOF {
+		if z.meta.Bytes > 0 && z.n != z.meta.Bytes {
+			z.err = fmt.Errorf("archive payload is %d bytes, metadata says %d", z.n, z.meta.Bytes)
+			return n, z.err
+		}
+		if z.meta.SHA256 != "" && hex.EncodeToString(z.digest.Sum(nil)) != z.meta.SHA256 {
+			z.err = fmt.Errorf("archive payload checksum does not match metadata")
+			return n, z.err
+		}
+	}
+	return n, err
+}
 func (z *zstdReadCloser) Close() error {
 	z.dec.Close() // returns nothing; releases decoder goroutines
 	return z.f.Close()
@@ -311,8 +358,24 @@ func (a *Archive) Put(k Kind, at time.Time, r io.Reader) (Meta, error) {
 	if err := f.Close(); err != nil {
 		return Meta{}, err
 	}
-	if err := os.Rename(tmpName, filepath.Join(dir, base+payloadExt)); err != nil {
+	payloadPath := filepath.Join(dir, base+payloadExt)
+	metaPath := filepath.Join(dir, base+metaExt)
+	if err := os.Link(tmpName, payloadPath); err != nil {
+		if !errors.Is(err, fs.ErrExist) {
+			return Meta{}, err
+		}
+		var existing Meta
+		if err := readJSON(metaPath, &existing); err != nil {
+			return Meta{}, fmt.Errorf("feed %s: snapshot collision without readable metadata: %w", k, err)
+		}
+		if existing.SHA256 != meta.SHA256 {
+			return Meta{}, fmt.Errorf("feed %s: conflicting snapshot already exists at %s", k, at.UTC().Format(time.RFC3339))
+		}
+		return existing, nil
+	}
+	if err := writeJSON(metaPath, meta); err != nil {
+		_ = os.Remove(payloadPath)
 		return Meta{}, err
 	}
-	return meta, writeJSON(filepath.Join(dir, base+metaExt), meta)
+	return meta, nil
 }

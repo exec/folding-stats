@@ -38,6 +38,10 @@ const (
 	// maxNumericTail is the slack added to a name bound to get a whole-record
 	// bound: three 19-digit integers plus separators, rounded up.
 	maxNumericTail = 64
+
+	// Team identifiers are sparse upstream values, but publication uses them as
+	// dense indexes. This is far above the observed corpus and bounds allocations.
+	MaxTeamID = 10_000_000
 )
 
 // TeamRow is one row of daily_team_summary.txt.
@@ -86,9 +90,7 @@ type scanner[T any] struct {
 
 func newScanner[T any](r io.Reader, maxRec int, parse func([]string) (T, bool)) *scanner[T] {
 	return &scanner[T]{
-		// 1 MiB buffer: comfortably above any plausible line length, so ReadString
-		// never has to stitch partial reads for well-formed input.
-		br:     bufio.NewReaderSize(r, 1<<20),
+		br:     bufio.NewReaderSize(r, maxRec+2),
 		parse:  parse,
 		maxRec: maxRec,
 	}
@@ -107,13 +109,19 @@ func (s *scanner[T]) Scan() bool {
 	}
 
 	for {
-		line, err := s.br.ReadString('\n')
-		atEOF := err == io.EOF
-		if err != nil && !atEOF {
+		line, atEOF, tooLong, err := s.readLine()
+		if err != nil {
 			s.err = err
 			return false
 		}
-		line = strings.TrimSuffix(line, "\n")
+		if tooLong {
+			s.stats.Malformed += len(s.pending) + 1
+			s.pending = s.pending[:0]
+			if atEOF {
+				return false
+			}
+			continue
+		}
 
 		if line == "" && atEOF {
 			// Trailing newline at EOF is not a record. Anything still pending
@@ -150,21 +158,44 @@ func (s *scanner[T]) Scan() bool {
 	}
 }
 
+func (s *scanner[T]) readLine() (string, bool, bool, error) {
+	b, err := s.br.ReadSlice('\n')
+	if err == bufio.ErrBufferFull {
+		for err == bufio.ErrBufferFull {
+			_, err = s.br.ReadSlice('\n')
+		}
+		if err != nil && err != io.EOF {
+			return "", false, true, err
+		}
+		return "", err == io.EOF, true, nil
+	}
+	if err != nil && err != io.EOF {
+		return "", false, false, err
+	}
+	return strings.TrimSuffix(string(b), "\n"), err == io.EOF, false, nil
+}
+
 // readPreamble consumes the timestamp and header lines.
 func (s *scanner[T]) readPreamble() bool {
-	ts, err := s.br.ReadString('\n')
-	if err != nil && err != io.EOF {
+	ts, _, tooLong, err := s.readLine()
+	if err != nil || tooLong {
+		if tooLong {
+			err = fmt.Errorf("parse: timestamp line too long")
+		}
 		s.err = err
 		return false
 	}
-	s.stats.Timestamp = strings.TrimRight(ts, "\r\n")
+	s.stats.Timestamp = strings.TrimRight(ts, "\r")
 
-	hdr, err := s.br.ReadString('\n')
-	if err != nil && err != io.EOF {
+	hdr, _, tooLong, err := s.readLine()
+	if err != nil || tooLong {
+		if tooLong {
+			err = fmt.Errorf("parse: header line too long")
+		}
 		s.err = err
 		return false
 	}
-	s.stats.Header = strings.TrimRight(hdr, "\r\n")
+	s.stats.Header = strings.TrimRight(hdr, "\r")
 
 	if s.stats.Timestamp == "" {
 		s.err = fmt.Errorf("parse: empty feed")
@@ -262,7 +293,7 @@ func atoi64(s string) (int64, bool) {
 
 func atoi32(s string) (int32, bool) {
 	v, ok := atoi64(s)
-	if !ok || v > 2147483647 {
+	if !ok || v > MaxTeamID {
 		return 0, false
 	}
 	return int32(v), true

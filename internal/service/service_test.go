@@ -102,6 +102,42 @@ func TestIngestAppliesArchivedCycles(t *testing.T) {
 	}
 }
 
+func TestIngestFailStopsAfterCommitFailure(t *testing.T) {
+	dir := t.TempDir()
+	a := seed(t, dir, twoCycles()[:1])
+	svc, srv, db := newService(t, dir, a)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, first := svc.Ingest(context.Background())
+	if first == nil || !strings.Contains(first.Error(), "restart required") {
+		t.Fatalf("first Ingest error = %v, want fail-stop error", first)
+	}
+	_, second := svc.Ingest(context.Background())
+	if second == nil || second.Error() != first.Error() {
+		t.Fatalf("second Ingest error = %v, want persistent %v", second, first)
+	}
+	if srv.Current() != nil {
+		t.Fatal("uncommitted state was published")
+	}
+}
+
+func TestIngestBoundsParsedRowCardinality(t *testing.T) {
+	dir := t.TempDir()
+	a := seed(t, dir, twoCycles()[:1])
+	teams, _ := a.List(feed.Teams)
+	users, _ := a.List(feed.Users)
+	oldTeams, oldUsers := maxTeamRows, maxUserRows
+	maxTeamRows, maxUserRows = 1, 1
+	t.Cleanup(func() { maxTeamRows, maxUserRows = oldTeams, oldUsers })
+	if _, _, err := readTeams(teams[0]); err == nil || !strings.Contains(err.Error(), "team feed exceeds") {
+		t.Fatalf("readTeams error = %v", err)
+	}
+	if _, _, err := readUsers(users[0]); err == nil || !strings.Contains(err.Error(), "user feed exceeds") {
+		t.Fatalf("readUsers error = %v", err)
+	}
+}
+
 func TestIngestIsIdempotent(t *testing.T) {
 	// Ingest runs on every archived snapshot and on a timer; re-running must not
 	// double-count or reapply anything.

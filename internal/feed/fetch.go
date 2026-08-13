@@ -108,6 +108,9 @@ func (f *Fetcher) Fetch(ctx context.Context, k Kind, prev Validator, sink io.Wri
 	default:
 		return Result{}, fmt.Errorf("feed %s: unexpected status %s", k, resp.Status)
 	}
+	if resp.ContentLength > maxWireBytes {
+		return Result{}, fmt.Errorf("feed %s: response is %d bytes, limit is %d", k, resp.ContentLength, maxWireBytes)
+	}
 
 	meta := Meta{
 		Feed:         k,
@@ -119,7 +122,7 @@ func (f *Fetcher) Fetch(ctx context.Context, k Kind, prev Validator, sink io.Wri
 	meta.SnapshotAt = snapshotTime(meta.LastModified, meta.FetchedAt, meta.FetchedAt)
 
 	// Count what crossed the wire before anything decompresses it.
-	wire := &countingReader{r: resp.Body}
+	wire := &countingReader{r: io.LimitReader(resp.Body, maxWireBytes+1)}
 	var src io.Reader = wire
 	if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
 		zr, err := gzip.NewReader(wire)
@@ -134,7 +137,7 @@ func (f *Fetcher) Fetch(ctx context.Context, k Kind, prev Validator, sink io.Wri
 	counter := &countingWriter{}
 	// Order matters: tee into the digest and byte counter as the body streams past,
 	// so a single pass produces payload, checksum and size together.
-	body := io.TeeReader(src, io.MultiWriter(digest, counter))
+	body := io.TeeReader(io.LimitReader(src, maxDecodedBytes+1), io.MultiWriter(digest, counter))
 
 	br := bufio.NewReaderSize(body, 256<<10)
 	first, err := peekFirstLine(br)
@@ -143,8 +146,15 @@ func (f *Fetcher) Fetch(ctx context.Context, k Kind, prev Validator, sink io.Wri
 	}
 	meta.FeedTimestamp = first
 
-	if _, err := io.Copy(sink, br); err != nil {
-		return Result{}, fmt.Errorf("feed %s: streaming body: %w", k, err)
+	_, copyErr := io.Copy(sink, br)
+	if wire.n > maxWireBytes {
+		return Result{}, fmt.Errorf("feed %s: wire body exceeds %d bytes", k, maxWireBytes)
+	}
+	if counter.n > maxDecodedBytes {
+		return Result{}, fmt.Errorf("feed %s: decoded body exceeds %d bytes", k, maxDecodedBytes)
+	}
+	if copyErr != nil {
+		return Result{}, fmt.Errorf("feed %s: streaming body: %w", k, copyErr)
 	}
 
 	meta.Bytes = counter.n

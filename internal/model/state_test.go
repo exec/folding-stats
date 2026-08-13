@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -34,6 +35,23 @@ func TestFirstSightingIsNotProduction(t *testing.T) {
 	// The totals must still be recorded, or the next cycle's delta would be wrong.
 	if s.Members[0].Score != 2_290_929_677 {
 		t.Errorf("member score = %d, want 2290929677", s.Members[0].Score)
+	}
+}
+
+func TestOverflowingSnapshotIsRejectedBeforeMutation(t *testing.T) {
+	s := NewState()
+	rows := users(
+		parse.UserRow{Name: "a", Score: math.MaxInt64, WUs: 1, TeamID: 1},
+		parse.UserRow{Name: "b", Score: 1, WUs: 1, TeamID: 1},
+	)
+	if err := ValidateSnapshot(nil, rows); err == nil {
+		t.Fatal("overflowing aggregate was accepted")
+	}
+	if cycle := s.Apply(t0(), nil, rows); cycle != nil {
+		t.Fatalf("Apply returned a cycle for unsafe input: %+v", cycle)
+	}
+	if len(s.Members) != 0 || !s.At.IsZero() {
+		t.Fatalf("state mutated after rejected input: members=%d at=%v", len(s.Members), s.At)
 	}
 }
 
