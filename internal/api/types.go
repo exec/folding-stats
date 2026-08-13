@@ -326,6 +326,17 @@ type Team struct {
 	Name   string `json:"name"`
 	Rank   int32  `json:"rank"`
 
+	// Tie is how many entities share the value that produced this rank, counting this
+	// one. 1 means the rank is unique.
+	//
+	// Ranks here are ordinal, as they are on every site that publishes them: equal
+	// values still take consecutive positions, ordered by whichever was seen first.
+	// That is deterministic and it is also arbitrary — 2,139,090 of 2,710,286 members
+	// share a lifetime score with somebody — so for most of the corpus the number after
+	// "rank" is a tiebreak rather than a placing. This says how wide the tie is without
+	// making the rank an array, which is not what anybody asking for their rank wants.
+	Tie int32 `json:"tie"`
+
 	// RankChange24h is places gained since 24 hours ago, negative for places lost.
 	//
 	// A pointer because absent and zero are different answers: zero means the rank
@@ -362,6 +373,15 @@ type Member struct {
 	RankGlobal int32  `json:"rank_global"`
 	RankInTeam int32  `json:"rank_in_team"`
 
+	// TieGlobal is how many members share the lifetime score that produced
+	// rank_global, counting this one; 1 means it is unique. See Donor.Tie.
+	//
+	// There is deliberately no in-team equivalent yet: rank_in_team is a position
+	// within one roster, so the tie would have to be measured against that roster
+	// rather than the global order, and the global answer is the one a reader is
+	// comparing against two million people with.
+	TieGlobal int32 `json:"tie_global"`
+
 	// RankChange24h tracks rank_global. In-team movement is not reported: it is
 	// derived by walking the global order, so it would need a second historical
 	// pass per team to answer a question nobody has asked for.
@@ -377,6 +397,17 @@ type Member struct {
 type Donor struct {
 	Name string `json:"name"`
 	Rank int32  `json:"rank"`
+
+	// Tie is how many entities share the value that produced this rank, counting this
+	// one. 1 means the rank is unique.
+	//
+	// Ranks here are ordinal, as they are on every site that publishes them: equal
+	// values still take consecutive positions, ordered by whichever was seen first.
+	// That is deterministic and it is also arbitrary — 2,139,090 of 2,710,286 members
+	// share a lifetime score with somebody — so for most of the corpus the number after
+	// "rank" is a tiebreak rather than a placing. This says how wide the tie is without
+	// making the rank an array, which is not what anybody asking for their rank wants.
+	Tie int32 `json:"tie"`
 
 	// RankChange24h is places gained since 24 hours ago; see Team.RankChange24h for
 	// why it is a pointer.
@@ -482,7 +513,29 @@ type SearchResults struct {
 }
 
 // APIError is the error body. One shape for every failure.
+//
+// RFC 9457 problem details, served as application/problem+json. The standard exists so
+// a generic client can say something useful about a failure it has never seen, and it
+// costs nothing to speak it: type identifies the kind of problem, title names it,
+// status repeats the HTTP code for readers who only have the body, and detail is what
+// went wrong this time.
+//
+// error and message are kept beside them. RFC 9457 allows extension members precisely
+// so an existing shape can gain the standard one without breaking anybody, and both
+// this project's own bot and any early caller read those two keys.
+//
+// Type is a URN rather than a URL. The RFC only requires a URI, and prefers one that
+// dereferences to documentation — but a link that 404s is a worse promise than no link,
+// and these have no page of their own yet.
 type APIError struct {
+	Type   string `json:"type"`
+	Title  string `json:"title"`
+	Status int    `json:"status"`
+	Detail string `json:"detail"`
+	// Instance is the path that produced it, which matters when an error is quoted
+	// back without the request beside it.
+	Instance string `json:"instance,omitempty"`
+
 	Error   string `json:"error"`
 	Message string `json:"message"`
 }
