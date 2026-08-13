@@ -1,3 +1,25 @@
+// Package relay forwards frames between a browser and the folding agents it owns.
+//
+// It exists because a browser cannot reach a folding client directly. The client binds
+// loopback and has no authentication, so it must never face the network; and a page
+// served over HTTPS cannot open an insecure websocket to a public address at all —
+// Chrome rejects it at construction, before any connection is attempted. Even with a
+// certificate on every box, most machines worth folding on sit behind NAT with no
+// inbound port. An outbound connection from the machine solves all three at once, and
+// something has to be on the other end of it.
+//
+// The relay is deliberately incurious. It verifies that a connection holds a private
+// key, that the key belongs to an owner, and then it moves opaque frames between the
+// two. It does not parse the folding protocol, store any folding data, or hold a
+// credential belonging to anybody.
+//
+// The wire format lives in relayproto, shared with the agent, because both ends have
+// to build the signed bytes identically.
+//
+// Enrolment replay is prevented in the store rather than here, so that a spent nonce
+// survives a restart — see EnrolToken. This documentation lived in auth.go, which was
+// removed when that moved; it is the only description of why this package exists, so
+// it moved with the rest rather than going with the file.
 package relay
 
 import (
