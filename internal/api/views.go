@@ -40,6 +40,7 @@ func (s *Snapshot) teamView(slot int32) Team {
 		TeamID:        t.ID,
 		Name:          s.State.Names.Name(t.NameID),
 		Rank:          s.Ranks.TeamRankOf(slot),
+		Tie:           s.teamTie(s.Ranks.TeamRankOf(slot)),
 		RankChange24h: change(s.Ranks.TeamChange24h(slot)),
 		MembersTotal:  total,
 		MembersActive: active,
@@ -65,6 +66,7 @@ func (s *Snapshot) memberView(slot int32, withTeamName bool) Member {
 		Name:          s.State.Names.Name(m.NameID),
 		TeamID:        m.TeamID,
 		RankGlobal:    s.Ranks.MemberRankOf(slot),
+		TieGlobal:     s.memberTie(s.Ranks.MemberRankOf(slot)),
 		RankInTeam:    s.Ranks.InTeamRankOf(slot),
 		RankChange24h: change(s.Ranks.MemberChange24h(slot)),
 		Production: Production{
@@ -103,6 +105,7 @@ func (s *Snapshot) donorView(idx int32, detail bool) Donor {
 	out := Donor{
 		Name:             s.State.Names.Name(d.NameID),
 		Rank:             idx + 1,
+		Tie:              s.donorTie(idx + 1),
 		RankChange24h:    change(s.Ranks.DonorChange24h(idx)),
 		TeamCount:        d.TeamCount,
 		LikelyNotAPerson: d.LikelyNotAPerson,
@@ -432,4 +435,61 @@ func (s *Snapshot) orderRoster(slots []int32, k rank.SortKey, activeOnly bool, l
 		}
 	}
 	return out
+}
+
+// tieAt reports how many entities share the value that put this one at rank, counting
+// itself. One means the rank is unique.
+//
+// Ranks are ordinal here, as they are on every site that publishes them: equal values
+// still get consecutive positions, broken by which entity was seen first. That is
+// deterministic, and it is also arbitrary — 2,139,090 of 2,710,286 members share a
+// lifetime score with somebody, so for most of the corpus the number after "rank" is a
+// tiebreak rather than a placing. Reporting the width of the tie keeps the integer
+// people actually want while saying how much of it is real.
+//
+// The order is sorted by the value, so equal values are contiguous and the run is two
+// binary searches: no per-entity precomputation and nothing to keep in memory, which
+// matters when the largest run is most of the corpus.
+func tieAt(n int, rank int32, score func(i int) int64) int32 {
+	i := int(rank) - 1
+	if rank <= 0 || i >= n {
+		return 0
+	}
+	v := score(i)
+	lo, hi := 0, i // first index holding v
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if score(mid) > v {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	first := lo
+	lo, hi = i, n-1 // last index holding v
+	for lo < hi {
+		mid := int(uint(lo+hi+1) >> 1)
+		if score(mid) < v {
+			hi = mid - 1
+		} else {
+			lo = mid
+		}
+	}
+	return int32(lo - first + 1)
+}
+
+func (s *Snapshot) teamTie(rank int32) int32 {
+	return tieAt(len(s.Ranks.TeamOrder), rank, func(i int) int64 {
+		return s.State.Teams[s.Ranks.TeamOrder[i]].Score
+	})
+}
+
+func (s *Snapshot) memberTie(rank int32) int32 {
+	return tieAt(len(s.Ranks.MemberOrder), rank, func(i int) int64 {
+		return s.State.Members[s.Ranks.MemberOrder[i]].Score
+	})
+}
+
+func (s *Snapshot) donorTie(rank int32) int32 {
+	return tieAt(len(s.Ranks.Donors), rank, func(i int) int64 { return s.Ranks.Donors[i].Score })
 }

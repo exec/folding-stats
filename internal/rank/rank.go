@@ -180,12 +180,31 @@ const (
 	Teams   SortKey = "teams"
 )
 
-// sortAliases keeps the first published names working. daily/weekly/monthly shipped
-// before per_day existed, at which point "daily" became ambiguous with it.
+// sortAliases keeps the first published names working, and lets a caller sort by the
+// name of the field they can see.
+//
+// The two vocabularies were unrelated: a row carries points_per_day_24h_avg and the
+// ordering that produces it is called per_day, with nothing in either name pointing at
+// the other. A consumer had to read prose to connect them, and there is no reason a
+// field name should not simply work.
+//
+// daily/weekly/monthly shipped before per_day existed, at which point "daily" became
+// ambiguous with it.
 var sortAliases = map[SortKey]SortKey{
 	"daily":   Today,
 	"weekly":  ThisWeek,
 	"monthly": ThisMonth,
+
+	// The field each ordering ranks by, exactly as it appears in a response.
+	"points_total":           Lifetime,
+	"points_per_day_24h_avg": PerDay,
+	"points_today_utc":       Today,
+	"points_this_week_utc":   ThisWeek,
+	"points_this_month_utc":  ThisMonth,
+	"points_last_24h":        Last24h,
+	"wus_total":              WUs,
+	"members_total":          Members,
+	"team_count":             Teams,
 }
 
 // NormalizeSort resolves an alias and reports whether the result is a known ordering.

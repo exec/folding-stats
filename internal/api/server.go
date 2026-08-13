@@ -47,27 +47,27 @@ func (s *Server) Current() *Snapshot { return s.snap.Load() }
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/status", s.handle(s.status))
 	s.mux.HandleFunc("GET /v1/summary", s.handle(s.summary))
-	s.mux.HandleFunc("GET /v1/summary/history", s.handle(s.projectHistory))
+	s.mux.HandleFunc("GET /v1/summary/history", s.handle(s.projectHistory, "granularity", "from", "to", "metric"))
 	s.mux.HandleFunc("GET /v1/posts", s.handle(s.posts))
 	s.mux.HandleFunc("GET /v1/posts/{slug}", s.handle(s.post))
 
-	s.mux.HandleFunc("GET /v1/teams", s.handle(s.teams))
+	s.mux.HandleFunc("GET /v1/teams", s.handle(s.teams, "sort", "page", "per_page"))
 	s.mux.HandleFunc("GET /v1/teams/{id}", s.handle(s.team))
-	s.mux.HandleFunc("GET /v1/teams/{id}/members", s.handle(s.teamMembers))
-	s.mux.HandleFunc("GET /v1/teams/{id}/history", s.handle(s.teamHistory))
-	s.mux.HandleFunc("GET /v1/teams/{id}/rivals", s.handle(s.teamRivals))
+	s.mux.HandleFunc("GET /v1/teams/{id}/members", s.handle(s.teamMembers, "sort", "active_only", "page", "per_page"))
+	s.mux.HandleFunc("GET /v1/teams/{id}/history", s.handle(s.teamHistory, "granularity", "from", "to", "metric"))
+	s.mux.HandleFunc("GET /v1/teams/{id}/rivals", s.handle(s.teamRivals, "page", "per_page"))
 
-	s.mux.HandleFunc("GET /v1/donors", s.handle(s.donors))
-	s.mux.HandleFunc("GET /v1/donors/{name}", s.handle(s.donor))
-	s.mux.HandleFunc("GET /v1/donors/{name}/teams", s.handle(s.donorTeams))
-	s.mux.HandleFunc("GET /v1/donors/{name}/history", s.handle(s.donorHistory))
-	s.mux.HandleFunc("GET /v1/donors/{name}/rivals", s.handle(s.donorRivals))
+	s.mux.HandleFunc("GET /v1/donors", s.handle(s.donors, "sort", "page", "per_page"))
+	s.mux.HandleFunc("GET /v1/donors/{name}", s.handle(s.donor, "sort"))
+	s.mux.HandleFunc("GET /v1/donors/{name}/teams", s.handle(s.donorTeams, "sort", "page", "per_page"))
+	s.mux.HandleFunc("GET /v1/donors/{name}/history", s.handle(s.donorHistory, "team_id", "granularity", "from", "to", "metric"))
+	s.mux.HandleFunc("GET /v1/donors/{name}/rivals", s.handle(s.donorRivals, "team_id", "page", "per_page"))
 
-	s.mux.HandleFunc("GET /v1/search", s.handle(s.search))
+	s.mux.HandleFunc("GET /v1/search", s.handle(s.search, "q", "type", "limit"))
 
 	// Incremental sync. Deliberately alongside the collections rather than under them:
 	// it is a different question about all of them, not a sub-resource of any one.
-	s.mux.HandleFunc("GET /v1/changes", s.handle(s.changes))
+	s.mux.HandleFunc("GET /v1/changes", s.handle(s.changes, "since", "kind", "page", "per_page"))
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -115,8 +115,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type handlerFunc func(*Snapshot, *http.Request) (any, *PageInfo, error)
 
 // handle wraps a handler with snapshot resolution, caching headers and the envelope.
-func (s *Server) handle(fn handlerFunc) http.HandlerFunc {
+//
+// allowed is every query parameter this route reads. Anything else is refused rather
+// than ignored: a request that silently does something other than what it says is the
+// worst failure this API can have, because the caller has no way to notice. `?per_pge=1000`
+// returned the default hundred with a 200 and no hint; `?names=DH,Anonymous` returned
+// the entire leaderboard, also with a 200.
+func (s *Server) handle(fn handlerFunc, allowed ...string) http.HandlerFunc {
+	permitted := make(map[string]bool, len(allowed))
+	for _, a := range allowed {
+		permitted[a] = true
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
+		if err := checkQuery(r, permitted, allowed); err != nil {
+			writeAPIErrorFor(w, r, err)
+			return
+		}
 		snap := s.snap.Load()
 		if snap == nil {
 			writeError(w, http.StatusServiceUnavailable, "no_data",
@@ -197,7 +211,7 @@ func (s *Server) handle(fn handlerFunc) http.HandlerFunc {
 			warm = warmingUp(snap)
 		}()
 		if err != nil {
-			writeAPIError(w, err)
+			writeAPIErrorFor(w, r, err)
 			return
 		}
 
@@ -307,18 +321,91 @@ func writeJSON(w http.ResponseWriter, r *http.Request, code int, v any) {
 // writeError writes plainly. Error bodies are a couple of hundred bytes and would
 // never clear the compression threshold, so they do not need the request in hand.
 func writeError(w http.ResponseWriter, code int, kind, msg string) {
+	writeErrorFor(w, nil, code, kind, msg)
+}
+
+// errorTitles are the short, stable names RFC 9457 asks for: one per problem type,
+// never varying with the particulars of an occurrence — that is what detail is for.
+var errorTitles = map[string]string{
+	"bad_request": "Invalid request",
+	"not_found":   "No such entity",
+	"no_data":     "No snapshot yet",
+	"internal":    "Internal error",
+}
+
+func writeErrorFor(w http.ResponseWriter, r *http.Request, code int, kind, msg string) {
 	buf := bufPool.Get().(*bytes.Buffer)
 	buf.Reset()
 	defer bufPool.Put(buf)
 
+	title := errorTitles[kind]
+	if title == "" {
+		title = http.StatusText(code)
+	}
+	body := APIError{
+		Type:    "urn:foldingstats:error:" + kind,
+		Title:   title,
+		Status:  code,
+		Detail:  msg,
+		Error:   kind,
+		Message: msg,
+	}
+	if r != nil {
+		body.Instance = r.URL.Path
+	}
+
 	enc := json.NewEncoder(buf)
 	enc.SetEscapeHTML(false)
-	_ = enc.Encode(APIError{Error: kind, Message: msg})
+	_ = enc.Encode(body)
 
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Type", "application/problem+json; charset=utf-8")
 	w.Header().Set("Content-Length", itoa(buf.Len()))
 	w.WriteHeader(code)
 	_, _ = w.Write(buf.Bytes())
+}
+
+// checkQuery refuses a request naming a parameter this route does not read.
+//
+// Repeats are refused too. net/url keeps every value and Get returns the first, so
+// ?sort=today&sort=wus quietly sorts by today — and worse, both spellings are distinct
+// cache keys for what a caller believes is one request.
+func checkQuery(r *http.Request, permitted map[string]bool, allowed []string) error {
+	q := r.URL.Query()
+	if len(q) == 0 {
+		return nil
+	}
+	var unknown []string
+	for k, v := range q {
+		if !permitted[k] {
+			unknown = append(unknown, k)
+			continue
+		}
+		if len(v) > 1 {
+			return badRequest("%s was given %d times; each parameter may appear once", k, len(v))
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sortStrings(unknown)
+	if len(allowed) == 0 {
+		return badRequest("%s is not a parameter of this endpoint, which takes none",
+			strings.Join(unknown, ", "))
+	}
+	names := append([]string(nil), allowed...)
+	sortStrings(names)
+	return badRequest("%s is not a parameter of this endpoint. It accepts: %s",
+		strings.Join(unknown, ", "), strings.Join(names, ", "))
+}
+
+// sortStrings is an insertion sort, which is the right shape for the handful of names
+// these lists ever hold and avoids pulling sort into this file for it.
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
 }
 
 // statusError carries an HTTP status alongside a message.
@@ -338,12 +425,14 @@ func badRequest(format string, args ...any) error {
 	return &statusError{http.StatusBadRequest, "bad_request", fmt.Sprintf(format, args...)}
 }
 
-func writeAPIError(w http.ResponseWriter, err error) {
+func writeAPIError(w http.ResponseWriter, err error) { writeAPIErrorFor(w, nil, err) }
+
+func writeAPIErrorFor(w http.ResponseWriter, r *http.Request, err error) {
 	if se, ok := err.(*statusError); ok {
-		writeError(w, se.code, se.kind, se.msg)
+		writeErrorFor(w, r, se.code, se.kind, se.msg)
 		return
 	}
-	writeError(w, http.StatusInternalServerError, "internal", err.Error())
+	writeErrorFor(w, r, http.StatusInternalServerError, "internal", err.Error())
 }
 
 // paginate resolves page/per_page and returns the slice bounds for n items.
