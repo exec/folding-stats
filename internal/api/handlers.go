@@ -44,7 +44,7 @@ func (s *Server) summary(snap *Snapshot, _ *http.Request) (any, *PageInfo, error
 		Production: Production{
 			PointsTotal:       t.PointsTotal,
 			WUsTotal:          t.WUsTotal,
-			PointsLastUpdate:  t.PointsLastUpdate,
+			PointsLastCycle:   t.PointsLastCycle,
 			PointsLast24h:     t.PointsLast24h,
 			PointsLast7d:      t.PointsLast7d,
 			PointsTodayUTC:    t.PointsToday,

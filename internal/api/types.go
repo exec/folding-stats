@@ -30,6 +30,13 @@ type SnapshotInfo struct {
 	// NextExpectedAt is when the next upstream publish is due, from the measured
 	// cadence rather than an assumed hour. Subtract At for the interval.
 	NextExpectedAt time.Time `json:"next_expected_at"`
+	// PreviousAt is the publish before this one, so points_last_cycle has a stated
+	// period rather than an assumed one: it covers previous_at to at.
+	//
+	// Absent on the first cycle after a cold start, when there is no previous publish
+	// to name — which is also exactly when points_last_cycle is the whole of a new
+	// entity's history rather than an interval of it.
+	PreviousAt time.Time `json:"previous_at,omitempty"`
 	// Stale means the expected update did not arrive and this data is older than it
 	// should be. Not derivable from the timestamps: it allows a grace period for
 	// routine upstream drift that only the server knows about.
@@ -256,8 +263,17 @@ type Production struct {
 	PointsTotal int64 `json:"points_total"`
 	WUsTotal    int64 `json:"wus_total"`
 
-	// PointsLastUpdate is production in the most recent hourly cycle.
-	PointsLastUpdate int64 `json:"points_last_update"`
+	// PointsLastCycle is production in the most recent publish cycle.
+	//
+	// Named for the cycle rather than the hour because a cycle is not reliably an
+	// hour: the measured interval drifts a few seconds either way and stretches
+	// whenever upstream publishes late. It was points_last_update, which said neither
+	// what the period was nor how long it lasted, so a rate derived from it divided by
+	// an assumption.
+	//
+	// The period is snapshot.previous_at to snapshot.at, both published, so the
+	// denominator is exact rather than assumed.
+	PointsLastCycle int64 `json:"points_last_cycle"`
 
 	// Rolling windows, measured back from the snapshot time.
 	PointsLast24h int64 `json:"points_last_24h"`

@@ -121,11 +121,11 @@ type Totals struct {
 	PointsTotal int64
 	WUsTotal    int64
 
-	PointsLastUpdate int64
-	PointsToday      int64
-	PointsThisWeek   int64
-	PointsLast24h    int64
-	PointsLast7d     int64
+	PointsLastCycle int64
+	PointsToday     int64
+	PointsThisWeek  int64
+	PointsLast24h   int64
+	PointsLast7d    int64
 	// PointsThisMonth is summed from the rollup rather than the windows, so unlike
 	// its neighbours it is filled in after Build, once the month totals are attached.
 	PointsThisMonth int64
@@ -177,7 +177,7 @@ func Build(st *model.State, members, teams *metrics.Window, tbl *rank.Table, s *
 		t.PointsTotal += tm.Score
 		t.WUsTotal += tm.WUs
 		id := int32(slot)
-		t.PointsLastUpdate += teams.LastUpdate(id)
+		t.PointsLastCycle += teams.LastUpdate(id)
 		t.PointsToday += teams.Today(id)
 		t.PointsThisWeek += teams.ThisWeek(id)
 		t.PointsLast24h += teams.Last24h(id)
@@ -193,6 +193,18 @@ func Build(st *model.State, members, teams *metrics.Window, tbl *rank.Table, s *
 	}
 	snap.Totals = t
 	return snap
+}
+
+// PreviousAt is the publish before this snapshot's, zero when there is not one.
+//
+// Taken from the team window rather than the member window because the two are pushed
+// from the same cycle and the team feed is the authoritative one; either would answer,
+// and picking deliberately keeps them from drifting apart if that ever stops being true.
+func (s *Snapshot) PreviousAt() time.Time {
+	if s.Teams == nil {
+		return time.Time{}
+	}
+	return s.Teams.PreviousAt().UTC()
 }
 
 // TeamMemberCounts returns the total and active member counts for a team.
