@@ -310,7 +310,7 @@ func (b *Bot) cmdLink(ctx context.Context, i *discordgo.InteractionCreate, donor
 		return nil, err
 	}
 	e := DonorEmbed(d, snap)
-	e.Description = strings.TrimSpace(fmt.Sprintf("Linked to **%s**. **/me** will show this from now on.\n\n%s", d.Name, e.Description))
+	e.Description = strings.TrimSpace(fmt.Sprintf("Linked to **%s**. **/me** will show this from now on.\n\n%s", mdEsc(d.Name), e.Description))
 	return e, nil
 }
 
@@ -364,15 +364,15 @@ func (b *Bot) cmdTeam(ctx context.Context, q string) (*discordgo.MessageEmbed, e
 func (b *Bot) suggest(ctx context.Context, q string) (*discordgo.MessageEmbed, error) {
 	res, _, err := b.api.Search(ctx, q, 6)
 	if err != nil || (len(res.Donors) == 0 && len(res.Teams) == 0) {
-		return ErrorEmbed(fmt.Sprintf("Nothing matches **%s**. Names are case-sensitive; try fewer characters.", q)), nil
+		return ErrorEmbed(fmt.Sprintf("Nothing matches **%s**. Names are case-sensitive; try fewer characters.", mdEsc(q))), nil
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Nothing exactly matches **%s**. Did you mean:\n", q)
+	fmt.Fprintf(&sb, "Nothing exactly matches **%s**. Did you mean:\n", mdEsc(q))
 	for _, d := range res.Donors {
-		fmt.Fprintf(&sb, "• %s — `%s` points\n", d.Name, short(d.PointsTotal))
+		fmt.Fprintf(&sb, "• %s — `%s` points\n", mdEsc(d.Name), short(d.PointsTotal))
 	}
 	for _, t := range res.Teams {
-		fmt.Fprintf(&sb, "• %s (team %d) — `%s` points\n", t.Name, t.TeamID, short(t.PointsTotal))
+		fmt.Fprintf(&sb, "• %s (team %d) — `%s` points\n", mdEsc(t.Name), t.TeamID, short(t.PointsTotal))
 	}
 	return ErrorEmbed(sb.String()), nil
 }
@@ -398,7 +398,7 @@ func (b *Bot) cmdTop(ctx context.Context, kind, sortKey string, limit int) (*dis
 		}
 		snap = s
 		for i, t := range ts {
-			fmt.Fprintf(&sb, "%2d. %-28s %10s\n", i+1, trunc(t.Name, 28), short(pick(sortKey, t.PointsTotal, t.PointsPerDay, t.PointsToday, t.PointsLast24h, t.WUsTotal)))
+			fmt.Fprintf(&sb, "%2d. %-28s %10s\n", i+1, trunc(codeSafe(t.Name), 28), short(pick(sortKey, t.PointsTotal, t.PointsPerDay, t.PointsToday, t.PointsLast24h, t.WUsTotal)))
 		}
 	} else {
 		ds, s, err := b.api.TopDonors(ctx, sortKey, limit)
@@ -407,7 +407,7 @@ func (b *Bot) cmdTop(ctx context.Context, kind, sortKey string, limit int) (*dis
 		}
 		snap = s
 		for i, d := range ds {
-			fmt.Fprintf(&sb, "%2d. %-28s %10s\n", i+1, trunc(d.Name, 28), short(pick(sortKey, d.PointsTotal, d.PointsPerDay, d.PointsToday, d.PointsLast24h, d.WUsTotal)))
+			fmt.Fprintf(&sb, "%2d. %-28s %10s\n", i+1, trunc(codeSafe(d.Name), 28), short(pick(sortKey, d.PointsTotal, d.PointsPerDay, d.PointsToday, d.PointsLast24h, d.WUsTotal)))
 		}
 	}
 	title := fmt.Sprintf("Top %d %s by %s", limit, kind, col)

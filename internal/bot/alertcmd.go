@@ -251,7 +251,7 @@ func (b *Bot) alertAdd(ctx context.Context, i *discordgo.InteractionCreate,
 	return &discordgo.MessageEmbed{
 		Title: "Alert added", Color: colourGood, URL: a.TargetURL(),
 		Description: fmt.Sprintf("**%s**\nPosting in <#%s>%s.\n\nRemove it with **/alert remove**.",
-			a.Describe(), channelID, tagSuffix(a.Tag)),
+			mdEsc(a.Describe()), channelID, tagSuffix(a.Tag)),
 	}, nil
 }
 
@@ -351,7 +351,7 @@ func (b *Bot) alertList(i *discordgo.InteractionCreate) (*discordgo.MessageEmbed
 	}
 	var sb strings.Builder
 	for _, a := range list {
-		fmt.Fprintf(&sb, "`%s` %s\n<#%s>%s\n\n", a.ID, a.Describe(), a.ChannelID, tagSuffix(a.Tag))
+		fmt.Fprintf(&sb, "`%s` %s\n<#%s>%s\n\n", a.ID, mdEsc(a.Describe()), a.ChannelID, tagSuffix(a.Tag))
 	}
 	return &discordgo.MessageEmbed{
 		Title:       fmt.Sprintf("%s here", plural(len(list), "alert")),
@@ -372,7 +372,7 @@ func (b *Bot) alertRemove(i *discordgo.InteractionCreate, id string) (*discordgo
 		return nil, err
 	}
 	return &discordgo.MessageEmbed{
-		Title: "Alert removed", Color: colourNormal, Description: a.Describe(),
+		Title: "Alert removed", Color: colourNormal, Description: mdEsc(a.Describe()),
 	}, nil
 }
 
@@ -389,7 +389,7 @@ func (b *Bot) alertTest(ctx context.Context, i *discordgo.InteractionCreate, id 
 	if env, err := b.api.GetEnvelope(ctx, "/v1/status"); err == nil {
 		snap = env.Snapshot
 	}
-	e := AlertEmbed(a, "Test — "+a.Label, "This is what **"+a.Describe()+
+	e := AlertEmbed(a, "Test — "+a.Label, "This is what **"+mdEsc(a.Describe())+
 		"** will look like. Nothing has actually happened.", snap)
 	// deliver mutates the alert's failure count, and the watcher does the same on its
 	// own schedule; without this the two race on the same struct.
@@ -421,7 +421,7 @@ func (b *Bot) announce(a *Alert) error {
 	_, err := b.session.ChannelMessageSendComplex(a.ChannelID, &discordgo.MessageSend{
 		Embeds: []*discordgo.MessageEmbed{{
 			Title: "Alerts on", Color: colourNormal, URL: a.TargetURL(),
-			Description: fmt.Sprintf("**%s**\nThis channel will get a message when it happens.", a.Describe()),
+			Description: fmt.Sprintf("**%s**\nThis channel will get a message when it happens.", mdEsc(a.Describe())),
 		}},
 	})
 	return err

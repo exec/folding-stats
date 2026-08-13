@@ -312,6 +312,36 @@ func (s *Service) applyCycle(ctx context.Context, p snapshotPair) error {
 		return fmt.Errorf("rejecting unsafe snapshot: %w", err)
 	}
 
+	// Cross-check the user feed against the authoritative team feed. A donor name
+	// containing the feed's own delimiters parses as two records, the first with
+	// totals of the participant's choosing; the arithmetic that exposes it is that a
+	// team's members cannot together hold more than the team does. See
+	// model.Reconcile.
+	//
+	// Anything at all is worth a line, because the live corpus has never produced a
+	// single one; only an excess past the tolerance costs a team its member rows for
+	// this cycle.
+	if over := model.Reconcile(teamRows, userRows, model.ReconcileWarnAt); len(over) > 0 {
+		var dropped []model.TeamExcess
+		for _, t := range over {
+			lvl := s.Log.Warn
+			if t.Excess > model.ReconcileTolerance {
+				lvl = s.Log.Error
+				dropped = append(dropped, t)
+			}
+			lvl("cross-feed reconciliation: members claim more than their team holds",
+				"team", t.TeamID, "excess", t.Excess, "member_rows", t.Members,
+				"dropped", t.Excess > model.ReconcileTolerance)
+		}
+		if len(dropped) > 0 {
+			before := len(userRows)
+			userRows = model.DropTeams(userRows, dropped)
+			s.Log.Error("dropped member rows for this cycle",
+				"teams", len(dropped), "rows", before-len(userRows),
+				"at", p.at.Format(time.RFC3339))
+		}
+	}
+
 	s.guard.Lock()
 	cycle := s.state.Apply(p.at, teamRows, userRows)
 	s.guard.Unlock()
