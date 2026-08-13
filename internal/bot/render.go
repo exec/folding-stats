@@ -127,6 +127,33 @@ func trim1(f float64) string {
 	return strings.TrimSuffix(fmt.Sprintf("%.1f", f), ".0")
 }
 
+// codeSafe renders a name inside a fenced code block.
+//
+// mdEsc is the wrong tool here. Markdown is already inert inside a fence, so escaping
+// would only print visible backslashes; the two things that actually matter are that a
+// name cannot close the fence and escape into live markdown, and that it cannot break
+// the one-row-per-entry alignment of a preformatted table. Control characters and the
+// bidi overrides go for the second reason — a right-to-left override in a leaderboard
+// reorders the columns around it.
+func codeSafe(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '`':
+			// Close enough to read as the name, incapable of ending the block.
+			b.WriteRune('\'')
+		case r == '\n' || r == '\r' || r == '\t':
+			b.WriteRune(' ')
+		case r < 0x20 || r == 0x7f:
+		case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
+		case r == 0x200b, r == 0x200c, r == 0x200d, r == 0xfeff:
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // mdEsc defuses the markdown in names people chose themselves.
 //
 // Team names are arbitrary user text, and Discord renders markdown everywhere: a team
@@ -263,7 +290,7 @@ func DonorEmbed(d Donor, s Snapshot) *discordgo.MessageEmbed {
 		e.Description = fmt.Sprintf(
 			"⚠️ **%s** appears on %s teams and is almost certainly a default name shared by many "+
 				"different people. These totals are the sum of all of them, not one folder's record.",
-			d.Name, n(d.TeamCount))
+			mdEsc(d.Name), n(d.TeamCount))
 	}
 	return e
 }
