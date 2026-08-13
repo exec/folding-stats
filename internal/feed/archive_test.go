@@ -202,6 +202,90 @@ func TestPeekFirstLineHandlesMissingNewline(t *testing.T) {
 	}
 }
 
+func TestStoreRefusesTimestampCollisionWithoutOverwriting(t *testing.T) {
+	body := payload
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Last-Modified", lastMod)
+		io.WriteString(w, body)
+	}))
+	defer srv.Close()
+	a := &Archive{Root: t.TempDir()}
+	f := NewFetcher("test")
+	f.Client = &http.Client{Transport: rewriteTransport{base: srv.URL}}
+	if _, err := a.Store(context.Background(), f, Teams, Validator{}); err != nil {
+		t.Fatal(err)
+	}
+	body = strings.Replace(payload, "8213749748944", "999", 1)
+	if _, err := a.Store(context.Background(), f, Teams, Validator{}); err == nil || !strings.Contains(err.Error(), "conflicting snapshot") {
+		t.Fatalf("second Store error = %v, want collision", err)
+	}
+	snaps, _ := a.List(Teams)
+	r, err := snaps[0].Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, readErr := io.ReadAll(r)
+	r.Close()
+	if readErr != nil || string(got) != payload {
+		t.Fatalf("original snapshot changed: err=%v body=%q", readErr, got)
+	}
+}
+
+func TestPutRefusesTimestampCollisionWithoutOverwriting(t *testing.T) {
+	a := &Archive{Root: t.TempDir()}
+	at := time.Now().UTC()
+	if _, err := a.Put(Teams, at, strings.NewReader("original")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Put(Teams, at, strings.NewReader("replacement")); err == nil {
+		t.Fatal("conflicting import overwrote an existing snapshot")
+	}
+	snaps, _ := a.List(Teams)
+	r, err := snaps[0].Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(r)
+	r.Close()
+	if err != nil || string(got) != "original" {
+		t.Fatalf("original import changed: err=%v body=%q", err, got)
+	}
+}
+
+func TestArchiveReplayBoundsAndAuthenticatesDecodedData(t *testing.T) {
+	a := &Archive{Root: t.TempDir()}
+	at := time.Now().UTC()
+	if _, err := a.Put(Teams, at, strings.NewReader(strings.Repeat("x", 80))); err != nil {
+		t.Fatal(err)
+	}
+	snaps, _ := a.List(Teams)
+
+	old := maxDecodedBytes
+	t.Cleanup(func() { maxDecodedBytes = old })
+	maxDecodedBytes = 32
+	r, err := snaps[0].Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.ReadAll(r)
+	r.Close()
+	maxDecodedBytes = old
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized replay error = %v", err)
+	}
+
+	snaps[0].Meta.SHA256 = strings.Repeat("0", 64)
+	r, err = snaps[0].Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.ReadAll(r)
+	r.Close()
+	if err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("tampered replay error = %v", err)
+	}
+}
+
 // writeStub places a minimal snapshot into the archive without going over HTTP.
 func writeStub(t *testing.T, a *Archive, k Kind, at time.Time) {
 	t.Helper()

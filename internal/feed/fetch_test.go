@@ -1,7 +1,13 @@
 package feed
 
 import (
+	"bytes"
+	"compress/gzip"
+	"context"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -47,4 +53,40 @@ func TestSnapshotTimeRefusesAFutureLastModified(t *testing.T) {
 			t.Errorf("%s: got %s, want %s", c.name, got.Format(time.RFC3339), c.want.UTC().Format(time.RFC3339))
 		}
 	}
+}
+
+func TestFetchBoundsWireAndDecodedBodies(t *testing.T) {
+	oldWire, oldDecoded := maxWireBytes, maxDecodedBytes
+	maxWireBytes, maxDecodedBytes = 64, 64
+	t.Cleanup(func() { maxWireBytes, maxDecodedBytes = oldWire, oldDecoded })
+
+	t.Run("wire", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			io.WriteString(w, "ts\n"+strings.Repeat("x", 80))
+		}))
+		defer srv.Close()
+		f := NewFetcher("test")
+		f.Client = &http.Client{Transport: rewriteTransport{base: srv.URL}}
+		if _, err := f.Fetch(context.Background(), Teams, Validator{}, io.Discard); err == nil ||
+			(!strings.Contains(err.Error(), "wire body exceeds") && !strings.Contains(err.Error(), "limit is")) {
+			t.Fatalf("Fetch error = %v, want wire limit", err)
+		}
+	})
+
+	t.Run("decoded", func(t *testing.T) {
+		var compressed bytes.Buffer
+		zw := gzip.NewWriter(&compressed)
+		io.WriteString(zw, "ts\n"+strings.Repeat("x", 80))
+		zw.Close()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Encoding", "gzip")
+			w.Write(compressed.Bytes())
+		}))
+		defer srv.Close()
+		f := NewFetcher("test")
+		f.Client = &http.Client{Transport: rewriteTransport{base: srv.URL}}
+		if _, err := f.Fetch(context.Background(), Teams, Validator{}, io.Discard); err == nil || !strings.Contains(err.Error(), "decoded body exceeds") {
+			t.Fatalf("Fetch error = %v, want decoded limit", err)
+		}
+	})
 }

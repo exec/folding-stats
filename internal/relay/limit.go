@@ -34,6 +34,11 @@ var (
 	// FailWindow and MaxFailures bound bad authentications from one address.
 	FailWindow  = time.Minute
 	MaxFailures = 20
+	// Active connections remain charged for their full lifetime. Owner keys are free
+	// to mint, so a valid signature is authentication, not a resource quota.
+	MaxActiveConnections = 4096
+	MaxActivePerAddress  = 512
+	MaxActiveOwners      = 1024
 )
 
 // realIP is the address to hold responsible.
@@ -64,7 +69,10 @@ func realIP(r *http.Request) string {
 type limiter struct {
 	mu       sync.Mutex
 	failures map[string]*failCount
+	active   map[string]int
 	inFlight int
+	activeN  int
+	ownersN  int
 }
 
 type failCount struct {
@@ -73,7 +81,37 @@ type failCount struct {
 }
 
 func newLimiter() *limiter {
-	return &limiter{failures: map[string]*failCount{}}
+	return &limiter{failures: map[string]*failCount{}, active: map[string]int{}}
+}
+
+func (l *limiter) admit(ip string, agent bool) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.activeN >= MaxActiveConnections || l.active[ip] >= MaxActivePerAddress || (!agent && l.ownersN >= MaxActiveOwners) {
+		return false
+	}
+	l.activeN++
+	l.active[ip]++
+	if !agent {
+		l.ownersN++
+	}
+	return true
+}
+
+func (l *limiter) release(ip string, agent bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.active[ip] > 1 {
+		l.active[ip]--
+	} else {
+		delete(l.active, ip)
+	}
+	if l.activeN > 0 {
+		l.activeN--
+	}
+	if !agent && l.ownersN > 0 {
+		l.ownersN--
+	}
 }
 
 // begin reserves a handshake slot, reporting whether there was one.

@@ -28,11 +28,18 @@ export function cleanKey(key) {
   return key;
 }
 
+function unsafeKey(key) {
+  return key === '__proto__' || key === 'prototype' || key === 'constructor';
+}
+
 function cleanKeys(data) {
   if (Array.isArray(data)) return data.map(cleanKeys);
   if (data !== null && typeof data === 'object') {
     const out = {};
-    for (const [k, v] of Object.entries(data)) out[cleanKey(k)] = cleanKeys(v);
+    for (const [k, v] of Object.entries(data)) {
+      const key = cleanKey(k);
+      if (!unsafeKey(key)) out[key] = cleanKeys(v);
+    }
     return out;
   }
   return data;
@@ -56,11 +63,13 @@ export function applyUpdate(root, update) {
   let i = 0;
   while (i < update.length - 2) {
     const key = cleanKey(update[i++]);
-    if (obj[key] === undefined) obj[key] = Number.isInteger(update[i]) ? [] : {};
+    if (unsafeKey(key) || obj === null || typeof obj !== 'object') return root;
+    if (!Object.hasOwn(obj, key)) obj[key] = Number.isInteger(update[i]) ? [] : {};
     obj = obj[key];
   }
   const isArray = Array.isArray(obj);
   const key = cleanKey(update[i++]);
+  if (unsafeKey(key) || obj === null || typeof obj !== 'object') return root;
   const value = update[i];
 
   if (isArray && key === -1) obj.push(value);
@@ -437,4 +446,3 @@ export class Fleet {
     return c ? c.config : {};
   }
 }
-

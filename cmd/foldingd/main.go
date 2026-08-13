@@ -144,15 +144,7 @@ func run(dir, addr, ua string, poll, compactAfter, keepDaily, keepRaw time.Durat
 		maintain(ctx, svc, db, archiver.Archive, compactAfter, keepDaily, keepRaw, log)
 	}()
 
-	httpSrv := &http.Server{
-		Addr:              addr,
-		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
-		// Generous: a history query over a long window can be slow, and the whole
-		// point is that clients need not poll aggressively.
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  120 * time.Second,
-	}
+	httpSrv := newHTTPServer(addr, mux)
 
 	go func() {
 		<-ctx.Done()
@@ -172,6 +164,19 @@ func run(dir, addr, ua string, poll, compactAfter, keepDaily, keepRaw time.Durat
 	bg.Wait()
 	log.Info("background work finished")
 	return err
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		// Generous: a history query over a long window can be slow, and the whole
+		// point is that clients need not poll aggressively.
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
 }
 
 // follow serves an archive somebody else is filling.

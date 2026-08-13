@@ -59,6 +59,7 @@ type Service struct {
 	memberWin *metrics.Window
 	teamWin   *metrics.Window
 	applied   map[int64]bool
+	ingestErr error // fail-stop after a destructive Apply outlives a failed commit
 	// cadence learns the upstream publish interval from observation. It drives both
 	// the poll schedule and the next_expected_at the API advertises.
 	cadence *cadence
@@ -96,6 +97,11 @@ type Service struct {
 	// table cache from being written twice.
 	publishMu sync.Mutex
 }
+
+var (
+	maxTeamRows = feed.MaxTeamRows
+	maxUserRows = feed.MaxUserRows
+)
 
 // New returns a Service with identity restored from the store.
 func New(archive *feed.Archive, st *store.Store, srv *api.Server, log *slog.Logger) (*Service, error) {
@@ -242,6 +248,9 @@ func pairSnapshots(teams, users []feed.Snapshot) []snapshotPair {
 // Ingest applies every archived cycle that has not been applied yet, oldest first,
 // and publishes the resulting view. Returns the number of cycles applied.
 func (s *Service) Ingest(ctx context.Context) (int, error) {
+	if s.ingestErr != nil {
+		return 0, s.ingestErr
+	}
 	// Only look at snapshots we could still need. Listing the whole archive would
 	// mean parsing every sidecar ever written — ~17k a year — on every hourly pass.
 	// The window reaches back past the newest applied cycle so a team snapshot
@@ -268,6 +277,9 @@ func (s *Service) Ingest(ctx context.Context) (int, error) {
 			// One bad snapshot must not block the ones after it, but it also must
 			// not be silently forgotten.
 			s.Log.Error("cycle failed", "at", p.at.Format(time.RFC3339), "err", err)
+			if s.ingestErr != nil {
+				return n, s.ingestErr
+			}
 			continue
 		}
 		s.applied[p.at.Unix()] = true
@@ -295,6 +307,9 @@ func (s *Service) applyCycle(ctx context.Context, p snapshotPair) error {
 	userRows, userStats, err := readUsers(p.user)
 	if err != nil {
 		return err
+	}
+	if err := model.ValidateSnapshot(teamRows, userRows); err != nil {
+		return fmt.Errorf("rejecting unsafe snapshot: %w", err)
 	}
 
 	s.guard.Lock()
@@ -325,7 +340,8 @@ func (s *Service) applyCycle(ctx context.Context, p snapshotPair) error {
 		Malformed:      teamStats.Malformed + userStats.Malformed,
 		Duration:       time.Since(start),
 	}); err != nil {
-		return err
+		s.ingestErr = fmt.Errorf("cycle commit failed after in-memory apply; restart required: %w", err)
+		return s.ingestErr
 	}
 
 	s.guard.Lock()
@@ -496,6 +512,9 @@ func readTeams(s feed.Snapshot) ([]parse.TeamRow, parse.Stats, error) {
 	var rows []parse.TeamRow
 	for sc.Scan() {
 		rows = append(rows, sc.Row())
+		if len(rows) > maxTeamRows {
+			return nil, sc.Stats(), fmt.Errorf("team feed exceeds %d rows", maxTeamRows)
+		}
 	}
 	return rows, sc.Stats(), sc.Err()
 }
@@ -510,6 +529,9 @@ func readUsers(s feed.Snapshot) ([]parse.UserRow, parse.Stats, error) {
 	var rows []parse.UserRow
 	for sc.Scan() {
 		rows = append(rows, sc.Row())
+		if len(rows) > maxUserRows {
+			return nil, sc.Stats(), fmt.Errorf("user feed exceeds %d rows", maxUserRows)
+		}
 	}
 	return rows, sc.Stats(), sc.Err()
 }

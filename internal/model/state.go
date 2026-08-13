@@ -8,6 +8,8 @@
 package model
 
 import (
+	"fmt"
+	"math"
 	"time"
 
 	"folding/internal/parse"
@@ -134,6 +136,9 @@ func (s *State) TeamSlot(teamID int32) (int32, bool) {
 // against the authoritative team totals. Deduplicating instead would silently drop
 // production.
 func (s *State) Apply(at time.Time, teams []parse.TeamRow, users []parse.UserRow) *Cycle {
+	if ValidateSnapshot(teams, users) != nil {
+		return nil
+	}
 	c := &Cycle{At: at}
 
 	// Two passes. The first resolves every row to a slot, which is also what
@@ -221,6 +226,37 @@ func (s *State) Apply(at time.Time, teams []parse.TeamRow, users []parse.UserRow
 
 	s.At = at
 	return c
+}
+
+// ValidateSnapshot proves that every later sum of these non-negative cumulative
+// values fits in int64. Any duplicate, donor, team, or project aggregate is a subset
+// of one of these totals, so one linear pass closes all of those overflow paths.
+func ValidateSnapshot(teams []parse.TeamRow, users []parse.UserRow) error {
+	add := func(total *int64, value int64, field string) error {
+		if value < 0 || *total > math.MaxInt64-value {
+			return fmt.Errorf("%s total exceeds int64", field)
+		}
+		*total += value
+		return nil
+	}
+	var teamScore, teamWUs, userScore, userWUs int64
+	for _, row := range teams {
+		if err := add(&teamScore, row.Score, "team score"); err != nil {
+			return err
+		}
+		if err := add(&teamWUs, row.WUs, "team work-unit"); err != nil {
+			return err
+		}
+	}
+	for _, row := range users {
+		if err := add(&userScore, row.Score, "user score"); err != nil {
+			return err
+		}
+		if err := add(&userWUs, row.WUs, "user work-unit"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // grow returns a slice of exactly n elements, reusing the backing array when it is

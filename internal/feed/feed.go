@@ -18,6 +18,20 @@ type Kind string
 const (
 	Teams Kind = "team"
 	Users Kind = "user"
+
+	// Hard ceilings sit several times above the observed feeds while keeping a
+	// compromised origin or imported archive from consuming the host without bound.
+	MaxWireBytes    int64 = 128 << 20
+	MaxDecodedBytes int64 = 256 << 20
+	MaxTeamRows           = 500_000
+	MaxUserRows           = 5_000_000
+)
+
+// Kept separate from the public policy constants so boundary tests can exercise the
+// streaming paths with small payloads instead of allocating hundreds of megabytes.
+var (
+	maxWireBytes    = MaxWireBytes
+	maxDecodedBytes = MaxDecodedBytes
 )
 
 // All returns every feed kind, in the order they should be fetched. Teams is

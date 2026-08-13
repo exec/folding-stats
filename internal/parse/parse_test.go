@@ -1,6 +1,7 @@
 package parse
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -239,5 +240,25 @@ func TestNegativeAndOversizedNumbersRejected(t *testing.T) {
 	}
 	if v, ok := atoi64("8213749748944"); !ok || v != 8213749748944 {
 		t.Errorf("atoi64 rejected a valid score")
+	}
+}
+
+func TestSparseTeamIDIsBounded(t *testing.T) {
+	if _, ok := atoi32(strconv.Itoa(MaxTeamID + 1)); ok {
+		t.Fatal("team ID beyond the allocation bound was accepted")
+	}
+}
+
+func TestOverlongPhysicalLineIsDiscardedAndScannerResynchronizes(t *testing.T) {
+	in := "ts\nteam\tteamname\tscore\twu\n" + strings.Repeat("x", 2048) + "\n32\toc\t100\t1\n"
+	s := NewTeamScanner(strings.NewReader(in))
+	if !s.Scan() {
+		t.Fatalf("valid row after overlong line was lost: %v", s.Err())
+	}
+	if got := s.Row(); got.ID != 32 || got.Score != 100 {
+		t.Fatalf("row = %+v", got)
+	}
+	if s.Stats().Malformed == 0 {
+		t.Fatal("overlong line was not counted malformed")
 	}
 }

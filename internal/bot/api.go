@@ -205,9 +205,13 @@ func (c *Client) envelope(ctx context.Context, path string) (Envelope, error) {
 // see publishes. Caching it was ignoring the one instruction it sends.
 const statusPath = "/v1/status"
 
+func cacheable(path string) bool {
+	return path != statusPath && !strings.HasPrefix(path, "/v1/search")
+}
+
 // cached returns the stored response body — the whole envelope, not the data inside it.
 func (c *Client) cached(path string) ([]byte, bool) {
-	if path == statusPath {
+	if !cacheable(path) {
 		return nil, false
 	}
 	c.mu.RLock()
@@ -222,6 +226,9 @@ func (c *Client) cached(path string) ([]byte, bool) {
 // cheapest possible policy: there is no per-entry expiry to track, because every entry
 // has exactly the same lifetime.
 func (c *Client) store(path string, snap Snapshot, body []byte) {
+	if !cacheable(path) {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if at := snap.At.UTC().Format(time.RFC3339); at != c.at {
