@@ -224,6 +224,7 @@ func (s *Server) handle(fn handlerFunc, allowed ...string) http.HandlerFunc {
 		writeJSON(w, r, http.StatusOK, Envelope{
 			Snapshot: SnapshotInfo{
 				At:             snap.At.UTC(),
+				PreviousAt:     snap.PreviousAt(),
 				NextExpectedAt: snap.NextExpected.UTC(),
 				Stale:          !snap.StaleAfter.IsZero() && now.After(snap.StaleAfter),
 				ServerTime:     now,

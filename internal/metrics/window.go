@@ -232,6 +232,21 @@ func (w *Window) At() time.Time { return w.at }
 // Cycles reports how many cycles are currently retained.
 func (w *Window) Cycles() int { return len(w.cycles) }
 
+// PreviousAt is the publish time of the cycle before the newest one, or the zero time
+// when only one has been seen.
+//
+// It is the denominator for LastUpdate. That figure is production "in the most recent
+// cycle", and a cycle is not reliably an hour: the measured interval drifts a few
+// seconds either way and stretches when upstream publishes late. Anyone deriving a rate
+// from it was dividing by an assumption; with both ends published they can divide by
+// what actually happened.
+func (w *Window) PreviousAt() time.Time {
+	if len(w.cycles) < 2 {
+		return time.Time{}
+	}
+	return w.cycles[len(w.cycles)-2].at
+}
+
 // Span is how much history the window actually covers. Before a full week has been
 // observed this is less than 7 days, which makes the average unrepresentative.
 func (w *Window) Span() time.Duration {

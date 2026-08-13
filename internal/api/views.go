@@ -47,7 +47,7 @@ func (s *Snapshot) teamView(slot int32) Team {
 		Production: Production{
 			PointsTotal:        t.Score,
 			WUsTotal:           t.WUs,
-			PointsLastUpdate:   s.Teams.LastUpdate(slot),
+			PointsLastCycle:    s.Teams.LastUpdate(slot),
 			PointsLast24h:      s.Teams.Last24h(slot),
 			PointsLast7d:       s.Teams.Last7d(slot),
 			PointsTodayUTC:     s.Teams.Today(slot),
@@ -72,7 +72,7 @@ func (s *Snapshot) memberView(slot int32, withTeamName bool) Member {
 		Production: Production{
 			PointsTotal:        m.Score,
 			WUsTotal:           m.WUs,
-			PointsLastUpdate:   s.Members.LastUpdate(slot),
+			PointsLastCycle:    s.Members.LastUpdate(slot),
 			PointsLast24h:      s.Members.Last24h(slot),
 			PointsLast7d:       s.Members.Last7d(slot),
 			PointsTodayUTC:     s.Members.Today(slot),
@@ -120,7 +120,7 @@ func (s *Snapshot) donorView(idx int32, detail bool) Donor {
 	// team count or work units puts on its first page — so the per-response walk was
 	// slowest exactly where it ran most.
 	if p, ok := s.Ranks.DonorTotals(idx); ok {
-		out.PointsLastUpdate = p.LastUpdate
+		out.PointsLastCycle = p.LastUpdate
 		out.PointsLast24h = p.Last24h
 		out.PointsLast7d = p.Last7d
 		out.PointsTodayUTC = p.Today
@@ -137,7 +137,7 @@ func (s *Snapshot) donorView(idx int32, detail bool) Donor {
 		// produced.
 		var observed time.Duration
 		for _, slot := range members {
-			out.PointsLastUpdate += s.Members.LastUpdate(slot)
+			out.PointsLastCycle += s.Members.LastUpdate(slot)
 			out.PointsLast24h += s.Members.Last24h(slot)
 			out.PointsLast7d += s.Members.Last7d(slot)
 			out.PointsTodayUTC += s.Members.Today(slot)

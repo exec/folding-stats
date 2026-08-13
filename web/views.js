@@ -2017,6 +2017,14 @@ export async function apiDocs(view) {
         'are on every row so they can be read against each other — where they disagree ' +
         'sharply, something changed recently.'),
       el('p',
+        el('strong', 'Every period says how long it was. '),
+        el('code', 'points_last_cycle'),
+        ' is production in the most recent publish, and the publish is not reliably an ' +
+        'hour \u2014 the measured interval drifts and stretches when upstream is late. So the ' +
+        'period is named at both ends: ', el('code', 'snapshot.previous_at'), ' to ',
+        el('code', 'snapshot.at'), '. Divide by that rather than by an assumed hour. ',
+        el('code', 'previous_at'), ' is absent only on the first cycle after a cold start.'),
+      el('p',
         el('strong', 'A window is a request, not a promise. '),
         'Detail responses carry ', el('code', 'points_per_day'), ' — the same rate over ',
         el('code', '24h'), ', ', el('code', '7d'), ' and ', el('code', '30d'), ', each with a ',
