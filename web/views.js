@@ -1168,27 +1168,64 @@ export async function teamsList(view, { page = 1, sort = 'lifetime' }, nav) {
 }
 
 export async function aroundTheGlobePage(view) {
-  clear(view);
-  view.append(
-    el('div.page-head',
-      el('div.breadcrumb', el('a', { href: '/teams' }, 'Teams'), el('span', '/'),
-        el('span', 'Around the Globe')),
-      el('h1.page-title', 'Folding Around The Globe'),
-      el('p.page-sub', 'A home for seeing where Folding@home teams come together around the world.')),
-    el('section.card.globe-card',
-      el('div.globe-visual', { html: `<svg viewBox="0 0 400 400" role="img" aria-label="Globe with latitude and longitude lines">
-        <defs><radialGradient id="globe-fill" cx="35%" cy="28%"><stop offset="0" stop-color="var(--series-1)" stop-opacity=".28"/><stop offset="1" stop-color="var(--series-1)" stop-opacity=".05"/></radialGradient></defs>
-        <circle cx="200" cy="200" r="158" fill="url(#globe-fill)" stroke="var(--series-1)" stroke-width="4"/>
-        <ellipse cx="200" cy="200" rx="72" ry="158" fill="none" stroke="var(--line-strong)" stroke-width="2"/>
-        <ellipse cx="200" cy="200" rx="132" ry="158" fill="none" stroke="var(--line-strong)" stroke-width="2"/>
-        <ellipse cx="200" cy="200" rx="158" ry="62" fill="none" stroke="var(--line-strong)" stroke-width="2"/>
-        <ellipse cx="200" cy="200" rx="158" ry="118" fill="none" stroke="var(--line-strong)" stroke-width="2"/>
-        <path d="M42 200h316M200 42v316" fill="none" stroke="var(--line-strong)" stroke-width="2"/>
-      </svg>` }),
-      el('div.globe-empty',
-        el('div.globe-empty-title', 'The map is ready for its teams.'),
-        el('p.muted', 'No teams are assigned to countries yet. Country pages and global participation totals will appear here as those associations are added.')))
-  );
+  loading(view);
+  let destroyGlobe = null;
+  try {
+    const [{ createGlobe }, res] = await Promise.all([import('/globe.js'), api.countries()]);
+    const countries = res.data || [];
+    const globe = el('div.world-globe', skeleton(520));
+    clear(view).append(
+      el('div.page-head',
+        el('div.breadcrumb', el('a', { href: '/teams' }, 'Teams'), el('span', '/'),
+          el('span', 'Around the Globe')),
+        el('h1.page-title', 'Folding Around The Globe'),
+        el('p.page-sub',
+          'Drag to rotate, scroll to zoom, and hover a highlighted country to see the teams counted there.')),
+      el('section.card.globe-card', globe,
+        el('div.globe-help', 'Country totals stack the production of every assigned team. Click a country to keep its details open.'))
+    );
+    destroyGlobe = await createGlobe(globe, countries);
+
+    if (countries.length) {
+      const body = el('tbody', ...countries.map((c) => el('tr',
+        el('td.left.name-cell', el('a', { href: `/teams/around-the-globe/${c.code.toLowerCase()}` }, c.name)),
+        el('td.num', `${n(c.teams_active)} / ${n(c.teams_total)}`),
+        el('td.num', { title: n(c.points_per_day_24h_avg) }, short(c.points_per_day_24h_avg)),
+        el('td.num', { title: n(c.points_total) }, short(c.points_total)))));
+      view.append(el('section.section', card('Countries folding now',
+        el('div.table-wrap', el('table.data',
+          el('thead', el('tr', el('th.left', 'Country'), el('th', 'Active / teams'),
+            el('th', 'PPD'), el('th', 'Points'))), body)))));
+    }
+    view.append(el('p.chart-note', 'Country boundaries: Natural Earth, public domain.'));
+  } catch (err) {
+    errorView(view, err);
+  }
+  return () => destroyGlobe?.();
+}
+
+export async function countryPage(view, { code }) {
+  loading(view);
+  try {
+    const res = await api.country(code);
+    const c = res.data;
+    clear(view).append(
+      el('div.page-head',
+        el('div.breadcrumb', el('a', { href: '/teams' }, 'Teams'), el('span', '/'),
+          el('a', { href: '/teams/around-the-globe' }, 'Around the Globe'), el('span', '/'),
+          el('span', c.name)),
+        el('h1.page-title', c.name),
+        el('p.page-sub', `${plural(c.teams_total, 'team')} currently assigned to this country.`)),
+      el('section.section', el('div.stats',
+        statTile('Combined points', short(c.points_total), n(c.points_total)),
+        statTile('Combined PPD', short(c.points_per_day_24h_avg), 'rolling 24-hour rate'),
+        statTile('Active teams', n(c.teams_active), `of ${n(c.teams_total)} assigned`),
+        statTile('Last 7 days', short(c.points_last_7d), 'points'))),
+      el('section.section', card(`Teams (${n(c.teams_total)})`, teamTable(c.teams)))
+    );
+  } catch (err) {
+    errorView(view, err);
+  }
 }
 
 export async function teamDetail(view, { id }, nav) {
@@ -2289,7 +2326,7 @@ export async function apiDocs(view) {
   // This previously read `.replace(/\{[^}]+\}/g, (m) => m)` — a substitution that
   // returns the match unchanged — so every templated row linked to a literal
   // `/v1/donors/{name}` and 404'd.
-  const EXAMPLES = { '{id}': '0', '{name}': 'Anonymous' };
+  const EXAMPLES = { '{id}': '0', '{name}': 'Anonymous', '{code}': 'US' };
   const exampleOf = (path) => {
     const p = path.replace(/\{[^}]+\}/g, (m) => EXAMPLES[m] ?? m);
     if (p === '/v1/search') return p + '?q=Anonymous';
@@ -2416,6 +2453,10 @@ export async function apiDocs(view) {
     { path: '/v1/teams/{id}/rivals',
       summary: 'The ranking either side of this team, with projected overtakes.',
       params: PAGING }));
+
+  view.append(group('Countries', 'Approved team-to-country assignments, aggregated for Folding Around The Globe.',
+    { path: '/v1/countries', summary: 'Countries with at least one active assigned team, including their top ten teams.' },
+    { path: '/v1/countries/{code}', summary: 'One country with its full assigned team list.' }));
 
   view.append(group('Donors',
     'A donor is a name, aggregated across every team they fold for \u2014 so one person ' +

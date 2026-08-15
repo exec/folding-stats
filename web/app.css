@@ -405,12 +405,46 @@ main { max-width: var(--wide); margin: 0 auto; padding: var(--s6) var(--s5) var(
   font-size: 30px;
   line-height: 1;
 }
-.globe-card { display: grid; justify-items: center; padding: var(--s6); overflow: hidden; }
-.globe-visual { width: min(440px, 100%); }
-.globe-visual svg { display: block; width: 100%; height: auto; }
-.globe-empty { max-width: 560px; text-align: center; }
-.globe-empty-title { font-size: 18px; font-weight: 620; }
-.globe-empty p { margin: var(--s2) 0 0; }
+.globe-card { position: relative; overflow: hidden; }
+.world-globe {
+  position: relative;
+  width: 100%;
+  min-height: 360px;
+  background: radial-gradient(circle at center, var(--accent-quiet), transparent 58%);
+}
+.globe-svg { display: block; width: 100%; height: auto; cursor: grab; touch-action: none; }
+.globe-svg:active { cursor: grabbing; }
+.globe-ocean { fill: var(--plane); stroke: var(--series-1); stroke-width: 1.4px; }
+.globe-country {
+  fill: var(--surface-raised);
+  stroke: var(--line-strong);
+  stroke-width: .55px;
+  vector-effect: non-scaling-stroke;
+}
+.globe-country.active { fill: var(--series-1); cursor: pointer; }
+.globe-country.active:hover, .globe-country.active:focus { stroke: var(--ink); stroke-width: 1.6px; outline: none; }
+.globe-help { padding: var(--s3) var(--s5); border-top: 1px solid var(--line); color: var(--ink-muted); font-size: 12px; text-align: center; }
+.globe-tooltip {
+  position: absolute;
+  z-index: 10;
+  width: min(320px, calc(100% - 24px));
+  max-height: min(440px, calc(100% - 24px));
+  overflow-y: auto;
+  padding: var(--s4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface-raised) 96%, transparent);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .5);
+  backdrop-filter: blur(10px);
+}
+.globe-tooltip[hidden] { display: none; }
+.globe-tip-name { font-size: 16px; font-weight: 650; }
+.globe-tip-stats { margin-top: 2px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.globe-tip-count { margin-top: 2px; color: var(--ink-muted); font-size: 12px; }
+.globe-tip-teams { display: grid; gap: 1px; margin: var(--s3) 0; border-top: 1px solid var(--line); }
+.globe-tip-teams a { display: flex; justify-content: space-between; gap: var(--s4); padding: 6px 0; border-bottom: 1px solid var(--line); }
+.globe-tip-teams a span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.globe-tip-more { color: var(--accent); font-size: 12px; font-weight: 600; }
 
 /* ------------------------------------------------------------ my folding --- */
 
@@ -1383,7 +1417,7 @@ footer {
   .nav { gap: 0; }
   .nav a { padding: 6px 8px; font-size: 13px; }
   .tool-form { grid-template-columns: minmax(0, 1fr); }
-  .globe-card, .heatmap { padding: var(--s4); }
+  .heatmap { padding: var(--s4); }
 }
 
 @media (prefers-reduced-motion: reduce) {
