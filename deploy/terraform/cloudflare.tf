@@ -114,10 +114,15 @@ resource "cloudflare_ruleset" "cache" {
   kind    = "zone"
   phase   = "http_request_cache_settings"
 
+  # /badge/ is in here with /v1/ because it is the highest-fanout thing the service
+  # serves and was the only one not covered. A badge is meant to be embedded in a README
+  # or a forum signature, so one popular repository is a great many requests for an image
+  # that changes once an hour. The origin already sends the right Cache-Control for it —
+  # max-age to the next publish — so it only ever needed to be made eligible.
   rules = [{
-    description = "Folding API"
+    description = "Folding API and badges"
     enabled     = true
-    expression  = "(http.request.full_uri wildcard r\"https://foldingstats.org/v1/*\")"
+    expression  = "(http.request.full_uri wildcard r\"https://foldingstats.org/v1/*\") or (http.request.full_uri wildcard r\"https://foldingstats.org/badge/*\")"
     action      = "set_cache_settings"
     action_parameters = {
       cache = true
