@@ -1998,11 +1998,15 @@ async function milestoneSection(entity, kind) {
 // step between here and there. Selection is the fallback: writeText rejects on a
 // denied permission or a non-secure origin, and leaving the line selected keeps the
 // keyboard route working rather than failing silently.
-async function copyText(text, button, status) {
+async function copyText(text, reveal, status) {
   try {
     await navigator.clipboard.writeText(text);
   } catch {
-    getSelection().selectAllChildren(button);
+    // Denied permission or a non-secure origin. The snippet is not on screen any
+    // more, so showing it is the fallback: revealed and selected, it can still be
+    // copied by hand rather than the button simply doing nothing.
+    reveal.hidden = false;
+    getSelection().selectAllChildren(reveal);
     return;
   }
   status.textContent = 'Copied';
@@ -2017,19 +2021,26 @@ function badgeSection(entity, kind) {
   let withName = false;
   const host = el('div.badge-list');
   function draw() {
+    // A button rather than the snippet itself. The markdown carries an absolute URL
+    // twice and ran to about 120 characters, which on a phone was a line of
+    // monospace scrolling sideways under the badge it belonged to. The text is not
+    // worth the room: nobody reads it, they paste it.
     clear(host).append(...['ppd', 'rank', 'points'].map((metric) => {
       const path = badgePath(kind, ref, metric) + (withName ? '&name=1' : '');
       const md = `[![${metric}](${location.origin}${path})](${page})`;
       const done = el('span.copy-done', { 'aria-live': 'polite' });
+      // Hidden until the clipboard refuses, then revealed so it can still be copied.
+      const fallback = el('code.badge-md', { hidden: true }, md);
       return el('div.badge-row',
         el('img', { src: path, alt: `${entity.name} ${metric} badge`, loading: 'lazy' }),
-        el('button.badge-md.copyable', {
+        el('button.btn.badge-copy', {
           type: 'button',
-          title: 'Click to copy',
+          title: md,
           'aria-label': `Copy the ${metric} badge markdown`,
-          onclick: (e) => copyText(md, e.currentTarget, done),
-        }, md),
-        done);
+          onclick: () => copyText(md, fallback, done),
+        }, 'Copy Markdown'),
+        done,
+        fallback);
     }));
   }
   draw();
