@@ -9,6 +9,7 @@ import { el, clear, card, cardWith, statTile, pager, segmented, notice, loading,
 import { n, short, ago, dateTime, utcDate, delta, tierName, nameText, plural, span, tzName } from '/format.js';
 import { productionChart, seriesChart, stack, legend, palette, densify, perDayPoints, MAX_STACK_SERIES } from '/charts.js';
 import { LocalClient, Fleet, LOCAL_URL } from '/fah.js';
+import { topicIcon } from '/topicicons.js';
 import { RelayLink, identity, mintToken, exportCode, adoptCode } from '/relay.js';
 
 const PER_PAGE = 100;
@@ -1277,7 +1278,7 @@ export async function topicsPage(view) {
       // which is the opposite of what someone looking for their own corner needs.
       el('section.section', el('div.topic-grid', ...topics.map((t) =>
         el('a.topic-card', { href: `/teams/topic/${t.slug}` },
-          el('div.topic-name', t.name),
+          el('div.topic-head', topicIcon(t.slug), el('div.topic-name', t.name)),
           el('p.topic-desc', t.description),
           el('div.topic-figures',
             el('span', `${n(t.teams_total)} ${t.teams_total === 1 ? 'team' : 'teams'}`),
@@ -1302,7 +1303,7 @@ export async function topicPage(view, { slug }) {
         el('div.breadcrumb', el('a', { href: '/teams' }, 'Teams'), el('span', '/'),
           el('a', { href: '/teams/topic' }, 'By topic'), el('span', '/'),
           el('span', t.name)),
-        el('h1.page-title', t.name),
+        el('h1.page-title', topicIcon(t.slug), t.name),
         el('p.page-sub', t.description)),
       el('section.section', el('div.stats',
         statTile('Combined points', short(t.points_total), n(t.points_total)),
