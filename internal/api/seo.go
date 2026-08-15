@@ -52,6 +52,19 @@ func (s *Server) PageMeta(p string) (PageMeta, bool) {
 			Title:       "Folding Around The Globe" + siteSuffix,
 			Description: "Explore Folding@home teams around the world and see global participation by country.",
 		}, true
+	case strings.HasPrefix(p, "/teams/around-the-globe/"):
+		code := strings.TrimSuffix(strings.TrimPrefix(p, "/teams/around-the-globe/"), "/")
+		if def, ok := countryDefByCode(code); ok {
+			return PageMeta{
+				Title:       def.Name + " Folding@home teams" + siteSuffix,
+				Description: "Folding@home teams assigned to " + def.Name + ", with their combined points and current production.",
+			}, true
+		}
+		return PageMeta{
+			Title:       "Country not found" + siteSuffix,
+			Description: "No country by this code appears in Folding Around The Globe.",
+			NoIndex:     true,
+		}, true
 	case strings.HasPrefix(p, "/donors/"):
 		return snap.donorMeta(strings.TrimPrefix(p, "/donors/"))
 	case strings.HasPrefix(p, "/teams/"):

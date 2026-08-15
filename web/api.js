@@ -129,4 +129,6 @@ export const api = {
   compare: (params, o) => request(`/v1/compare${qs(params)}`, o),
   goal: (params, o) => request(`/v1/goals${qs(params)}`, o),
   movers: (params, o) => request(`/v1/movers${qs(params)}`, o),
+  countries: (o) => request('/v1/countries', o),
+  country: (code, o) => request(`/v1/countries/${encodeURIComponent(code)}`, o),
 };

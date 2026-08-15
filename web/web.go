@@ -28,14 +28,14 @@ import (
 	"folding/content"
 )
 
-//go:embed index.html icon.svg app.css app.js api.js ui.js views.js charts.js countdown.js clock.js format.js fah.js relay.js vendor
+//go:embed index.html icon.svg app.css app.js api.js ui.js views.js charts.js globe.js countdown.js clock.js format.js fah.js relay.js vendor
 var assets embed.FS
 
 // assetRef matches a same-origin asset path in a quoted string: an ES module
 // specifier, a stylesheet href, a script src, the icon link. Only paths carrying a
-// .js, .css or .svg extension match, so API paths and client-side routes are left
+// .js, .css, .svg or .geojson extension match, so API paths and client-side routes are left
 // alone.
-var assetRef = regexp.MustCompile(`(["'])(/[A-Za-z0-9_./-]+\.(?:js|css|svg))(["'])`)
+var assetRef = regexp.MustCompile(`(["'])(/[A-Za-z0-9_./-]+\.(?:js|css|svg|geojson))(["'])`)
 
 // build is a fingerprint of the whole asset set, stamped onto every internal
 // reference at startup.
