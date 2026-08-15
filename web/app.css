@@ -313,6 +313,8 @@ main { max-width: var(--wide); margin: 0 auto; padding: var(--s6) var(--s5) var(
   line-height: 1.2;
 }
 .page-sub { margin: var(--s2) 0 0; color: var(--ink-muted); }
+.title-row { display: flex; align-items: center; gap: var(--s4); flex-wrap: wrap; }
+.watch-btn[aria-pressed="true"] { color: var(--warning); }
 .eyebrow {
   font-size: 11px;
   text-transform: uppercase;
@@ -339,6 +341,26 @@ main { max-width: var(--wide); margin: 0 auto; padding: var(--s6) var(--s5) var(
 }
 .card-title { font-weight: 600; font-size: 14px; }
 .card-body { padding: var(--s5); }
+
+/* --------------------------------------------------- watchlist + explore --- */
+
+.tool-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  gap: var(--s3);
+  align-items: end;
+}
+.form-field { display: grid; gap: var(--s1); min-width: 0; color: var(--ink-muted); font-size: 12px; }
+.form-field .code-field { width: 100%; min-height: 34px; }
+.tool-result { margin-top: var(--s5); }
+.tool-result:empty { margin-top: 0; }
+.tool-title { margin: 0 0 var(--s3); font-size: 14px; font-weight: 600; }
+.badges { margin-top: var(--s5); border-top: 1px solid var(--line); padding-top: var(--s4); }
+.badges summary { color: var(--accent); cursor: pointer; }
+.badge-list { display: grid; gap: var(--s3); margin-top: var(--s4); }
+.badge-row { display: flex; align-items: center; gap: var(--s4); flex-wrap: wrap; }
+.badge-row img { flex: none; }
+.badge-row code { color: var(--ink-muted); overflow-wrap: anywhere; font-size: 12px; }
 
 /* ------------------------------------------------------------ my folding --- */
 
@@ -1158,6 +1180,25 @@ footer {
    This fires earlier than the content breakpoint because the header runs out of room
    first: brand, nav, search, freshness and the toggle stop fitting around 1050px,
    where the toggle was being pushed off the right edge. */
+@media (max-width: 1320px) {
+  .header {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: var(--header-h);
+    padding-top: var(--s2);
+    padding-bottom: var(--s2);
+    row-gap: var(--s2);
+  }
+  .search { margin-left: auto; flex: 1 1 0; min-width: 0; }
+  .freshness {
+    order: 10;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    padding-top: var(--s2);
+    border-top: 1px solid var(--line);
+  }
+}
+
 @media (max-width: 1080px) {
   .header {
     flex-wrap: wrap;
@@ -1216,6 +1257,7 @@ footer {
   .grid-2 { grid-template-columns: minmax(0, 1fr); }
   .header { padding-left: var(--s4); padding-right: var(--s4); }
   main { padding: var(--s5) var(--s4) var(--s6); }
+  .tool-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 /* The nav takes a row of its own rather than disappearing.
 
@@ -1263,6 +1305,7 @@ footer {
   .header { padding: 0 var(--s4); }
   .nav { gap: 0; }
   .nav a { padding: 6px 8px; font-size: 13px; }
+  .tool-form { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (prefers-reduced-motion: reduce) {

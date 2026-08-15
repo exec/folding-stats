@@ -64,10 +64,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/donors/{name}/rivals", s.handle(s.donorRivals, "team_id", "page", "per_page"))
 
 	s.mux.HandleFunc("GET /v1/search", s.handle(s.search, "q", "type", "limit"))
+	s.mux.HandleFunc("GET /v1/compare", s.handle(s.compare, "kind", "a", "b"))
+	s.mux.HandleFunc("GET /v1/goals", s.handle(s.goal, "kind", "who", "target_rank", "target_points", "overtake", "by"))
+	s.mux.HandleFunc("GET /v1/movers", s.handle(s.movers, "kind", "direction", "within", "limit"))
 
 	// Incremental sync. Deliberately alongside the collections rather than under them:
 	// it is a different question about all of them, not a sub-resource of any one.
 	s.mux.HandleFunc("GET /v1/changes", s.handle(s.changes, "since", "kind", "page", "per_page"))
+	s.mux.HandleFunc("GET /badge/{kind}/{ref}", s.badge)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +108,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// anybody remembering to. /v1/status is the freshness probe and is where this
 	// figure is published, so counting it would have the docs page inflating the
 	// number it displays every ten seconds.
-	if p := r.URL.Path; p != "/v1/status" && (strings.HasPrefix(p, "/v1/") || p == "/mcp") {
+	if p := r.URL.Path; p != "/v1/status" && (strings.HasPrefix(p, "/v1/") || strings.HasPrefix(p, "/badge/") || p == "/mcp") {
 		s.rate.add(time.Now())
 	}
 
@@ -420,6 +424,13 @@ func (e *statusError) Error() string { return e.msg }
 
 func notFound(format string, args ...any) error {
 	return &statusError{http.StatusNotFound, "not_found", fmt.Sprintf(format, args...)}
+}
+
+// isNotFound reports whether an error is the "no such entity" refusal, so a caller can
+// say something better suited to its own audience than the default wording.
+func isNotFound(err error) bool {
+	se, ok := err.(*statusError)
+	return ok && se.code == http.StatusNotFound
 }
 
 func badRequest(format string, args ...any) error {

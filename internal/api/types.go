@@ -528,6 +528,73 @@ type SearchResults struct {
 	ExactTeam  bool `json:"exact_team"`
 }
 
+// InsightEntity is the compact entity shape shared by comparisons, goals and movers.
+// It deliberately carries both rate windows: projections use the livelier 24-hour
+// rate, while the seven-day rate lets a reader see whether that day is representative.
+type InsightEntity struct {
+	Kind               string `json:"kind"`
+	Name               string `json:"name"`
+	TeamID             *int32 `json:"team_id,omitempty"`
+	Rank               int32  `json:"rank"`
+	PointsTotal        int64  `json:"points_total"`
+	PointsPerDay24hAvg int64  `json:"points_per_day_24h_avg"`
+	PointsPerDay7dAvg  int64  `json:"points_per_day_7d_avg"`
+}
+
+// Comparison puts two entities and their possible crossover in one response.
+type Comparison struct {
+	Kind         string        `json:"kind"`
+	A            InsightEntity `json:"a"`
+	B            InsightEntity `json:"b"`
+	Leader       string        `json:"leader"`
+	PointsGap    int64         `json:"points_gap"`
+	OvertakeDays *float64      `json:"overtake_days"`
+	OvertakeAt   *time.Time    `json:"overtake_at"`
+	HorizonDays  int           `json:"horizon_days"`
+}
+
+// GoalHorizon is the daily production needed to reach one target in a fixed time.
+type GoalHorizon struct {
+	Days         int     `json:"days"`
+	PointsPerDay int64   `json:"points_per_day"`
+	Multiple     float64 `json:"current_rate_multiple,omitempty"`
+}
+
+// Goal answers the inverse of a projection: the rate needed to reach a moving or
+// fixed target. RequiredBy is present when the request supplied a date; otherwise the
+// three standard Horizons are returned.
+type Goal struct {
+	Kind                string        `json:"kind"`
+	Subject             InsightEntity `json:"subject"`
+	Target              InsightEntity `json:"target"`
+	TargetType          string        `json:"target_type"`
+	TargetRank          int           `json:"target_rank,omitempty"`
+	Holding             bool          `json:"holding,omitempty"`
+	AlreadyReached      bool          `json:"already_reached,omitempty"`
+	PointsGap           int64         `json:"points_gap"`
+	By                  *time.Time    `json:"by,omitempty"`
+	RequiredBy          *int64        `json:"required_points_per_day,omitempty"`
+	CurrentOvertakeDays *float64      `json:"current_overtake_days,omitempty"`
+	CurrentOvertakeAt   *time.Time    `json:"current_overtake_at,omitempty"`
+	Horizons            []GoalHorizon `json:"horizons,omitempty"`
+}
+
+// Mover is one measured 24-hour rank change.
+type Mover struct {
+	InsightEntity
+	Change24h int32 `json:"rank_change_24h"`
+}
+
+// Movers is bounded to the top of a field, where movement still represents a
+// meaningful change rather than a jump across a large tie near the zero-point tail.
+type Movers struct {
+	Kind      string  `json:"kind"`
+	Within    int     `json:"within"`
+	FieldSize int     `json:"field_size"`
+	Climbed   []Mover `json:"climbed"`
+	Fell      []Mover `json:"fell"`
+}
+
 // APIError is the error body. One shape for every failure.
 //
 // RFC 9457 problem details, served as application/problem+json. The standard exists so

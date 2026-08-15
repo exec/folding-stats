@@ -182,6 +182,8 @@ const routes = [
   [/^\/donors\/?$/, (m, q) =>
     views.donorsList(view, { page: +(q.get('page') || 1), sort: sortParam(q) }, navigate)],
   [/^\/donors\/(.+?)\/?$/, (m) => views.donorDetail(view, { name: decodeURIComponent(m[1]) }, navigate)],
+  [/^\/watchlist\/?$/, () => views.watchlistPage(view)],
+  [/^\/explore\/?$/, (m, q) => views.explorePage(view, { tab: q.get('tab') || 'compare' })],
   [/^\/search\/?$/, (m, q) => views.searchPage(view, { q: q.get('q') || '' }, navigate)],
   [/^\/api\/?$/, () => views.apiDocs(view)],
   [/^\/agents\/?$/, () => views.agentsPage(view)],

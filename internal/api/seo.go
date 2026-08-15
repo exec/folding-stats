@@ -73,6 +73,17 @@ func (s *Server) PageMeta(p string) (PageMeta, bool) {
 			Title:       "Project overview" + siteSuffix,
 			Description: "Folding@home at a glance: points and work units across the whole project, who is producing now, and what changed in the last day.",
 		}, true
+	case "/watchlist":
+		return PageMeta{
+			Title:       "Your Folding@home watchlist" + siteSuffix,
+			Description: "A private, browser-local watchlist of Folding@home donors and teams.",
+			NoIndex:     true,
+		}, true
+	case "/explore":
+		return PageMeta{
+			Title:       "Compare teams, donors and goals" + siteSuffix,
+			Description: "Compare Folding@home teams and donors, calculate the production needed for a goal, and see the biggest daily rank movements.",
+		}, true
 	case "/api":
 		return PageMeta{
 			Title:       "Free Folding@home JSON API" + siteSuffix,

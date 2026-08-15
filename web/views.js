@@ -12,6 +12,43 @@ import { LocalClient, Fleet, LOCAL_URL } from '/fah.js';
 import { RelayLink, identity, mintToken, exportCode, adoptCode } from '/relay.js';
 
 const PER_PAGE = 100;
+const WATCH_KEY = 'folding.watchlist';
+
+function watched() {
+  try {
+    const v = JSON.parse(localStorage.getItem(WATCH_KEY) || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+function watchID(kind, id) { return `${kind}:${id}`; }
+
+function saveWatched(items) {
+  localStorage.setItem(WATCH_KEY, JSON.stringify(items));
+}
+
+function watchButton(kind, id, name) {
+  const key = watchID(kind, id);
+  const button = el('button.btn.watch-btn', { type: 'button' });
+  const draw = () => {
+    const active = watched().some((x) => watchID(x.kind, x.id) === key);
+    button.textContent = active ? '★ Watching' : '☆ Watch';
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    button.title = active ? 'Remove from your watchlist' : 'Add to your watchlist';
+  };
+  button.addEventListener('click', () => {
+    const items = watched();
+    const i = items.findIndex((x) => watchID(x.kind, x.id) === key);
+    if (i >= 0) items.splice(i, 1);
+    else items.push({ kind, id: String(id), name });
+    saveWatched(items);
+    draw();
+  });
+  draw();
+  return button;
+}
 
 /**
  * Where the Discord bot installs from.
@@ -1015,7 +1052,7 @@ export async function teamDetail(view, { id }, nav) {
       el('div.page-head',
         el('div.breadcrumb', el('a', { href: '/teams' }, 'Teams'), el('span', '/'),
           el('span', `#${n(t.rank)}`)),
-        title,
+        el('div.title-row', title, watchButton('team', String(t.team_id), t.name)),
         el('p.page-sub',
           `Team ${n(t.team_id)} · ${plural(t.members_total, 'member')} · ` +
           `${n(t.members_active)} active in the last ${activeWindow()}`))
@@ -1026,6 +1063,8 @@ export async function teamDetail(view, { id }, nav) {
         rankMovement(t.rank_change_24h, 'by lifetime points'),
         'Rank by lifetime points, and places moved over the last 24 hours'),
     ]));
+
+    view.append(await milestoneSection(t, 'team'));
 
     const hist = historyCard('Production', (p) => api.teamHistory(t.team_id, p));
     cleanups.push(hist.destroy);
@@ -1230,7 +1269,7 @@ export async function donorDetail(view, { name }, nav) {
     const head = el('div.page-head',
       el('div.breadcrumb', el('a', { href: '/donors' }, 'Donors'), el('span', '/'),
         el('span', `#${n(d.rank)}`)),
-      title,
+      el('div.title-row', title, watchButton('donor', d.name, d.name)),
       el('p.page-sub',
         d.team_count === 1
           ? 'Folding for one team.'
@@ -1249,6 +1288,8 @@ export async function donorDetail(view, { name }, nav) {
         rankMovement(d.rank_change_24h, 'across all donors'),
         'Rank across all donors, and places moved over the last 24 hours'),
     ]));
+
+    view.append(await milestoneSection(d, 'donor'));
 
     const teams = d.teams || [];
     if (teams.length > 1) {
@@ -1608,6 +1649,271 @@ function teamsCard(donor, teams) {
   return node;
 }
 
+/* ----------------------------------------------------- personal + explore --- */
+
+function entityHref(e) {
+  return e.kind === 'team' ? `/teams/${e.team_id}` : `/donors/${encodeURIComponent(e.name)}`;
+}
+
+function entityRef(e) {
+  return e.kind === 'team' ? String(e.team_id) : e.name;
+}
+
+function badgePath(kind, ref, metric) {
+  return `/badge/${kind}/${encodeURIComponent(ref)}?metric=${metric}`;
+}
+
+/** The next nearby round total, not a distant order-of-magnitude vanity number. */
+function nextPointTarget(points) {
+  const step = 10 ** Math.max(3, Math.floor(Math.log10(Math.max(points, 1))) - 1);
+  return (Math.floor(points / step) + 1) * step;
+}
+
+/** The next round rank above this one: #48,213 aims at #40,000, not #10,000. */
+function nextRankTarget(rank) {
+  if (rank <= 1) return null;
+  const step = 10 ** Math.floor(Math.log10(rank));
+  return Math.max(1, Math.floor((rank - 1) / step) * step);
+}
+
+async function milestoneSection(entity, kind) {
+  const pointTarget = nextPointTarget(entity.points_total);
+  const rate = entity.points_per_day_24h_avg || 0;
+  const pointDays = rate > 0 ? (pointTarget - entity.points_total) / rate : null;
+  const rankTarget = nextRankTarget(entity.rank);
+  let rankGoal = null;
+  if (rankTarget) {
+    rankGoal = await api.goal({ kind, who: kind === 'team' ? entity.team_id : entity.name,
+      target_rank: rankTarget }).catch(() => null);
+  }
+  const g = rankGoal?.data;
+  const rankText = g?.current_overtake_days != null
+    ? overtakeIn(g.current_overtake_days)
+    : g?.horizons?.find((h) => h.days === 90)
+      ? `${short(g.horizons.find((h) => h.days === 90).points_per_day)} PPD needed in 90 days`
+      : 'not closing at the current rate';
+
+  const ref = kind === 'team' ? entity.team_id : entity.name;
+  const badges = el('details.badges',
+    el('summary', 'Embeddable badges'),
+    el('div.badge-list', ...['rank', 'ppd', 'points'].map((metric) => {
+      const path = badgePath(kind, ref, metric);
+      return el('div.badge-row', el('img', { src: path, alt: `${metric} badge` }),
+        el('code', `${location.origin}${path}`));
+    })));
+
+  return el('section.section', card('Next milestones',
+    el('div.card-body',
+      el('div.stats',
+        statTile('Points target', short(pointTarget), pointDays == null ? 'no current production' : overtakeIn(pointDays),
+          `Next round total: ${n(pointTarget)} points`),
+        rankTarget
+          ? statTile('Rank target', `#${n(rankTarget)}`, rankText)
+          : statTile('Rank target', '#1', 'already leading')),
+      badges)));
+}
+
+function watchTable(items, onRemove) {
+  const body = el('tbody');
+  for (const e of items) {
+    const name = el('a', { href: entityHref(e) });
+    nameText(name, e.name);
+    body.append(el('tr',
+      el('td.left', e.kind === 'team' ? 'Team' : 'Donor'),
+      el('td.left.name-cell', name),
+      el('td.rank', `#${n(e.rank)}`),
+      el('td.num', { title: n(e.points_per_day_24h_avg) }, short(e.points_per_day_24h_avg)),
+      el('td.num', { title: n(e.points_total) }, short(e.points_total)),
+      el('td', el('button.linkish', { type: 'button', onclick: () => onRemove(e) }, 'Remove'))));
+  }
+  return el('div.table-wrap', el('table.data',
+    el('thead', el('tr', el('th.left', 'Kind'), el('th.left', 'Name'),
+      el('th.left', 'Rank'), el('th', 'PPD'), el('th', 'Points'), el('th'))), body));
+}
+
+export async function watchlistPage(view) {
+  loading(view);
+  const saved = watched();
+  clear(view);
+  view.append(el('div.page-head', el('h1.page-title', 'Watchlist'),
+    el('p.page-sub', 'Your donors and teams in one place. Saved only in this browser—no account required.')));
+  if (!saved.length) {
+    view.append(card(null, el('div.empty',
+      el('div', 'Nothing watched yet.'),
+      el('div.muted', 'Open any donor or team and choose “Watch”.'))));
+    return;
+  }
+  const results = await Promise.all(saved.map(async (x) => {
+    try {
+      const res = x.kind === 'team' ? await api.team(x.id) : await api.donor(x.id);
+      return { ...res.data, kind: x.kind, team_id: x.kind === 'team' ? res.data.team_id : undefined };
+    } catch {
+      return null;
+    }
+  }));
+  const items = results.filter(Boolean);
+  const host = el('div');
+  const draw = () => clear(host).append(watchTable(items, (e) => {
+    const i = items.indexOf(e);
+    if (i >= 0) items.splice(i, 1);
+    saveWatched(watched().filter((x) => watchID(x.kind, x.id) !== watchID(e.kind, entityRef(e))));
+    if (items.length) draw();
+    else clear(host).append(el('div.empty', 'Nothing watched yet.'));
+  }));
+  draw();
+  view.append(card(null, host), el('p.chart-note',
+    'This list never leaves your browser. Use Explore to compare any two entries or set a target.'));
+}
+
+function field(label, input) {
+  return el('label.form-field', el('span', label), input);
+}
+
+function kindControl(value, onPick) {
+  return segmented([{ value: 'team', label: 'Teams' }, { value: 'donor', label: 'Donors' }], value, onPick);
+}
+
+function compareTool() {
+  let kind = 'team';
+  const controls = el('div.chart-toolbar');
+  const a = el('input.code-field', { required: true, placeholder: 'Team number' });
+  const b = el('input.code-field', { required: true, placeholder: 'Team number' });
+  const result = el('div.tool-result');
+  const form = el('form.tool-form', field('First', a), field('Second', b),
+    el('button.btn.btn-primary', { type: 'submit' }, 'Compare'));
+  const drawControls = () => clear(controls).append(kindControl(kind, (v) => {
+    kind = v;
+    a.placeholder = b.placeholder = kind === 'team' ? 'Team number' : 'Exact donor name';
+    drawControls();
+  }));
+  drawControls();
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    clear(result).append(skeleton(100));
+    try {
+      const d = (await api.compare({ kind, a: a.value.trim(), b: b.value.trim() })).data;
+      const leader = d.leader === 'tie' ? null : d[d.leader];
+      clear(result).append(el('div.stats',
+        statTile(d.a.name, `#${n(d.a.rank)}`, `${short(d.a.points_per_day_24h_avg)} PPD · ${short(d.a.points_total)} points`),
+        statTile(d.b.name, `#${n(d.b.rank)}`, `${short(d.b.points_per_day_24h_avg)} PPD · ${short(d.b.points_total)} points`),
+        statTile('Gap', short(d.points_gap), leader ? `${leader.name} leads` : 'level'),
+        statTile('Crossover', d.overtake_days == null ? '—' : overtakeIn(d.overtake_days),
+          d.overtake_at ? new Date(d.overtake_at).toLocaleDateString() : 'not closing at current rates')));
+    } catch (err) {
+      clear(result).append(el('div.error', err.message));
+    }
+  });
+  return cardWith('Head to head', controls, el('div.card-body', form, result));
+}
+
+function goalTool() {
+  let kind = 'team';
+  const controls = el('div.chart-toolbar');
+  const who = el('input.code-field', { required: true, placeholder: 'Team number' });
+  const targetType = el('select.code-field',
+    el('option', { value: 'target_rank' }, 'Reach rank'),
+    el('option', { value: 'target_points' }, 'Reach points'),
+    el('option', { value: 'overtake' }, 'Overtake'));
+  const target = el('input.code-field', { required: true, type: 'number', min: '1', placeholder: 'Target rank' });
+  const by = el('input.code-field', { type: 'date' });
+  const result = el('div.tool-result');
+  const syncTarget = () => {
+    const type = targetType.value;
+    target.type = type === 'overtake' ? 'text' : 'number';
+    target.placeholder = type === 'target_rank' ? 'Target rank' : type === 'target_points' ? 'Target points' :
+      (kind === 'team' ? 'Team number' : 'Exact donor name');
+  };
+  targetType.addEventListener('change', syncTarget);
+  const form = el('form.tool-form', field('Who', who), field('Goal', targetType),
+    field('Target', target), field('By (optional)', by),
+    el('button.btn.btn-primary', { type: 'submit' }, 'Calculate'));
+  const drawControls = () => clear(controls).append(kindControl(kind, (v) => {
+    kind = v;
+    who.placeholder = kind === 'team' ? 'Team number' : 'Exact donor name';
+    syncTarget();
+    drawControls();
+  }));
+  drawControls();
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    clear(result).append(skeleton(100));
+    try {
+      const params = { kind, who: who.value.trim(), [targetType.value]: target.value.trim(), by: by.value };
+      const d = (await api.goal(params)).data;
+      const tiles = [statTile('Gap today', short(d.points_gap), d.holding ? 'currently ahead' : 'still to close')];
+      if (d.required_points_per_day != null) {
+        tiles.push(statTile('Required PPD', short(d.required_points_per_day),
+          d.subject.points_per_day_24h_avg ?
+            `${(d.required_points_per_day / d.subject.points_per_day_24h_avg).toFixed(1)}× current rate` : 'no current rate'));
+      } else {
+        for (const h of d.horizons || []) tiles.push(statTile(`In ${h.days} days`, short(h.points_per_day),
+          h.current_rate_multiple ? `${h.current_rate_multiple.toFixed(1)}× current rate` : 'required PPD'));
+      }
+      clear(result).append(el('div.stats', ...tiles),
+        el('p.chart-note', 'Moving targets include the points they are projected to add. Rates use the rolling 24-hour average.'));
+    } catch (err) {
+      clear(result).append(el('div.error', err.message));
+    }
+  });
+  return cardWith('What would it take?', controls, el('div.card-body', form, result));
+}
+
+function moversTable(rows) {
+  const body = el('tbody');
+  for (const m of rows) {
+    const name = el('a', { href: entityHref(m) });
+    nameText(name, m.name);
+    body.append(el('tr', el('td.left.name-cell', name), el('td.rank', `#${n(m.rank)}`),
+      el('td.num', el('span', { class: m.rank_change_24h > 0 ? 'gain' : 'loss' }, delta(m.rank_change_24h))),
+      el('td.num', { title: n(m.points_per_day_24h_avg) }, short(m.points_per_day_24h_avg))));
+  }
+  return el('div.table-wrap', el('table.data', el('thead', el('tr', el('th.left', 'Name'),
+    el('th.left', 'Rank'), el('th', '24h move'), el('th', 'PPD'))), body));
+}
+
+function moversTool() {
+  let kind = 'team';
+  const controls = el('div.chart-toolbar');
+  const body = el('div.card-body');
+  const drawControls = () => clear(controls).append(kindControl(kind, (v) => { kind = v; drawControls(); load(); }));
+  async function load() {
+    clear(body).append(skeleton(180));
+    try {
+      const d = (await api.movers({ kind, within: 1000, limit: 10 })).data;
+      clear(body).append(el('div.grid-2',
+        el('div', el('h3.tool-title', 'Climbed'), d.climbed.length ? moversTable(d.climbed) : el('div.empty', 'No measured climbs.')),
+        el('div', el('h3.tool-title', 'Fell'), d.fell.length ? moversTable(d.fell) : el('div.empty', 'No measured falls.'))),
+        el('p.chart-note', `Measured within the top ${n(d.within)} of ${n(d.field_size)} ${kind}s. ` +
+          'The bound avoids treating jumps across enormous zero-point ties as meaningful movement.'));
+    } catch (err) {
+      clear(body).append(el('div.error', err.message));
+    }
+  }
+  drawControls();
+  load();
+  return cardWith('Biggest movers', controls, body);
+}
+
+export async function explorePage(view, { tab = 'compare' } = {}) {
+  clear(view);
+  const valid = ['compare', 'goals', 'movers'];
+  if (!valid.includes(tab)) tab = 'compare';
+  const tabs = segmented([
+    { value: 'compare', label: 'Compare' }, { value: 'goals', label: 'Goals' },
+    { value: 'movers', label: 'Movers' },
+  ], tab, (v) => { history.replaceState(null, '', `/explore?tab=${v}`); draw(v); });
+  const host = el('section.section');
+  const draw = (which) => {
+    for (const b of tabs.querySelectorAll('button')) b.setAttribute('aria-pressed',
+      b.textContent.toLowerCase() === which ? 'true' : 'false');
+    clear(host).append(which === 'goals' ? goalTool() : which === 'movers' ? moversTool() : compareTool());
+  };
+  view.append(el('div.page-head', el('h1.page-title', 'Explore'),
+    el('p.page-sub', 'Compare production, plan a target, or see who moved over the last day.')),
+    tabs, host);
+  draw(tab);
+}
+
 /* --------------------------------------------------------------- search --- */
 
 /**
@@ -1754,6 +2060,9 @@ export async function apiDocs(view) {
   const exampleOf = (path) => {
     const p = path.replace(/\{[^}]+\}/g, (m) => EXAMPLES[m] ?? m);
     if (p === '/v1/search') return p + '?q=Anonymous';
+    if (p === '/v1/compare') return p + '?kind=team&a=0&b=1';
+    if (p === '/v1/goals') return p + '?kind=team&who=0&target_rank=1';
+    if (p === '/v1/movers') return p + '?kind=team';
     // The changes feed needs a cursor to be a working example at all. The snapshot
     // time is the right one, but this page can be the first thing a visitor loads and
     // there is no snapshot until something has been fetched — so fall back to an hour
@@ -1912,6 +2221,38 @@ export async function apiDocs(view) {
         { name: 'since', values: 'RFC 3339', required: true,
           note: 'Exclusive. Pass back the snapshot.at of your last response; there is no other state to keep. Reaches 7 days back.' },
         { name: 'kind', values: 'teams | donors | members', note: 'Which collection. All three by default.' }] }));
+
+  view.append(group('Insights', 'Structured versions of the projections used by the site, bot and MCP server.',
+    { path: '/v1/compare', summary: 'Put two teams or donors head to head.', params: [
+      { name: 'kind', values: 'team | donor', required: true, note: 'Compare within one field.' },
+      { name: 'a', values: 'team number | exact donor name', required: true, note: 'First entity.' },
+      { name: 'b', values: 'team number | exact donor name', required: true, note: 'Second entity.' }] },
+    { path: '/v1/goals', summary: 'Calculate the PPD needed to reach a target.', params: [
+      { name: 'kind', values: 'team | donor', required: true, note: 'The ranking field.' },
+      { name: 'who', values: 'team number | exact donor name', required: true, note: 'Whose goal this is.' },
+      { name: 'target_rank', values: 'integer', note: 'Reach whoever currently holds this rank.' },
+      { name: 'target_points', values: 'integer', note: 'Reach a fixed lifetime total.' },
+      { name: 'overtake', values: 'team number | exact donor name', note: 'Pass this moving target.' },
+      { name: 'by', values: 'YYYY-MM-DD', note: 'Optional deadline. Without one, returns 30, 90 and 365-day rates.' }] },
+    { path: '/v1/movers', summary: 'Biggest measured 24-hour rank movements near the top.', params: [
+      { name: 'kind', values: 'team | donor', required: true, note: 'Which ranking.' },
+      { name: 'direction', values: 'up | down | both', note: 'Defaults to both.' },
+      { name: 'within', values: '10–10000', note: 'How much of the top field to inspect. Defaults to 1000.' },
+      { name: 'limit', values: '1–25', note: 'Rows per direction. Defaults to 10.' }] }));
+
+  view.append(
+    el('section.section',
+      card('Embeddable badges',
+        el('div.card-body',
+          el('p', 'SVG badges are available at ', el('code', '/badge/team/{id}'), ' and ',
+            el('code', '/badge/donor/{name}'), '. Use ', el('code', '?metric=rank'), ', ',
+            el('code', '?metric=ppd'), ' or ', el('code', '?metric=points'),
+            '. They carry the same snapshot-aware cache headers as the API.'),
+          el('img', { src: '/badge/team/0?metric=ppd', alt: 'Example team PPD badge' })
+        )
+      )
+    )
+  );
 
   view.append(el('section.section', card('MCP — for AI agents',
     el('div.card-body',

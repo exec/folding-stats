@@ -73,7 +73,7 @@ func run(dir, addr, ua string, poll, compactAfter, keepDaily, keepRaw time.Durat
 		return err
 	}
 
-	// The API owns /v1; everything else is the frontend, including client-side
+	// The API owns /v1 and the embeddable /badge images; everything else is the frontend, including client-side
 	// routes that must deep-link.
 	//
 	// The frontend renders client-side, so the only thing a crawler reads without
@@ -92,6 +92,7 @@ func run(dir, addr, ua string, poll, compactAfter, keepDaily, keepRaw time.Durat
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", srv)
+	mux.Handle("/badge/", srv)
 	// Model Context Protocol, for clients that want an answer rather than data.
 	mux.Handle("/mcp", srv.MCPHandler())
 	mux.Handle("/", site)
