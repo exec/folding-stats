@@ -76,6 +76,13 @@ func (s *Server) routes() {
 	// it is a different question about all of them, not a sub-resource of any one.
 	s.mux.HandleFunc("GET /v1/changes", s.handle(s.changes, "since", "kind", "page", "per_page"))
 	s.mux.HandleFunc("GET /badge/{kind}/{ref}", s.badge)
+
+	// Registered here rather than mounted beside the server in main, so MCP traffic
+	// passes through ServeHTTP like everything else. Mounted directly it skipped the
+	// request counter entirely — /v1/status reported requests_per_second with the
+	// analytical tools, the most expensive surface on the service, missing from it —
+	// and the p == "/mcp" branch of that counter was unreachable code.
+	s.mux.Handle("/mcp", s.MCPHandler())
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

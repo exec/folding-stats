@@ -96,6 +96,16 @@ type Snapshot struct {
 	// calls Build directly) still answers correctly, just slower.
 	ProjectHist map[store.Granularity][]store.Point
 
+	// rosters memoises ordered roster heads per team, column and active filter. See
+	// rosterHead: the answer is fixed for the snapshot's lifetime, and rebuilding it
+	// per page was the most expensive thing an anonymous request could ask for.
+	//
+	// Its own mutex rather than Guard: this is derived data owned by the snapshot,
+	// not live ingest state, and taking the write side of Guard to fill a cache would
+	// put readers behind a lock that exists to let ingest through.
+	rostersMu sync.Mutex
+	rosters   map[rosterKey]*rosterEntry
+
 	// Guard protects State, Members and Teams, which are the live ingest
 	// structures rather than copies.
 	//
@@ -144,6 +154,7 @@ func Build(st *model.State, members, teams *metrics.Window, tbl *rank.Table, s *
 	snap := &Snapshot{
 		State: st, Members: members, Teams: teams, Ranks: tbl, Store: s,
 		At: at, NextExpected: nextExpected, ETag: etag,
+		rosters: make(map[rosterKey]*rosterEntry),
 	}
 
 	maxTeamID := int32(0)

@@ -3,6 +3,7 @@ package api
 import (
 	"math"
 	"sort"
+	"sync"
 	"time"
 
 	"folding/internal/metrics"
@@ -390,26 +391,11 @@ func (s *Snapshot) orderRoster(slots []int32, k rank.SortKey, activeOnly bool, l
 		return out
 	}
 
-	type scored struct {
-		slot int32
-		v    int64
-	}
-	var head []scored
-	for _, slot := range slots {
-		if !keep(slot) {
-			continue
-		}
-		if s.rosterRanks(slot, k) {
-			head = append(head, scored{slot, s.rosterValue(slot, k)})
-		}
-	}
-	// Stable, so members tied on the column keep lifetime order rather than an
-	// arbitrary one that reshuffles between cycles for no reason.
-	sort.SliceStable(head, func(a, b int) bool { return head[a].v > head[b].v })
+	head := s.rosterHead(slots, k, activeOnly, keep)
 
 	out := make([]int32, 0, hi-lo)
 	for i := lo; i < hi && i < len(head); i++ {
-		out = append(out, head[i].slot)
+		out = append(out, head[i])
 	}
 	if hi <= len(head) {
 		return out
@@ -435,6 +421,88 @@ func (s *Snapshot) orderRoster(slots []int32, k rank.SortKey, activeOnly bool, l
 		}
 	}
 	return out
+}
+
+// rosterKey identifies one ordering. The roster's first slot and its length stand in
+// for the team: a team's roster is a contiguous run that does not change within a
+// snapshot, so the pair is unique without threading the team id down here.
+type rosterKey struct {
+	team, n int32
+	sort    rank.SortKey
+	active  bool
+}
+
+type rosterEntry struct {
+	once sync.Once
+	head []int32
+}
+
+const (
+	// Below this a roster is quicker to order than to look up: 100k members is ~0.6ms.
+	rosterCacheMin = 100_000
+	// Far more than the corpus has teams this large. It exists so a future corpus
+	// cannot turn this into unbounded growth, not because the current one could.
+	rosterCacheMax = 256
+)
+
+// rosterHead returns the members of a roster that rank on this column, ordered, and
+// remembers the answer for the life of the snapshot.
+//
+// Building it means touching every member of the team: 882,940 of them on the largest,
+// which measured 5.9ms against a 0.06ms baseline — the slowest thing any anonymous
+// request could ask for. The result cannot change while the snapshot does not, and
+// page two asks the identical question as page one, so it is worth keeping.
+//
+// Only large rosters are cached. A small team costs 0.16ms unsorted, so caching it
+// would spend memory to save nothing, and leaving it out is also what bounds the map:
+// the corpus has a handful of teams above the threshold, not thousands, so a client
+// cycling team ids cannot grow this without folding for them first.
+func (s *Snapshot) rosterHead(slots []int32, k rank.SortKey, activeOnly bool, keep func(int32) bool) []int32 {
+	build := func() []int32 {
+		type scored struct {
+			slot int32
+			v    int64
+		}
+		var head []scored
+		for _, slot := range slots {
+			if !keep(slot) {
+				continue
+			}
+			if s.rosterRanks(slot, k) {
+				head = append(head, scored{slot, s.rosterValue(slot, k)})
+			}
+		}
+		// Stable, so members tied on the column keep lifetime order rather than an
+		// arbitrary one that reshuffles between cycles for no reason.
+		sort.SliceStable(head, func(a, b int) bool { return head[a].v > head[b].v })
+		out := make([]int32, len(head))
+		for i, h := range head {
+			out[i] = h.slot
+		}
+		return out
+	}
+
+	if s.rosters == nil || len(slots) < rosterCacheMin {
+		return build()
+	}
+	key := rosterKey{team: slots[0], n: int32(len(slots)), sort: k, active: activeOnly}
+
+	s.rostersMu.Lock()
+	e, ok := s.rosters[key]
+	if !ok {
+		if len(s.rosters) >= rosterCacheMax {
+			s.rostersMu.Unlock()
+			return build()
+		}
+		e = &rosterEntry{}
+		s.rosters[key] = e
+	}
+	s.rostersMu.Unlock()
+
+	// Outside the map lock, so one team's 6ms scan does not hold up another's, and
+	// once per key however many requests arrive together.
+	e.once.Do(func() { e.head = build() })
+	return e.head
 }
 
 // tieAt reports how many entities share the value that put this one at rank, counting
