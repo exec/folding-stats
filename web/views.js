@@ -1065,6 +1065,7 @@ export async function teamDetail(view, { id }, nav) {
     ]));
 
     view.append(await milestoneSection(t, 'team'));
+    view.append(badgeSection(t, 'team'));
 
     const hist = historyCard('Production', (p) => api.teamHistory(t.team_id, p));
     cleanups.push(hist.destroy);
@@ -1290,6 +1291,7 @@ export async function donorDetail(view, { name }, nav) {
     ]));
 
     view.append(await milestoneSection(d, 'donor'));
+    view.append(badgeSection(d, 'donor'));
 
     const teams = d.teams || [];
     if (teams.length > 1) {
@@ -1693,15 +1695,6 @@ async function milestoneSection(entity, kind) {
       ? `${short(g.horizons.find((h) => h.days === 90).points_per_day)} PPD needed in 90 days`
       : 'not closing at the current rate';
 
-  const ref = kind === 'team' ? entity.team_id : entity.name;
-  const badges = el('details.badges',
-    el('summary', 'Embeddable badges'),
-    el('div.badge-list', ...['rank', 'ppd', 'points'].map((metric) => {
-      const path = badgePath(kind, ref, metric);
-      return el('div.badge-row', el('img', { src: path, alt: `${metric} badge` }),
-        el('code', `${location.origin}${path}`));
-    })));
-
   return el('section.section', card('Next milestones',
     el('div.card-body',
       el('div.stats',
@@ -1709,8 +1702,48 @@ async function milestoneSection(entity, kind) {
           `Next round total: ${n(pointTarget)} points`),
         rankTarget
           ? statTile('Rank target', `#${n(rankTarget)}`, rankText)
-          : statTile('Rank target', '#1', 'already leading')),
-      badges)));
+          : statTile('Rank target', '#1', 'already leading')))));
+}
+
+/**
+ * Embeddable badges, as a card of their own.
+ *
+ * They were a collapsed disclosure at the bottom of the milestones card, which is a
+ * well-hidden front door for the one feature whose whole purpose is to be taken
+ * somewhere else. A badge nobody finds is a badge nobody embeds.
+ *
+ * The markdown is offered ready to paste, wrapped in a link back to the page it came
+ * from, because that is what somebody putting one in a README actually needs — and it
+ * is how a reader of that README gets here.
+ */
+function badgeSection(entity, kind) {
+  const ref = kind === 'team' ? entity.team_id : entity.name;
+  const page = `${location.origin}${entityHref({ kind, ...entity })}`;
+
+  let withName = false;
+  const host = el('div.badge-list');
+  function draw() {
+    clear(host).append(...['ppd', 'rank', 'points'].map((metric) => {
+      const path = badgePath(kind, ref, metric) + (withName ? '&name=1' : '');
+      const url = `${location.origin}${path}`;
+      return el('div.badge-row',
+        el('img', { src: path, alt: `${entity.name} ${metric} badge`, loading: 'lazy' }),
+        el('code.badge-md', `[![${metric}](${url})](${page})`));
+    }));
+  }
+  draw();
+
+  return el('section.section', cardWith('Embeddable badges',
+    el('button.linkish', {
+      type: 'button',
+      onclick: (e) => { withName = !withName; e.target.textContent = withName ? 'Hide the name' : 'Show the name'; draw(); },
+    }, 'Show the name'),
+    el('div.card-body',
+      el('p.muted',
+        'Paste one into a README, a forum signature or a team page. They are cached at ' +
+        'the edge and update when the next upstream publish lands, so embedding one ' +
+        'somewhere busy costs nothing.'),
+      host)));
 }
 
 function watchTable(items, onRemove) {
