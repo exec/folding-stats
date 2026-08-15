@@ -468,7 +468,24 @@ main { max-width: var(--wide); margin: 0 auto; padding: var(--s6) var(--s5) var(
   border-color: var(--accent);
   background: var(--surface-hover);
 }
+/* Icon and name on one line, aligned to the name's cap height rather than centred on
+   the text box, so a tall glyph and a short one sit at the same place on every card. */
+.topic-head { display: flex; align-items: center; gap: var(--s3); }
+.topic-icon {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  color: var(--accent);
+}
 .topic-name { font-weight: 620; font-size: 15px; color: var(--ink); }
+/* On the topic's own page the icon leads the heading at its size. */
+.page-title .topic-icon {
+  width: 1.05em;
+  height: 1.05em;
+  margin-right: 0.4em;
+  vertical-align: -0.12em;
+  color: var(--accent);
+}
 .topic-desc { margin: 0; font-size: 13px; color: var(--ink-muted); }
 .topic-figures {
   display: flex;
