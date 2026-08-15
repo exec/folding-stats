@@ -1147,7 +1147,7 @@ export async function teamsList(view, { page = 1, sort = 'lifetime' }, nav) {
       el('div.page-head',
         el('h1.page-title', 'Teams'),
         el('p.page-sub', `${n(res.page.total_items)} teams, ranked by ${SORT_BLURB[sort]}.`)),
-      el('a.globe-link', { href: '/teams/around-the-globe' },
+      el('a.globe-link', { href: '/teams/country' },
         el('span.globe-link-icon', { 'aria-hidden': 'true' }, '◎'),
         el('span', 'Around the Globe'))));
     view.append(
@@ -1198,7 +1198,7 @@ export async function aroundTheGlobePage(view) {
         ? b.points_total - a.points_total
         : b.points_per_day_24h_avg - a.points_per_day_24h_avg);
       const body = el('tbody', ...rows.map((c) => el('tr',
-        el('td.left.name-cell', el('a', { href: `/teams/around-the-globe/${c.code.toLowerCase()}` }, c.name)),
+        el('td.left.name-cell', el('a', { href: `/teams/country/${c.code.toLowerCase()}` }, c.name)),
         el('td.num', `${n(c.teams_active)} / ${n(c.teams_total)}`),
         el('td.num', { title: n(c.points_per_day_24h_avg) }, short(c.points_per_day_24h_avg)),
         el('td.num', { title: n(c.points_total) }, short(c.points_total)))));
@@ -1234,7 +1234,7 @@ export async function countryPage(view, { code }) {
     clear(view).append(
       el('div.page-head',
         el('div.breadcrumb', el('a', { href: '/teams' }, 'Teams'), el('span', '/'),
-          el('a', { href: '/teams/around-the-globe' }, 'Around the Globe'), el('span', '/'),
+          el('a', { href: '/teams/country' }, 'Around the Globe'), el('span', '/'),
           el('span', c.name)),
         el('h1.page-title', c.name),
         el('p.page-sub', `${plural(c.teams_total, 'team')} currently assigned to this country.`)),
@@ -1248,6 +1248,35 @@ export async function countryPage(view, { code }) {
   } catch (err) {
     errorView(view, err);
   }
+}
+
+/**
+ * Teams by what brings them together, rather than where they are.
+ *
+ * Empty until topics are assigned. It says so plainly instead of showing an
+ * apologetic spinner or inventing categories with nothing behind them — the country
+ * side of this took several passes over 129,971 team names to fill, and it would be
+ * worse to imply the work is done than to admit it has not started.
+ */
+export async function topicsPage(view) {
+  clear(view).append(
+    el('div.page-head',
+      el('div.breadcrumb', el('a', { href: '/teams' }, 'Teams'), el('span', '/'),
+        el('span', 'By topic')),
+      el('h1.page-title', 'Folding by Topic'),
+      el('p.page-sub',
+        'Most teams are not a country. They are a university, an employer, a game, a ' +
+        'forum, a podcast, a hardware brand or a hobby, and that is usually the thing ' +
+        'that made somebody join one.')),
+    el('section.card.globe-card',
+      el('div.globe-empty',
+        el('div.globe-empty-title', 'No topics assigned yet.'),
+        el('p.muted',
+          'Topics will work the way countries do: a curated list, so a team appears ' +
+          'under a heading only when it genuinely belongs there.'),
+        el('p.muted',
+          el('a', { href: '/teams/country' }, 'Browse by country →'))))
+  );
 }
 
 export async function teamDetail(view, { id }, nav) {

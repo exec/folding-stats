@@ -162,7 +162,50 @@ a:hover { color: var(--accent); }
   transition: background 120ms ease, color 120ms ease;
 }
 .nav a:hover { background: var(--surface-hover); color: var(--ink); }
-.nav a[aria-current="page"] { background: var(--accent-quiet); color: var(--accent); }
+.nav a[aria-current="page"], .nav summary[aria-current="page"] {
+  background: var(--accent-quiet);
+  color: var(--accent);
+}
+
+/* The Teams menu. Styled to sit in the row as if it were one of the links, because
+   as far as the reader is concerned it is one. */
+.nav-menu { position: relative; }
+.nav-menu > summary {
+  padding: 6px var(--s3);
+  border-radius: var(--radius-sm);
+  color: var(--ink-secondary);
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+  white-space: nowrap;
+  transition: background 120ms ease, color 120ms ease;
+}
+.nav-menu > summary::-webkit-details-marker { display: none; }
+.nav-menu > summary::after {
+  content: "";
+  display: inline-block;
+  margin-left: 5px;
+  border: 4px solid transparent;
+  border-top-color: currentColor;
+  transform: translateY(2px);
+}
+.nav-menu[open] > summary::after { transform: translateY(-2px) rotate(180deg); }
+.nav-menu > summary:hover { background: var(--surface-hover); color: var(--ink); }
+.nav-menu-items {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 170px;
+  padding: var(--s1);
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+}
+.nav-menu-items a { display: block; }
 
 /* Search lives in the header, not a sidebar: it is the primary way people find
    themselves, and burying it below navigation is the main thing wrong with the
