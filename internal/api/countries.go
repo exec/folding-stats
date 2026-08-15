@@ -15,13 +15,15 @@ type countryDef struct {
 	TeamIDs []int32
 }
 
-// Generated 2026-08-15 from three sweeps: the top 2000 teams by 24h PPD, the
-// lifetime leaderboard beyond it (only 1,203 teams have any current output), and
-// a search for every country name that still had no team. Names and every
-// displayed figure still come from the live snapshot; this list only says which
-// teams a country claims. A team that cannot be attributed to one country is
-// global and absent — creator communities, crypto projects, faith and fandom
-// groups, and language or regional groups such as Alliance Francophone.
+// Generated 2026-08-15 from four sweeps: the top 2000 teams by 24h PPD, the
+// lifetime leaderboard beyond it (only 1,203 teams have any current output), a
+// search for every country name and then for every remaining country by demonym
+// and capital, and a search for the word "university" in fifteen languages plus
+// institutes, polytechnics and national labs. Names and every displayed figure
+// still come from the live snapshot; this list only says which teams a country
+// claims. A team that cannot be attributed to one country is global and absent —
+// creator communities, crypto projects, faith and fandom groups, and language or
+// regional groups such as Alliance Francophone.
 var countryDefs = []countryDef{
 	{Code: "US", Name: "United States", TeamIDs: []int32{
 		111065, 32, 259918, 33, 198, 11108, 37726, 40051, 234771, 1, 246129, 257944, 711, 44851,
@@ -69,8 +71,8 @@ var countryDefs = []countryDef{
 		13622, 259844, 257196, 259665, 1066028, 1572, 209894, 48157, 35554, 252071, 39797,
 		231250, 1061333, 112, 168145, 1062578, 249630, 243253, 259414, 3212, 116608, 245860,
 		250186, 204860, 1066016, 1066032, 253811, 1066120, 252180, 240755, 263476, 1066792,
-		250265, 1063984, 1067245, 1065152, 34687, 1063948, 1062094, 1066405, 240045, 56606,
-		1062811,
+		250265, 1063984, 2542, 1067245, 1065152, 34687, 1063948, 1062094, 1066405, 240045, 56606,
+		1062811, 200092, 232906, 232507, 43469, 52983, 66000, 107697, 34020, 89408, 42783,
 	}},
 	{Code: "DE", Name: "Germany", TeamIDs: []int32{
 		70335, 240890, 251999, 70911, 229957, 258351, 235935, 3, 127907, 34361, 155780, 249367,
@@ -82,13 +84,14 @@ var countryDefs = []countryDef{
 		241425, 265898, 252034, 246632, 246373, 257831, 2682, 245789, 245540, 243421, 250660,
 		250788, 258441, 253308, 250155, 253662, 262535, 265042, 240966, 253305, 10022, 258126,
 		1068028, 66332, 238966, 250985, 45700, 252772, 1066030, 244687, 252637, 255716, 243871,
-		257057, 266722, 70408, 264821, 264169, 241412, 237775, 262941, 229984, 250888, 1067373,
-		1067091, 265346, 1065430, 165208, 1065107,
+		257057, 266722, 70408, 264821, 264169, 237811, 241412, 237775, 262941, 36351, 229984,
+		250888, 1067373, 260138, 1067091, 259308, 1339, 265346, 1065430, 165208, 1064628,
+		1065107, 258315, 1217, 288, 246469, 246778, 191859, 1064199, 248201,
 	}},
 	{Code: "NO", Name: "Norway", TeamIDs: []int32{
 		37651, 37827, 264955, 240650, 237481, 241978, 237638, 243541, 1064929, 254030, 183891,
 		237803, 238979, 249160, 268660, 220963, 1067329, 244865, 234175, 255822, 242236, 61994,
-		240255, 1065660,
+		240255, 1065660, 225673,
 	}},
 	{Code: "RU", Name: "Russia", TeamIDs: []int32{
 		47191, 279, 122296, 247472, 228792, 107505, 133034,
@@ -102,14 +105,14 @@ var countryDefs = []countryDef{
 		163049, 61671, 37363, 242995, 54234, 1068232, 263289, 1064077, 243272, 1068331,
 	}},
 	{Code: "CN", Name: "China", TeamIDs: []int32{
-		3213, 253541,
+		3213, 253541, 104126,
 	}},
 	{Code: "AU", Name: "Australia", TeamIDs: []int32{
 		24, 43781, 253919, 186, 47155, 252720, 267219, 36010, 267810, 237022, 44171, 44170,
 		243288, 248479, 225000, 268126, 265716, 267244, 240641, 246095, 244539, 46401, 266266,
 	}},
 	{Code: "TW", Name: "Taiwan", TeamIDs: []int32{
-		31403, 244178, 37766, 651, 46810,
+		31403, 244178, 37766, 651, 46810, 49472,
 	}},
 	{Code: "BY", Name: "Belarus", TeamIDs: []int32{
 		11897, 773,
@@ -119,18 +122,19 @@ var countryDefs = []countryDef{
 		37412, 259377, 230690, 256648, 1065300, 34242, 258921, 47936, 86, 253168, 246505, 247736,
 		256609, 190589, 39286, 167613, 121684, 1063963, 249765, 260347, 230045, 1063901, 264900,
 		13362, 115804, 244070, 257771, 235872, 47687, 236046, 253800, 1061741, 13496, 1064775,
-		1068265, 34384, 264085, 127980,
+		1068265, 34384, 264085, 52343, 127980, 258760, 116791,
 	}},
 	{Code: "SE", Name: "Sweden", TeamIDs: []int32{
 		37451, 74600, 245476, 1061755, 831, 252390, 242624, 256133, 256869, 241128, 42956,
 		241438, 246962, 247646, 239904, 255108, 239210, 257338, 12044, 246538, 233257, 267236,
-		253993, 256923, 253937, 127292, 238606, 254957, 251757, 239347, 1068136, 260500,
+		253993, 256923, 253937, 127292, 238606, 254957, 251757, 239347, 1068136, 249380, 260500,
+		12636, 260036, 68092, 161239, 2996,
 	}},
 	{Code: "NZ", Name: "New Zealand", TeamIDs: []int32{
 		32887, 246916, 11053,
 	}},
 	{Code: "NL", Name: "Netherlands", TeamIDs: []int32{
-		92, 69411, 247522, 236111, 242482, 48658, 1288, 13505, 223282, 240144, 1067515,
+		92, 69411, 247522, 236111, 242482, 48658, 1288, 13505, 223282, 240144, 1067515, 33752,
 	}},
 	{Code: "JP", Name: "Japan", TeamIDs: []int32{
 		162, 261481, 257728, 254402, 257261, 260900, 222, 255396, 253284, 253230, 259660, 60630,
@@ -141,19 +145,20 @@ var countryDefs = []countryDef{
 	}},
 	{Code: "FR", Name: "France", TeamIDs: []int32{
 		45363, 242460, 247377, 229738, 44798, 261556, 263483, 243764, 420, 200905, 251916, 10317,
-		263700, 244682, 1188, 236445, 53653, 245642, 254077, 246220, 240342, 1065443,
+		263700, 244682, 1188, 236445, 53653, 245642, 254077, 246220, 240342, 250481, 1065443,
+		254195,
 	}},
 	{Code: "UA", Name: "Ukraine", TeamIDs: []int32{
-		2164, 156571, 153624,
+		2164, 156571, 153624, 193722,
 	}},
 	{Code: "VN", Name: "Vietnam", TeamIDs: []int32{
 		38156, 240761,
 	}},
 	{Code: "PL", Name: "Poland", TeamIDs: []int32{
-		276, 254123, 250728, 1064915, 236420, 1066850, 77920,
+		276, 254123, 250728, 1064915, 236420, 1066850, 230262, 77920, 1060900, 72019, 34874,
 	}},
 	{Code: "BR", Name: "Brazil", TeamIDs: []int32{
-		247463, 148894, 13802, 53066, 1062169, 266910, 210814, 229296, 231006,
+		247463, 148894, 13802, 53066, 1062169, 266910, 210814, 229296, 231006, 267159, 222831,
 	}},
 	{Code: "FI", Name: "Finland", TeamIDs: []int32{
 		231988, 62, 454, 237157, 239618, 38850, 257637, 240198, 242321, 235445, 245556, 365,
@@ -163,25 +168,26 @@ var countryDefs = []countryDef{
 		240228, 239968, 43299, 679, 264726, 1061303,
 	}},
 	{Code: "GR", Name: "Greece", TeamIDs: []int32{
-		44079, 36673, 838, 13416, 1065818, 3322, 1068194,
+		44079, 36673, 838, 13416, 1065818, 3322, 1068194, 181510, 205056,
 	}},
 	{Code: "CZ", Name: "Czechia", TeamIDs: []int32{
 		49658, 252064, 236798, 249477, 236157, 237170, 245800, 235910, 246110, 241054, 246927,
-		263313, 241584, 261291, 114, 10643, 239186, 240945, 157986, 240727, 1067491, 236542,
+		263313, 241584, 261291, 114, 10643, 239186, 240945, 157986, 240727, 1067491, 243614,
+		257394, 263423, 236542, 263826,
 	}},
 	{Code: "IT", Name: "Italy", TeamIDs: []int32{
-		246330, 61171, 1065, 246223, 262479, 249208, 252841, 46729, 1344, 258830, 180924, 256411,
-		263392, 69630,
+		246330, 61171, 1065, 246223, 262479, 249208, 252841, 46729, 1344, 258830, 180924, 156269,
+		256411, 43345, 263392, 69630, 1063373, 262636, 47501, 43902, 119077, 169099,
 	}},
 	{Code: "MY", Name: "Malaysia", TeamIDs: []int32{
 		2999, 192653, 10531,
 	}},
 	{Code: "ID", Name: "Indonesia", TeamIDs: []int32{
-		38608, 1068346,
+		38608, 1068346, 197108, 68318,
 	}},
 	{Code: "CH", Name: "Switzerland", TeamIDs: []int32{
 		248998, 38188, 65440, 3129, 42, 231211, 158203, 2866, 249164, 1067671, 264704, 264890,
-		256671,
+		256671, 264400,
 	}},
 	{Code: "TR", Name: "Turkey", TeamIDs: []int32{
 		39655, 175051,
@@ -197,7 +203,7 @@ var countryDefs = []countryDef{
 		33012, 69476, 245856,
 	}},
 	{Code: "PT", Name: "Portugal", TeamIDs: []int32{
-		35271, 260601, 257559, 498, 1068128,
+		35271, 260601, 257559, 498, 1068128, 239270, 186317, 223375,
 	}},
 	{Code: "BH", Name: "Bahrain", TeamIDs: []int32{
 		34353,
@@ -206,13 +212,14 @@ var countryDefs = []countryDef{
 		135369,
 	}},
 	{Code: "EE", Name: "Estonia", TeamIDs: []int32{
-		385, 238919,
+		385, 238919, 213411,
 	}},
 	{Code: "BG", Name: "Bulgaria", TeamIDs: []int32{
 		32435, 845, 32276,
 	}},
 	{Code: "BE", Name: "Belgium", TeamIDs: []int32{
-		3455, 37249, 239672, 243566, 34517, 233874, 33528, 243169, 243492, 240743, 37639,
+		3455, 37249, 239672, 243566, 34517, 233874, 33528, 243169, 243492, 240743, 37639, 129897,
+		43945,
 	}},
 	{Code: "LT", Name: "Lithuania", TeamIDs: []int32{
 		36816, 3558,
@@ -221,7 +228,7 @@ var countryDefs = []countryDef{
 		137516, 237668, 829,
 	}},
 	{Code: "SG", Name: "Singapore", TeamIDs: []int32{
-		197, 268453,
+		197, 268453, 35381, 158648, 47497, 115780,
 	}},
 	{Code: "AT", Name: "Austria", TeamIDs: []int32{
 		1604, 245443, 264767, 11246, 253113, 53791, 1061406, 259260, 49324, 239053, 251248,
@@ -237,10 +244,10 @@ var countryDefs = []countryDef{
 		149281, 261341,
 	}},
 	{Code: "ES", Name: "Spain", TeamIDs: []int32{
-		259280, 1250, 230209, 257094, 235246, 149424, 257515,
+		259280, 1250, 230209, 257094, 235246, 149424, 257515, 39948, 235040,
 	}},
 	{Code: "ZA", Name: "South Africa", TeamIDs: []int32{
-		37857, 234483, 1065774,
+		37857, 234483, 1065774, 12082,
 	}},
 	{Code: "TH", Name: "Thailand", TeamIDs: []int32{
 		248500, 265239, 52128, 1064025,
@@ -249,10 +256,10 @@ var countryDefs = []countryDef{
 		1067419,
 	}},
 	{Code: "RO", Name: "Romania", TeamIDs: []int32{
-		75559, 240374, 3044,
+		75559, 240374, 3044, 260970,
 	}},
 	{Code: "IL", Name: "Israel", TeamIDs: []int32{
-		2792, 235813, 39261,
+		2792, 235813, 39261, 31725,
 	}},
 	{Code: "SK", Name: "Slovakia", TeamIDs: []int32{
 		124, 124205, 47295,
@@ -267,7 +274,7 @@ var countryDefs = []countryDef{
 		13772,
 	}},
 	{Code: "AR", Name: "Argentina", TeamIDs: []int32{
-		1747,
+		1747, 265982, 51309, 1622,
 	}},
 	{Code: "IS", Name: "Iceland", TeamIDs: []int32{
 		184739, 237478, 1062171,
@@ -276,7 +283,10 @@ var countryDefs = []countryDef{
 		36206,
 	}},
 	{Code: "IN", Name: "India", TeamIDs: []int32{
-		525,
+		525, 202087, 54129, 231294,
+	}},
+	{Code: "MX", Name: "Mexico", TeamIDs: []int32{
+		1108, 238765, 256007, 12368, 248400, 1063091, 197247, 228977,
 	}},
 	{Code: "MM", Name: "Myanmar", TeamIDs: []int32{
 		250150,
@@ -286,9 +296,6 @@ var countryDefs = []countryDef{
 	}},
 	{Code: "AE", Name: "United Arab Emirates", TeamIDs: []int32{
 		217114,
-	}},
-	{Code: "MX", Name: "Mexico", TeamIDs: []int32{
-		1108,
 	}},
 	{Code: "RS", Name: "Serbia", TeamIDs: []int32{
 		387, 239922, 513, 1064229, 155427, 470,
@@ -324,7 +331,7 @@ var countryDefs = []countryDef{
 		43522, 208154,
 	}},
 	{Code: "EC", Name: "Ecuador", TeamIDs: []int32{
-		230268, 58039, 832, 121351,
+		230268, 58039, 231923, 832, 121351,
 	}},
 	{Code: "PS", Name: "Palestine", TeamIDs: []int32{
 		39163,
@@ -404,6 +411,9 @@ var countryDefs = []countryDef{
 	{Code: "AM", Name: "Armenia", TeamIDs: []int32{
 		237425, 82735,
 	}},
+	{Code: "AF", Name: "Afghanistan", TeamIDs: []int32{
+		32348, 110168, 109714,
+	}},
 	{Code: "GH", Name: "Ghana", TeamIDs: []int32{
 		262142,
 	}},
@@ -452,6 +462,9 @@ var countryDefs = []countryDef{
 	{Code: "SD", Name: "Sudan", TeamIDs: []int32{
 		104833,
 	}},
+	{Code: "KH", Name: "Cambodia", TeamIDs: []int32{
+		146797,
+	}},
 	{Code: "MW", Name: "Malawi", TeamIDs: []int32{
 		87267,
 	}},
@@ -461,11 +474,17 @@ var countryDefs = []countryDef{
 	{Code: "CI", Name: "Ivory Coast", TeamIDs: []int32{
 		152359,
 	}},
+	{Code: "XK", Name: "Kosovo", TeamIDs: []int32{
+		114294,
+	}},
 	{Code: "MZ", Name: "Mozambique", TeamIDs: []int32{
 		170881, 127099,
 	}},
 	{Code: "NI", Name: "Nicaragua", TeamIDs: []int32{
 		187871,
+	}},
+	{Code: "JO", Name: "Jordan", TeamIDs: []int32{
+		100501,
 	}},
 	{Code: "BS", Name: "Bahamas", TeamIDs: []int32{
 		57044,
