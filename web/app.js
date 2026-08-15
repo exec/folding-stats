@@ -169,6 +169,8 @@ const routes = [
   [/^\/teams\/country\/([^/]+)\/?$/, (m) =>
     views.countryPage(view, { code: decodeURIComponent(m[1]) })],
   [/^\/teams\/topic\/?$/, () => views.topicsPage(view)],
+  [/^\/teams\/topic\/([^/]+)\/?$/, (m) =>
+    views.topicPage(view, { slug: decodeURIComponent(m[1]) })],
   // Ordered before the detail routes: the donor pattern is greedy enough to swallow
   // a /rivals suffix as part of the name.
   [/^\/teams\/([^/]+)\/rivals\/?$/, (m, q) =>

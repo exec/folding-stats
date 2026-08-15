@@ -1259,24 +1259,61 @@ export async function countryPage(view, { code }) {
  * worse to imply the work is done than to admit it has not started.
  */
 export async function topicsPage(view) {
-  clear(view).append(
-    el('div.page-head',
-      el('div.breadcrumb', el('a', { href: '/teams' }, 'Teams'), el('span', '/'),
-        el('span', 'By topic')),
-      el('h1.page-title', 'Folding by Topic'),
-      el('p.page-sub',
-        'Most teams are not a country. They are a university, an employer, a game, a ' +
-        'forum, a podcast, a hardware brand or a hobby, and that is usually the thing ' +
-        'that made somebody join one.')),
-    el('section.card.globe-card',
-      el('div.globe-empty',
-        el('div.globe-empty-title', 'No topics assigned yet.'),
-        el('p.muted',
-          'Topics will work the way countries do: a curated list, so a team appears ' +
-          'under a heading only when it genuinely belongs there.'),
-        el('p.muted',
-          el('a', { href: '/teams/country' }, 'Browse by country →'))))
-  );
+  loading(view);
+  try {
+    const res = await api.topics();
+    const topics = res.data || [];
+    clear(view).append(
+      el('div.page-head',
+        el('div.breadcrumb', el('a', { href: '/teams' }, 'Teams'), el('span', '/'),
+          el('span', 'By topic')),
+        el('h1.page-title', 'Folding by Topic'),
+        el('p.page-sub',
+          'Most teams are not a country. They are a university, an employer, a game, a ' +
+          'forum, a podcast, a hardware brand or a hobby, and that is usually the thing ' +
+          'that made somebody join one.')),
+      // Ordered by how many teams gathered, not by output. Sorting on points would put
+      // a handful of overclockers with a lot of GPUs above every smaller community,
+      // which is the opposite of what someone looking for their own corner needs.
+      el('section.section', el('div.topic-grid', ...topics.map((t) =>
+        el('a.topic-card', { href: `/teams/topic/${t.slug}` },
+          el('div.topic-name', t.name),
+          el('p.topic-desc', t.description),
+          el('div.topic-figures',
+            el('span', `${n(t.teams_total)} ${t.teams_total === 1 ? 'team' : 'teams'}`),
+            el('span.num', { title: n(t.points_per_day_24h_avg) },
+              `${short(t.points_per_day_24h_avg)} PPD`)))))),
+      el('p.chart-note',
+        'A team can appear under more than one heading, and many do. Nationality is ' +
+        'deliberately not here — that is ', el('a', { href: '/teams/country' }, 'by country'), '.')
+    );
+  } catch (err) {
+    errorView(view, err);
+  }
+}
+
+export async function topicPage(view, { slug }) {
+  loading(view);
+  try {
+    const res = await api.topic(slug);
+    const t = res.data;
+    clear(view).append(
+      el('div.page-head',
+        el('div.breadcrumb', el('a', { href: '/teams' }, 'Teams'), el('span', '/'),
+          el('a', { href: '/teams/topic' }, 'By topic'), el('span', '/'),
+          el('span', t.name)),
+        el('h1.page-title', t.name),
+        el('p.page-sub', t.description)),
+      el('section.section', el('div.stats',
+        statTile('Combined points', short(t.points_total), n(t.points_total)),
+        statTile('Combined PPD', short(t.points_per_day_24h_avg), 'rolling 24-hour rate'),
+        statTile('Active teams', n(t.teams_active), `of ${n(t.teams_total)} listed`),
+        statTile('Last 7 days', short(t.points_last_7d), 'points'))),
+      el('section.section', card(`Teams (${n(t.teams_total)})`, teamTable(t.teams)))
+    );
+  } catch (err) {
+    errorView(view, err);
+  }
 }
 
 export async function teamDetail(view, { id }, nav) {

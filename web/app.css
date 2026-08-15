@@ -448,6 +448,40 @@ main { max-width: var(--wide); margin: 0 auto; padding: var(--s6) var(--s5) var(
   font-size: 30px;
   line-height: 1;
 }
+/* Topics are browsed, not compared, so they get cards to read rather than a table to
+   scan down. Auto-fill keeps several across on a desktop and one on a phone without a
+   breakpoint of its own. */
+.topic-grid {
+  display: grid;
+  gap: var(--s4);
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+.topic-card {
+  display: grid;
+  align-content: start;
+  gap: var(--s2);
+  padding: var(--s5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: inherit;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.topic-card:hover, .topic-card:focus-visible {
+  border-color: var(--accent);
+  background: var(--surface-hover);
+}
+.topic-name { font-weight: 620; font-size: 15px; color: var(--ink); }
+.topic-desc { margin: 0; font-size: 13px; color: var(--ink-muted); }
+.topic-figures {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-top: var(--s1);
+  font-size: 12px;
+  color: var(--ink-secondary);
+}
+
 .globe-card { position: relative; overflow: hidden; }
 .world-globe {
   position: relative;
