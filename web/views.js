@@ -1169,11 +1169,15 @@ export async function teamsList(view, { page = 1, sort = 'lifetime' }, nav) {
 
 export async function aroundTheGlobePage(view) {
   loading(view);
-  let destroyGlobe = null;
+  let globeHandle = null;
   try {
-    const [{ createGlobe }, res] = await Promise.all([import('/globe.js'), api.countries()]);
+    const [{ createGlobe, GLOBE_METRICS }, res] =
+      await Promise.all([import('/globe.js'), api.countries()]);
     const countries = res.data || [];
+    let metric = 'ppd';
     const globe = el('div.world-globe', skeleton(520));
+    const tableHost = el('div');
+    const controls = el('div.chart-toolbar');
     clear(view).append(
       el('div.page-head',
         el('div.breadcrumb', el('a', { href: '/teams' }, 'Teams'), el('span', '/'),
@@ -1181,27 +1185,45 @@ export async function aroundTheGlobePage(view) {
         el('h1.page-title', 'Folding Around The Globe'),
         el('p.page-sub',
           'Drag to rotate, scroll to zoom, and hover a highlighted country to see the teams counted there.')),
-      el('section.card.globe-card', globe,
+      el('section.card.globe-card', controls, globe,
         el('div.globe-help', 'Country totals stack the production of every assigned team. Click a country to keep its details open.'))
     );
-    destroyGlobe = await createGlobe(globe, countries);
 
-    if (countries.length) {
-      const body = el('tbody', ...countries.map((c) => el('tr',
+    // The table is the half of this page that answers "which teams are in my country",
+    // so it lists every assigned country, including the ones with nothing folding
+    // today. Ordering follows the globe's metric rather than staying fixed, because a
+    // reader who has just asked for all-time is not then looking for today's leader.
+    function drawTable() {
+      const rows = [...countries].sort((a, b) => metric === 'points'
+        ? b.points_total - a.points_total
+        : b.points_per_day_24h_avg - a.points_per_day_24h_avg);
+      const body = el('tbody', ...rows.map((c) => el('tr',
         el('td.left.name-cell', el('a', { href: `/teams/around-the-globe/${c.code.toLowerCase()}` }, c.name)),
         el('td.num', `${n(c.teams_active)} / ${n(c.teams_total)}`),
         el('td.num', { title: n(c.points_per_day_24h_avg) }, short(c.points_per_day_24h_avg)),
         el('td.num', { title: n(c.points_total) }, short(c.points_total)))));
-      view.append(el('section.section', card('Countries folding now',
+      clear(tableHost).append(card(`Countries (${n(rows.length)})`,
         el('div.table-wrap', el('table.data',
           el('thead', el('tr', el('th.left', 'Country'), el('th', 'Active / teams'),
-            el('th', 'PPD'), el('th', 'Points'))), body)))));
+            el('th', 'PPD'), el('th', 'Points'))), body))));
+    }
+
+    clear(controls).append(segmented(GLOBE_METRICS, metric, (v) => {
+      metric = v;
+      globeHandle?.setMetric(v);
+      drawTable();
+    }));
+
+    globeHandle = await createGlobe(globe, countries, metric);
+    if (countries.length) {
+      drawTable();
+      view.append(el('section.section', tableHost));
     }
     view.append(el('p.chart-note', 'Country boundaries: Natural Earth, public domain.'));
   } catch (err) {
     errorView(view, err);
   }
-  return () => destroyGlobe?.();
+  return () => globeHandle?.destroy();
 }
 
 export async function countryPage(view, { code }) {

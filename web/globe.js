@@ -31,8 +31,19 @@ function tooltipBody(tip, country) {
   );
 }
 
+// What a country's shade means. Current output is the default because it answers
+// "who is folding now"; lifetime points answers "who has folded", which is the only
+// view a country whose teams have gone quiet can appear in at all.
+export const GLOBE_METRICS = [
+  { value: 'ppd', label: 'Folding now', title: 'Shaded by points per day over the last 24 hours' },
+  { value: 'points', label: 'All time', title: 'Shaded by lifetime points, including teams that have stopped' },
+];
+
+const metricValue = (c, metric) =>
+  metric === 'points' ? c.points_total : c.points_per_day_24h_avg;
+
 /** Render an orthographic earth with mouse/touch rotation, wheel zoom and country details. */
-export async function createGlobe(host, countries) {
+export async function createGlobe(host, countries, metric = 'ppd') {
   const [d3, world] = await Promise.all([
     loadD3(),
     fetch('/vendor/countries.geojson').then((r) => {
@@ -54,20 +65,29 @@ export async function createGlobe(host, countries) {
   const projection = d3.geoOrthographic().precision(0.4).clipAngle(90).rotate([-10, -25]);
   const path = d3.geoPath(projection);
   const sphere = svg.append('path').datum({ type: 'Sphere' }).attr('class', 'globe-ocean');
-  const maxPPD = Math.max(...countries.map((c) => c.points_per_day_24h_avg), 1);
   const countriesPath = svg.append('g').selectAll('path')
     .data(world.features)
-    .join('path')
-    .attr('class', (d) => d.country ? 'globe-country active' : 'globe-country')
-    .attr('fill-opacity', (d) => {
-      if (!d.country) return 1;
-      return 0.42 + 0.5 * Math.log1p(d.country.points_per_day_24h_avg) / Math.log1p(maxPPD);
-    })
-    .attr('tabindex', (d) => d.country ? 0 : null)
-    .attr('role', (d) => d.country ? 'link' : null)
-    .attr('aria-label', (d) => d.country
-      ? `${d.country.name}, ${n(d.country.teams_total)} counted teams, ${n(d.country.points_per_day_24h_avg)} points per day`
-      : null);
+    .join('path');
+
+  // A country counts as lit when it has something to show on the current metric, not
+  // merely because it is assigned. A country whose teams have all stopped is present
+  // in the data and dark under "folding now", and lights up under "all time".
+  function paint() {
+    const max = Math.max(...countries.map((c) => metricValue(c, metric)), 1);
+    const lit = (d) => d.country && metricValue(d.country, metric) > 0;
+    countriesPath
+      .attr('class', (d) => lit(d) ? 'globe-country active' : 'globe-country')
+      .attr('fill-opacity', (d) =>
+        lit(d) ? 0.42 + 0.5 * Math.log1p(metricValue(d.country, metric)) / Math.log1p(max) : 1)
+      .attr('tabindex', (d) => lit(d) ? 0 : null)
+      .attr('role', (d) => lit(d) ? 'link' : null)
+      .attr('aria-label', (d) => lit(d)
+        ? `${d.country.name}, ${n(d.country.teams_total)} counted teams, ` + (metric === 'points'
+          ? `${n(d.country.points_total)} points all time`
+          : `${n(d.country.points_per_day_24h_avg)} points per day`)
+        : null);
+  }
+  paint();
 
   let width = 0;
   let zoom = 1;
@@ -96,7 +116,9 @@ export async function createGlobe(host, countries) {
   }
 
   function show(event, feature, pin = false) {
-    if (!feature.country) return;
+    // Checked here rather than in the event binding, so switching metric changes what
+    // is hoverable without rebinding anything.
+    if (!feature.country || metricValue(feature.country, metric) <= 0) return;
     clearTimeout(hideTimer);
     if (pin) pinned = feature;
     tooltipBody(tip, feature.country);
@@ -148,9 +170,20 @@ export async function createGlobe(host, countries) {
   const ro = new ResizeObserver(resize);
   ro.observe(host);
   resize();
-  return () => {
-    ro.disconnect();
-    clearTimeout(hideTimer);
-    svg.on('.drag', null).on('.zoom', null);
+  return {
+    // Repainting rather than rebuilding: the reader has usually rotated the globe to
+    // their own part of the world before they think to change the metric, and throwing
+    // that away to recolour it would be its own small insult.
+    setMetric(next) {
+      metric = next;
+      pinned = null;
+      tip.hidden = true;
+      paint();
+    },
+    destroy() {
+      ro.disconnect();
+      clearTimeout(hideTimer);
+      svg.on('.drag', null).on('.zoom', null);
+    },
   };
 }
