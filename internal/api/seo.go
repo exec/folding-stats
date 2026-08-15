@@ -57,6 +57,19 @@ func (s *Server) PageMeta(p string) (PageMeta, bool) {
 			Title:       "Folding by Topic" + siteSuffix,
 			Description: "Browse Folding@home teams by what brings them together, from universities and employers to games, hardware and hobbies.",
 		}, true
+	case strings.HasPrefix(p, "/teams/topic/"):
+		slug := strings.TrimSuffix(strings.TrimPrefix(p, "/teams/topic/"), "/")
+		if def, ok := topicDefBySlug(slug); ok {
+			return PageMeta{
+				Title:       def.Name + " — Folding@home teams" + siteSuffix,
+				Description: def.Description,
+			}, true
+		}
+		return PageMeta{
+			Title:       "Topic not found" + siteSuffix,
+			Description: "No topic by this name appears in Folding by Topic.",
+			NoIndex:     true,
+		}, true
 	case strings.HasPrefix(p, "/teams/country/"):
 		code := strings.TrimSuffix(strings.TrimPrefix(p, "/teams/country/"), "/")
 		if def, ok := countryDefByCode(code); ok {

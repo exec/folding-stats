@@ -69,6 +69,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/movers", s.handle(s.movers, "kind", "direction", "within", "limit"))
 	s.mux.HandleFunc("GET /v1/countries", s.handle(s.countries))
 	s.mux.HandleFunc("GET /v1/countries/{code}", s.handle(s.country))
+	s.mux.HandleFunc("GET /v1/topics", s.handle(s.topics))
+	s.mux.HandleFunc("GET /v1/topics/{slug}", s.handle(s.topic))
 
 	// Incremental sync. Deliberately alongside the collections rather than under them:
 	// it is a different question about all of them, not a sub-resource of any one.

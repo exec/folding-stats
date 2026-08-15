@@ -131,4 +131,6 @@ export const api = {
   movers: (params, o) => request(`/v1/movers${qs(params)}`, o),
   countries: (o) => request('/v1/countries', o),
   country: (code, o) => request(`/v1/countries/${encodeURIComponent(code)}`, o),
+  topics: (o) => request('/v1/topics', o),
+  topic: (slug, o) => request(`/v1/topics/${encodeURIComponent(slug)}`, o),
 };
