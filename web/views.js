@@ -1716,6 +1716,22 @@ async function milestoneSection(entity, kind) {
  * from, because that is what somebody putting one in a README actually needs — and it
  * is how a reader of that README gets here.
  */
+// The snippet only exists to be pasted somewhere else, so the click does the one
+// step between here and there. Selection is the fallback: writeText rejects on a
+// denied permission or a non-secure origin, and leaving the line selected keeps the
+// keyboard route working rather than failing silently.
+async function copyText(text, button, status) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    getSelection().selectAllChildren(button);
+    return;
+  }
+  status.textContent = 'Copied';
+  clearTimeout(status.timer);
+  status.timer = setTimeout(() => { status.textContent = ''; }, 1400);
+}
+
 function badgeSection(entity, kind) {
   const ref = kind === 'team' ? entity.team_id : entity.name;
   const page = `${location.origin}${entityHref({ kind, ...entity })}`;
@@ -1725,10 +1741,17 @@ function badgeSection(entity, kind) {
   function draw() {
     clear(host).append(...['ppd', 'rank', 'points'].map((metric) => {
       const path = badgePath(kind, ref, metric) + (withName ? '&name=1' : '');
-      const url = `${location.origin}${path}`;
+      const md = `[![${metric}](${location.origin}${path})](${page})`;
+      const done = el('span.copy-done', { 'aria-live': 'polite' });
       return el('div.badge-row',
         el('img', { src: path, alt: `${entity.name} ${metric} badge`, loading: 'lazy' }),
-        el('code.badge-md', `[![${metric}](${url})](${page})`));
+        el('button.badge-md.copyable', {
+          type: 'button',
+          title: 'Click to copy',
+          'aria-label': `Copy the ${metric} badge markdown`,
+          onclick: (e) => copyText(md, e.currentTarget, done),
+        }, md),
+        done);
     }));
   }
   draw();

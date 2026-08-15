@@ -362,7 +362,19 @@ main { max-width: var(--wide); margin: 0 auto; padding: var(--s6) var(--s5) var(
 /* The markdown is the thing being copied, so it gets room to be selected in one
    gesture rather than wrapping mid-URL. */
 .badge-md { font-size: 12px; color: var(--ink-muted); overflow-x: auto; white-space: nowrap; }
-.badge-row code { color: var(--ink-muted); overflow-wrap: anywhere; font-size: 12px; }
+/* A button, not a code sample: clicking it copies, so it has to be reachable by
+   keyboard and announce itself as an action. The styling only undoes what the
+   button element brings with it. */
+.copyable {
+  font-family: var(--mono);
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.copyable:hover, .copyable:focus-visible { color: var(--ink); }
+.copy-done { font-size: 12px; color: var(--good); }
 
 /* ------------------------------------------------------------ my folding --- */
 
