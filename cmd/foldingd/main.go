@@ -94,7 +94,9 @@ func run(dir, addr, ua string, poll, compactAfter, keepDaily, keepRaw time.Durat
 	mux.Handle("/v1/", srv)
 	mux.Handle("/badge/", srv)
 	// Model Context Protocol, for clients that want an answer rather than data.
-	mux.Handle("/mcp", srv.MCPHandler())
+	// Routed into the API server rather than mounted beside it, so it is counted and
+	// compressed like every other public surface; srv registers /mcp on its own mux.
+	mux.Handle("/mcp", srv)
 	mux.Handle("/", site)
 
 	// Catch up on anything archived while we were down before accepting traffic,

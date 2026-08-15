@@ -765,36 +765,46 @@ type Country struct {
 	Production
 }
 
+// countryView sums a country's production and returns its teams, at most limit of
+// them. Two passes for the same reason as topicView: the totals need every team but
+// only its scalars, while a Team view allocates a name and computes a tie and a rank
+// change, and the collection shows ten per country out of 557 for the United States.
 func (s *Snapshot) countryView(def countryDef, limit int) Country {
 	c := Country{Code: def.Code, Name: def.Name, Teams: []Team{}}
+
+	slots := make([]int32, 0, len(def.TeamIDs))
 	for _, id := range def.TeamIDs {
 		slot, ok := s.State.TeamSlot(id)
 		if !ok {
 			continue
 		}
-		t := s.teamView(slot)
-		c.Teams = append(c.Teams, t)
+		slots = append(slots, slot)
+		t := s.State.Teams[slot]
 		c.TeamsTotal++
-		if t.PointsLast7d > 0 {
+		if s.Teams.Last7d(slot) > 0 {
 			c.TeamsActive++
 		}
-		c.PointsTotal += t.PointsTotal
-		c.WUsTotal += t.WUsTotal
-		c.PointsLastCycle += t.PointsLastCycle
-		c.PointsLast24h += t.PointsLast24h
-		c.PointsLast7d += t.PointsLast7d
-		c.PointsTodayUTC += t.PointsTodayUTC
-		c.PointsThisWeekUTC += t.PointsThisWeekUTC
-		c.PointsThisMonthUTC += t.PointsThisMonthUTC
-		c.PointsPerDay24hAvg += t.PointsPerDay24hAvg
-		c.PointsPerDay7dAvg += t.PointsPerDay7dAvg
+		c.PointsTotal += t.Score
+		c.WUsTotal += t.WUs
+		c.PointsLastCycle += s.Teams.LastUpdate(slot)
+		c.PointsLast24h += s.Teams.Last24h(slot)
+		c.PointsLast7d += s.Teams.Last7d(slot)
+		c.PointsTodayUTC += s.Teams.Today(slot)
+		c.PointsThisWeekUTC += s.Teams.ThisWeek(slot)
+		c.PointsThisMonthUTC += rollup(s.TeamMonth, slot)
+		c.PointsPerDay24hAvg += s.Teams.PointsPerDay24h(slot)
+		c.PointsPerDay7dAvg += s.Teams.PointsPerDay(slot)
 	}
-	sort.Slice(c.Teams, func(i, j int) bool {
-		return c.Teams[i].PointsTotal > c.Teams[j].PointsTotal
-	})
 	c.PointsPerWU = perWU(c.PointsTotal, c.WUsTotal)
-	if limit > 0 && len(c.Teams) > limit {
-		c.Teams = c.Teams[:limit]
+
+	sort.Slice(slots, func(i, j int) bool {
+		return s.State.Teams[slots[i]].Score > s.State.Teams[slots[j]].Score
+	})
+	if limit > 0 && len(slots) > limit {
+		slots = slots[:limit]
+	}
+	for _, slot := range slots {
+		c.Teams = append(c.Teams, s.teamView(slot))
 	}
 	return c
 }

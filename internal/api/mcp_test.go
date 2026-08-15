@@ -708,3 +708,53 @@ func TestRivalsScopedToATeamRankWithinIt(t *testing.T) {
 		t.Errorf("error does not explain the mismatch: %s", text)
 	}
 }
+
+// MCP used to be mounted beside the API server rather than through it, so its traffic
+// never reached the request counter: /v1/status published requests_per_second with the
+// most expensive surface on the service missing from it, and the counter's own /mcp
+// branch was unreachable. This fails if that mounting comes back.
+func TestMCPCallsAreCounted(t *testing.T) {
+	srv := fixture(t)
+	_, before := srv.rate.rate(time.Now())
+
+	for i := 0; i < 5; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/mcp",
+			strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+		req.Header.Set("Content-Type", "application/json")
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+	}
+	if _, got := srv.rate.rate(time.Now()); got != before+5 {
+		t.Errorf("counted %d requests, want %d; MCP calls were not counted", got-before, 5)
+	}
+}
+
+// And the body goes through the shared writer, so a client that asks for gzip gets it.
+func TestMCPCompressesWhenAsked(t *testing.T) {
+	srv := fixture(t)
+	body := func(enc string) (int, string) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/mcp",
+			strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+		req.Header.Set("Content-Type", "application/json")
+		if enc != "" {
+			req.Header.Set("Accept-Encoding", enc)
+		}
+		srv.ServeHTTP(rec, req)
+		return rec.Body.Len(), rec.Header().Get("Content-Encoding")
+	}
+	plainLen, plainEnc := body("")
+	gzLen, gzEnc := body("gzip")
+	if plainEnc != "" {
+		t.Errorf("Content-Encoding %q without Accept-Encoding", plainEnc)
+	}
+	if gzEnc != "gzip" {
+		t.Errorf("Content-Encoding = %q, want gzip", gzEnc)
+	}
+	if gzLen >= plainLen {
+		t.Errorf("gzip body %d bytes, plain %d — no saving", gzLen, plainLen)
+	}
+}

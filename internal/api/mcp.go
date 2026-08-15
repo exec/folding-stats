@@ -130,7 +130,7 @@ func (s *Server) MCPHandler() http.Handler {
 
 		var req mcpRequest
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
-			writeMCP(w, mcpResponse{JSONRPC: "2.0",
+			writeMCP(w, r, mcpResponse{JSONRPC: "2.0",
 				Error: &mcpError{mcpParseError, "invalid JSON: " + err.Error()}})
 			return
 		}
@@ -143,15 +143,31 @@ func (s *Server) MCPHandler() http.Handler {
 
 		resp := s.mcpDispatch(r, req)
 		resp.JSONRPC, resp.ID = "2.0", req.ID
-		writeMCP(w, resp)
+		writeMCP(w, r, resp)
 	})
 }
 
-func writeMCP(w http.ResponseWriter, resp mcpResponse) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+// writeMCP sends a JSON-RPC response through the same body path as REST.
+//
+// It used to encode straight to the socket, which meant no Content-Length and no
+// gzip: an MCP tool answer is prose and history and compresses about three to one,
+// and the tools that produce the most text are the ones an agent calls repeatedly.
+// Cloudflare was compressing it on the way out, which hid the omission from anyone
+// testing through the edge and did nothing for the origin's own egress.
+func writeMCP(w http.ResponseWriter, r *http.Request, resp mcpResponse) {
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
+
+	enc := json.NewEncoder(buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(resp); err != nil {
+		http.Error(w, "encoding response", http.StatusInternalServerError)
+		return
+	}
 	// Always 200: JSON-RPC carries its own errors, and an HTTP error code here would
 	// have a client reporting "the server is down" for "no donor by that name".
-	_ = json.NewEncoder(w).Encode(resp)
+	writeBody(w, r, http.StatusOK, "application/json; charset=utf-8", buf.Bytes())
 }
 
 func (s *Server) mcpDispatch(r *http.Request, req mcpRequest) mcpResponse {
