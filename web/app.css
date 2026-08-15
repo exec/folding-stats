@@ -376,6 +376,42 @@ main { max-width: var(--wide); margin: 0 auto; padding: var(--s6) var(--s5) var(
 .copyable:hover, .copyable:focus-visible { color: var(--ink); }
 .copy-done { font-size: 12px; color: var(--good); }
 
+.watch-change { margin-top: 2px; font-size: 11px; }
+
+/* ------------------------------------------------------- around the globe --- */
+
+.teams-page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s5); }
+.globe-link {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2) var(--s4) var(--s2) var(--s2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-secondary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.globe-link:hover { background: var(--surface-hover); color: var(--ink); }
+.globe-link-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--accent-quiet);
+  color: var(--accent);
+  font-size: 30px;
+  line-height: 1;
+}
+.globe-card { display: grid; justify-items: center; padding: var(--s6); overflow: hidden; }
+.globe-visual { width: min(440px, 100%); }
+.globe-visual svg { display: block; width: 100%; height: auto; }
+.globe-empty { max-width: 560px; text-align: center; }
+.globe-empty-title { font-size: 18px; font-weight: 620; }
+.globe-empty p { margin: var(--s2) 0 0; }
+
 /* ------------------------------------------------------------ my folding --- */
 
 /* A label/value list, for facts that are read rather than compared. A table would
@@ -907,6 +943,29 @@ table.data td.wrap { min-width: 24ch; }
   gap: var(--s2);
   margin-left: auto;
 }
+.export-btn { padding: 5px 4px; white-space: nowrap; }
+
+.history-visual { min-width: 0; }
+.heatmap { padding: var(--s5); }
+.heatmap-scroll { overflow-x: auto; padding-bottom: var(--s2); }
+.heatmap-grid {
+  display: grid;
+  grid-template-rows: repeat(7, 12px);
+  grid-auto-flow: column;
+  grid-auto-columns: 12px;
+  gap: 3px;
+  width: max-content;
+  min-width: 100%;
+  justify-content: center;
+}
+.heat-cell { display: block; width: 12px; height: 12px; border-radius: 2px; background: var(--grid); }
+.heat-cell.level-1 { background: color-mix(in srgb, var(--series-1) 28%, var(--surface)); }
+.heat-cell.level-2 { background: color-mix(in srgb, var(--series-1) 50%, var(--surface)); }
+.heat-cell.level-3 { background: color-mix(in srgb, var(--series-1) 74%, var(--surface)); }
+.heat-cell.level-4 { background: var(--series-1); }
+.heat-cell.outside { visibility: hidden; }
+.heat-legend { display: flex; justify-content: flex-end; align-items: center; gap: 4px; margin-top: var(--s2); color: var(--ink-muted); font-size: 11px; }
+.heat-records { margin-top: var(--s5); }
 .seg {
   display: inline-flex;
   background: var(--surface-raised);
@@ -1272,6 +1331,10 @@ footer {
   .header { padding-left: var(--s4); padding-right: var(--s4); }
   main { padding: var(--s5) var(--s4) var(--s6); }
   .tool-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .teams-page-head { align-items: stretch; flex-direction: column; }
+  .teams-page-head .page-head { margin-bottom: 0; }
+  .globe-link { align-self: flex-start; }
+  .chart-toolbar { max-width: 100%; flex-wrap: wrap; }
 }
 /* The nav takes a row of its own rather than disappearing.
 
@@ -1320,6 +1383,7 @@ footer {
   .nav { gap: 0; }
   .nav a { padding: 6px 8px; font-size: 13px; }
   .tool-form { grid-template-columns: minmax(0, 1fr); }
+  .globe-card, .heatmap { padding: var(--s4); }
 }
 
 @media (prefers-reduced-motion: reduce) {

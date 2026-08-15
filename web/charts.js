@@ -391,15 +391,19 @@ export function productionChart(el, label = 'Points') {
     cursor: cursor(),
     hooks: tooltipHooks(self, rateLabel(label, meta?.perDay)),
     legend: { show: false },
-    scales: { y: { range: (u, min, max) => [0, max === 0 ? 1 : max * 1.08] } },
+    scales: {
+      x: meta?.shape === 'bars' ? { time: true, range: xRange(meta?.granularity) } : { time: true },
+      y: { range: (u, min, max) => [0, max === 0 ? 1 : max * 1.08] },
+    },
     series: [
       { label: 'Time' },
       {
         label: rateLabel(label, meta?.perDay),
+        paths: meta?.shape === 'bars' ? bucketPaths(self) : undefined,
         stroke: t.series[0],
         _swatch: t.series[0],
         width: 2,
-        fill: fade(t.series[0], 0.14),
+        fill: meta?.shape === 'bars' ? t.series[0] : fade(t.series[0], 0.14),
         // A line. One series is a magnitude over time and reads as a shape; the
         // markers below carry the honesty about which values are real, so stepping it
         // as well only made it harder to read. Steps and stacking are for composition,
@@ -665,4 +669,3 @@ function padLone(points, granularity, limit, until) {
   if (until == null || after <= until) out.push(zeroAt(after));
   return out;
 }
-

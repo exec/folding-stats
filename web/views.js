@@ -13,6 +13,9 @@ import { RelayLink, identity, mintToken, exportCode, adoptCode } from '/relay.js
 
 const PER_PAGE = 100;
 const WATCH_KEY = 'folding.watchlist';
+const WATCH_LAST_KEY = 'folding.watchlist.last';
+let watchVisitActive = false;
+let watchVisitBaseline = {};
 
 function watched() {
   try {
@@ -27,6 +30,11 @@ function watchID(kind, id) { return `${kind}:${id}`; }
 
 function saveWatched(items) {
   localStorage.setItem(WATCH_KEY, JSON.stringify(items));
+}
+
+function lastWatched() {
+  try { return JSON.parse(localStorage.getItem(WATCH_LAST_KEY) || '{}') || {}; }
+  catch { return {}; }
 }
 
 function watchButton(kind, id, name) {
@@ -142,6 +150,12 @@ const RATES = [
 const SHAPES = [
   { value: 'stacked', label: 'Stacked', title: 'Contributions piled up to the total' },
   { value: 'lines', label: 'Lines', title: 'Each series on its own, for comparison' },
+];
+
+const HISTORY_SHAPES = [
+  { value: 'lines', label: 'Line', title: 'Production over time as a line' },
+  { value: 'bars', label: 'Bar', title: 'One bar per production bucket' },
+  { value: 'heatmap', label: 'Heatmap', title: 'Daily production as a calendar' },
 ];
 
 /**
@@ -829,47 +843,160 @@ function chartNote(granularity, rate = 'total') {
     : `${s} Each bar is PPD; the one in progress is measured over the part elapsed.`;
 }
 
+const DAY_MS = 86400e3;
+
+function dayLabel(ms) {
+  return new Date(ms).toLocaleDateString(undefined, {
+    timeZone: 'UTC', year: 'numeric', month: 'short', day: 'numeric',
+  });
+}
+
+/** Calendar and records from the durable daily rollup. */
+function productionHeatmap(points) {
+  if (!points.length) return emptyChart('daily');
+  const values = new Map(points.map((p) => [Date.parse(p.at), p]));
+  const newest = Date.UTC(...(() => {
+    const d = new Date(snapshotMs());
+    return [d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()];
+  })());
+  const oldest = Math.max(Math.min(...values.keys()), newest - 364 * DAY_MS);
+  const start = oldest - new Date(oldest).getUTCDay() * DAY_MS;
+  const end = newest + (6 - new Date(newest).getUTCDay()) * DAY_MS;
+  const max = Math.max(...points.map((p) => p.points), 1);
+  const grid = el('div.heatmap-grid', {
+    role: 'img',
+    'aria-label': `Daily production from ${dayLabel(oldest)} through ${dayLabel(newest)}`,
+  });
+  for (let at = start; at <= end; at += DAY_MS) {
+    const p = values.get(at);
+    const value = p?.points || 0;
+    const level = value ? Math.max(1, Math.ceil(Math.log1p(value) / Math.log1p(max) * 4)) : 0;
+    grid.append(el(`span.heat-cell.level-${level}${at < oldest || at > newest ? '.outside' : ''}`, {
+      title: at < oldest || at > newest ? '' :
+        `${dayLabel(at)} UTC — ${n(value)} points, ${n(p?.wus || 0)} WUs`,
+    }));
+  }
+
+  const sorted = [...points].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const best = sorted.reduce((a, p) => p.points > a.points ? p : a, sorted[0]);
+  const byDay = new Map(sorted.map((p) => [Date.parse(p.at), p.points]));
+  let best7 = { points: 0, at: Date.parse(sorted[0].at) };
+  for (let at = Date.parse(sorted[0].at), sum = 0; at <= newest; at += DAY_MS) {
+    sum += byDay.get(at) || 0;
+    if (at >= Date.parse(sorted[0].at) + 7 * DAY_MS) sum -= byDay.get(at - 7 * DAY_MS) || 0;
+    if (sum > best7.points) best7 = { points: sum, at };
+  }
+  let longest = 0, run = 0, current = 0;
+  for (let at = Date.parse(sorted[0].at); at <= newest; at += DAY_MS) {
+    run = (byDay.get(at) || 0) > 0 ? run + 1 : 0;
+    longest = Math.max(longest, run);
+    if (at === newest || at === newest - DAY_MS) current = Math.max(current, run);
+  }
+
+  return el('div.heatmap',
+    el('div.heatmap-scroll', grid),
+    el('div.heat-legend', el('span', 'Less'),
+      ...[0, 1, 2, 3, 4].map((v) => el(`span.heat-cell.level-${v}`)), el('span', 'More')),
+    el('div.stats.heat-records',
+      statTile('Best day', short(best.points), dayLabel(Date.parse(best.at))),
+      statTile('Best 7 days', short(best7.points), `ending ${dayLabel(best7.at)}`),
+      statTile('Active days', n(points.length), 'in the retained daily record'),
+      statTile('Current / best streak', `${n(current)} / ${n(longest)}`, 'consecutive UTC days')));
+}
+
+function downloadHistory(title, history) {
+  // Hourly rows are intentionally never offered: they are pruned after seven days,
+  // so an export button would promise an archive the service does not keep.
+  if (!history || history.granularity === 'hourly') return;
+  const rows = ['at,points,wus', ...(history.points || []).map((p) =>
+    `${new Date(p.at).toISOString()},${p.points},${p.wus}`)];
+  const url = URL.createObjectURL(new Blob([rows.join('\n') + '\n'], { type: 'text/csv;charset=utf-8' }));
+  const a = el('a', {
+    href: url,
+    download: `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${history.granularity}.csv`,
+  });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 /**
- * A history chart with granularity controls.
+ * A history chart with granularity, shape and export controls.
  *
  * `fetcher(params)` returns an API history response. Returns {node, destroy}.
  */
 function historyCard(title, fetcher) {
   const plotEl = el('div.chart');
+  const visual = el('div.history-visual', plotEl);
   const legendEl = el('div.legend');
   const chart = productionChart(plotEl);
   let granularity = 'hourly';
   let rate = 'total';
+  let shape = 'lines';
+  let exported = null;
 
   const controls = el('div.chart-toolbar');
   const noteEl = el('div.chart-note', chartNote(granularity, rate));
-  const body = el('div.card-body', { style: 'padding:0' }, legendEl, plotEl, noteEl);
+  const body = el('div.card-body', { style: 'padding:0' }, legendEl, visual, noteEl);
   const node = cardWith(title, controls, body);
 
   function renderControls() {
-    clear(controls).append(
-      segmented(GRANULARITIES, granularity, (v) => { granularity = v; renderControls(); load(); }),
-      segmented(RATES, rate, (v) => { rate = v; renderControls(); load(); })
-    );
+    const effective = shape === 'heatmap' ? 'daily' : granularity;
+    clear(controls).append(segmented(HISTORY_SHAPES, shape, (v) => {
+      shape = v;
+      exported = null;
+      renderControls();
+      load();
+    }));
+    if (shape !== 'heatmap') {
+      controls.append(
+        segmented(GRANULARITIES, granularity, (v) => { granularity = v; exported = null; renderControls(); load(); }),
+        segmented(RATES, rate, (v) => { rate = v; renderControls(); load(); })
+      );
+    }
+    if (effective !== 'hourly' && exported?.granularity === effective) {
+      controls.append(el('button.linkish.export-btn', {
+        type: 'button', onclick: () => downloadHistory(title, exported),
+      }, 'Download CSV'));
+    }
   }
 
   async function load() {
-    noteEl.textContent = chartNote(granularity, rate);
+    const effective = shape === 'heatmap' ? 'daily' : granularity;
+    noteEl.textContent = shape === 'heatmap'
+      ? 'Each square is one UTC day. Records use the retained daily history; hourly rows are not involved.'
+      : chartNote(granularity, rate);
     try {
-      const res = await fetcher({ granularity, metric: 'points' });
+      const params = { granularity: effective, metric: 'points' };
+      if (shape === 'heatmap') {
+        params.from = new Date(snapshotMs() - 5 * 365 * DAY_MS).toISOString();
+        params.to = new Date(snapshotMs()).toISOString();
+      }
+      const res = await fetcher(params);
       const pts = res.data.points || [];
+      exported = res.data;
+      renderControls();
       if (!pts.length) {
         chart.render(null);
-        clear(legendEl).append(emptyChart(granularity));
+        clear(visual).append(plotEl);
+        clear(legendEl).append(emptyChart(effective));
         return;
       }
       clear(legendEl);
+      if (shape === 'heatmap') {
+        chart.render(null);
+        clear(visual).append(productionHeatmap(pts));
+        return;
+      }
+      clear(visual).append(plotEl);
       const dense = densify(pts, granularity, { ...chartSpan(), perDay: rate === 'per-day' });
       const xs = dense.map((p) => Math.floor(Date.parse(p.at) / 1000));
       const ys = dense.map((p) => p.points);
-      chart.render([xs, ys], { granularity, perDay: rate === 'per-day' });
+      chart.render([xs, ys], { granularity, perDay: rate === 'per-day', shape });
     } catch (err) {
       chart.render(null);
+      clear(visual).append(plotEl);
       clear(legendEl).append(el('div.error', { style: 'padding:40px 0' }, err.message));
     }
   }
@@ -1016,11 +1143,13 @@ export async function teamsList(view, { page = 1, sort = 'lifetime' }, nav) {
   try {
     const res = await api.teams({ page, per_page: PER_PAGE, sort });
     clear(view);
-    view.append(
+    view.append(el('div.teams-page-head',
       el('div.page-head',
         el('h1.page-title', 'Teams'),
-        el('p.page-sub', `${n(res.page.total_items)} teams, ranked by ${SORT_BLURB[sort]}.`))
-    );
+        el('p.page-sub', `${n(res.page.total_items)} teams, ranked by ${SORT_BLURB[sort]}.`)),
+      el('a.globe-link', { href: '/teams/around-the-globe' },
+        el('span.globe-link-icon', { 'aria-hidden': 'true' }, '◎'),
+        el('span', 'Around the Globe'))));
     view.append(
       card(null,
         teamTable(res.data, {
@@ -1036,6 +1165,30 @@ export async function teamsList(view, { page = 1, sort = 'lifetime' }, nav) {
   } catch (err) {
     errorView(view, err);
   }
+}
+
+export async function aroundTheGlobePage(view) {
+  clear(view);
+  view.append(
+    el('div.page-head',
+      el('div.breadcrumb', el('a', { href: '/teams' }, 'Teams'), el('span', '/'),
+        el('span', 'Around the Globe')),
+      el('h1.page-title', 'Folding Around The Globe'),
+      el('p.page-sub', 'A home for seeing where Folding@home teams come together around the world.')),
+    el('section.card.globe-card',
+      el('div.globe-visual', { html: `<svg viewBox="0 0 400 400" role="img" aria-label="Globe with latitude and longitude lines">
+        <defs><radialGradient id="globe-fill" cx="35%" cy="28%"><stop offset="0" stop-color="var(--series-1)" stop-opacity=".28"/><stop offset="1" stop-color="var(--series-1)" stop-opacity=".05"/></radialGradient></defs>
+        <circle cx="200" cy="200" r="158" fill="url(#globe-fill)" stroke="var(--series-1)" stroke-width="4"/>
+        <ellipse cx="200" cy="200" rx="72" ry="158" fill="none" stroke="var(--line-strong)" stroke-width="2"/>
+        <ellipse cx="200" cy="200" rx="132" ry="158" fill="none" stroke="var(--line-strong)" stroke-width="2"/>
+        <ellipse cx="200" cy="200" rx="158" ry="62" fill="none" stroke="var(--line-strong)" stroke-width="2"/>
+        <ellipse cx="200" cy="200" rx="158" ry="118" fill="none" stroke="var(--line-strong)" stroke-width="2"/>
+        <path d="M42 200h316M200 42v316" fill="none" stroke="var(--line-strong)" stroke-width="2"/>
+      </svg>` }),
+      el('div.globe-empty',
+        el('div.globe-empty-title', 'The map is ready for its teams.'),
+        el('p.muted', 'No teams are assigned to countries yet. Country pages and global participation totals will appear here as those associations are added.')))
+  );
 }
 
 export async function teamDetail(view, { id }, nav) {
@@ -1293,15 +1446,15 @@ export async function donorDetail(view, { name }, nav) {
     view.append(await milestoneSection(d, 'donor'));
     view.append(badgeSection(d, 'donor'));
 
+    const hist = historyCard('Production', (p) => api.donorHistory(d.name, p));
+    cleanups.push(hist.destroy);
+    view.append(el('section.section', hist.node));
+
     const teams = d.teams || [];
     if (teams.length > 1) {
       const bd = breakdownCard(d, teams);
       cleanups.push(bd.destroy);
       view.append(el('section.section', bd.node));
-    } else {
-      const hist = historyCard('Production', (p) => api.donorHistory(d.name, p));
-      cleanups.push(hist.destroy);
-      view.append(el('section.section', hist.node));
     }
 
     view.append(el('section.section', teamsCard(d, teams)));
@@ -1769,17 +1922,29 @@ function badgeSection(entity, kind) {
       host)));
 }
 
-function watchTable(items, onRemove) {
+function watchChange(value, previous, rank = false) {
+  if (previous == null) return null;
+  const change = rank ? previous - value : value - previous;
+  const cls = change > 0 ? 'up' : change < 0 ? 'down' : 'flat';
+  const arrow = change > 0 ? '▲' : change < 0 ? '▼' : '–';
+  return el(`div.watch-change.delta.${cls}`,
+    change ? `${arrow} ${short(Math.abs(change))}` : arrow);
+}
+
+function watchTable(items, onRemove, baseline) {
   const body = el('tbody');
   for (const e of items) {
+    const before = baseline[watchID(e.kind, entityRef(e))];
     const name = el('a', { href: entityHref(e) });
     nameText(name, e.name);
     body.append(el('tr',
       el('td.left', e.kind === 'team' ? 'Team' : 'Donor'),
       el('td.left.name-cell', name),
-      el('td.rank', `#${n(e.rank)}`),
-      el('td.num', { title: n(e.points_per_day_24h_avg) }, short(e.points_per_day_24h_avg)),
-      el('td.num', { title: n(e.points_total) }, short(e.points_total)),
+      el('td.rank', `#${n(e.rank)}`, watchChange(e.rank, before?.rank, true)),
+      el('td.num', { title: n(e.points_per_day_24h_avg) }, short(e.points_per_day_24h_avg),
+        watchChange(e.points_per_day_24h_avg, before?.ppd)),
+      el('td.num', { title: n(e.points_total) }, short(e.points_total),
+        watchChange(e.points_total, before?.points)),
       el('td', el('button.linkish', { type: 'button', onclick: () => onRemove(e) }, 'Remove'))));
   }
   return el('div.table-wrap', el('table.data',
@@ -1789,6 +1954,13 @@ function watchTable(items, onRemove) {
 
 export async function watchlistPage(view) {
   loading(view);
+  if (!watchVisitActive) {
+    watchVisitActive = true;
+    watchVisitBaseline = lastWatched();
+  }
+  const cleanup = () => {
+    if (!location.pathname.startsWith('/watchlist')) watchVisitActive = false;
+  };
   const saved = watched();
   clear(view);
   view.append(el('div.page-head', el('h1.page-title', 'Watchlist'),
@@ -1797,7 +1969,7 @@ export async function watchlistPage(view) {
     view.append(card(null, el('div.empty',
       el('div', 'Nothing watched yet.'),
       el('div.muted', 'Open any donor or team and choose “Watch”.'))));
-    return;
+    return cleanup;
   }
   const results = await Promise.all(saved.map(async (x) => {
     try {
@@ -1815,10 +1987,15 @@ export async function watchlistPage(view) {
     saveWatched(watched().filter((x) => watchID(x.kind, x.id) !== watchID(e.kind, entityRef(e))));
     if (items.length) draw();
     else clear(host).append(el('div.empty', 'Nothing watched yet.'));
-  }));
+  }, watchVisitBaseline));
   draw();
+  localStorage.setItem(WATCH_LAST_KEY, JSON.stringify(Object.fromEntries(items.map((e) => [
+    watchID(e.kind, entityRef(e)),
+    { rank: e.rank, ppd: e.points_per_day_24h_avg, points: e.points_total, at: snapshot()?.at },
+  ]))));
   view.append(card(null, host), el('p.chart-note',
-    'This list never leaves your browser. Use Explore to compare any two entries or set a target.'));
+    'Small figures show rank, PPD and point changes since you last opened this page. This list never leaves your browser.'));
+  return cleanup;
 }
 
 function field(label, input) {

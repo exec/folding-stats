@@ -56,6 +56,7 @@ func TestPageMeta(t *testing.T) {
 	check("/teams/32/rivals", "overclockers")
 
 	check("/teams", "teams")
+	check("/teams/around-the-globe", "Around The Globe")
 	check("/donors", "donors")
 	check("/api", "API")
 	check("/agents")
