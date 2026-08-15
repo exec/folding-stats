@@ -408,4 +408,35 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-render();
+// New code, old JSON.
+//
+// API responses carry a max-age of up to an hour, so somebody who was here before a
+// deploy keeps serving the previous body out of their own browser cache while running
+// the new bundle. Usually harmless — the figures are a few minutes stale. It stops
+// being harmless when a response changes shape: /v1/countries began returning dormant
+// countries, and anyone holding the filtered version saw the new "All time" control
+// light up almost nothing, because the countries it exists for were absent from their
+// copy. Nothing looked broken, which is what made it worth fixing rather than waiting
+// out.
+//
+// The bundle's own fingerprint is the signal that the pairing is wrong. When it moves,
+// revalidate once; the ETag turns that into a 304 wherever the body really is
+// unchanged, so the cost is a round trip rather than a re-download.
+const BUILD_KEY = 'folding.build';
+let staleBundle = false;
+try {
+  const build = new URL(import.meta.url).searchParams.get('v');
+  if (build && localStorage.getItem(BUILD_KEY) !== build) {
+    localStorage.setItem(BUILD_KEY, build);
+    staleBundle = true;
+  }
+} catch {
+  // Private mode, or storage full. Revalidating once is the safe way to fail.
+  staleBundle = true;
+}
+if (staleBundle) {
+  setCacheMode('reload');
+  render().finally(() => setCacheMode('default'));
+} else {
+  render();
+}
