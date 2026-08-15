@@ -124,7 +124,7 @@ Every response carries a `snapshot` block describing freshness, then the data.
 | `GET` | `/v1/goals` | required PPD for a rank, points total, rival, and optional deadline |
 | `GET` | `/v1/movers` | biggest measured 24-hour rank movements near the top |
 | `GET` | `/v1/posts`, `/v1/posts/{slug}` | site announcements |
-| `GET` | `/badge/{team\|donor}/{id}` | cacheable SVG for `?metric=rank\|ppd\|points` |
+| `GET` | `/badge/{team\|donor}/{id}` | cacheable SVG, `?metric=ppd\|rank\|points`, `?name=1` to show the entity |
 
 ### Notes for clients
 
