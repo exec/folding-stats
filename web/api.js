@@ -126,4 +126,7 @@ export const api = {
   donorRivals: (name, params, o) => request(`/v1/donors/${seg(name)}/rivals${qs(params)}`, o),
 
   search: (q, type, o) => request(`/v1/search${qs({ q, type, limit: o?.limit })}`, o),
+  compare: (params, o) => request(`/v1/compare${qs(params)}`, o),
+  goal: (params, o) => request(`/v1/goals${qs(params)}`, o),
+  movers: (params, o) => request(`/v1/movers${qs(params)}`, o),
 };

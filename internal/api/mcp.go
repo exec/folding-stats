@@ -991,49 +991,56 @@ type entity struct {
 	rank  int32
 }
 
+// display turns a resolved entity into the shape the tool text is written against.
+//
+// A team is named "Name (team 32)" here and carries its number separately over REST,
+// because a model reading prose needs the number in the sentence while a client parsing
+// JSON needs it in a field. That is a rendering difference and it is the only one: the
+// figures come from one resolver.
+func (e InsightEntity) display() entity {
+	name := e.Name
+	if e.TeamID != nil {
+		name = fmt.Sprintf("%s (team %d)", e.Name, *e.TeamID)
+	}
+	return entity{name, e.PointsTotal, e.PointsPerDay24hAvg, e.Rank}
+}
+
 // mcpEntity resolves a team number or donor name to the two figures a projection uses.
+//
+// It delegates to the resolver /v1/compare, /v1/goals and the badges use. The two
+// surfaces answer the same questions, and answering them from two implementations is a
+// promise to drift: nothing would report the day one of them changed, and a model and a
+// bot quoting different numbers for the same team is the failure this project can least
+// afford.
+//
+// The wording of a failure stays local. A model that cannot find a donor should be told
+// to search; an HTTP client should be told 404.
 func (s *Snapshot) mcpEntity(kind, ref string) (entity, error) {
-	switch kind {
-	case "teams":
-		id, err := strconv.ParseInt(strings.TrimSpace(ref), 10, 32)
-		if err != nil {
-			return entity{}, fmt.Errorf("%q is not a team number", ref)
-		}
-		slot, ok := s.State.TeamSlot(int32(id))
-		if !ok {
-			return entity{}, fmt.Errorf("no team numbered %d", id)
-		}
-		v := s.teamView(slot)
-		return entity{fmt.Sprintf("%s (team %d)", v.Name, v.TeamID), v.PointsTotal, v.PointsPerDay24hAvg, v.Rank}, nil
-	case "donors":
-		idx, ok := s.donorIndexByName(ref)
-		if !ok {
+	k, err := insightKind(kind)
+	if err != nil {
+		return entity{}, fmt.Errorf("kind must be \"teams\" or \"donors\"")
+	}
+	e, err := s.insightEntity(k, ref)
+	if err != nil {
+		if k == "donor" && isNotFound(err) {
 			return entity{}, fmt.Errorf("no donor named %q — use search first", ref)
 		}
-		v := s.donorView(idx, false)
-		return entity{v.Name, v.PointsTotal, v.PointsPerDay24hAvg, v.Rank}, nil
+		return entity{}, fmt.Errorf("%s", err)
 	}
-	return entity{}, fmt.Errorf("kind must be \"teams\" or \"donors\"")
+	return e.display(), nil
 }
 
 // atRank is whoever currently holds a position in the ranking.
 func (s *Snapshot) atRank(kind string, r int) (entity, error) {
-	switch kind {
-	case "teams":
-		order := s.Ranks.TeamOrder
-		if r < 1 || r > len(order) {
-			return entity{}, fmt.Errorf("rank %d is outside the %s teams there are", r, fmtInt(int64(len(order))))
-		}
-		v := s.teamView(order[r-1])
-		return entity{fmt.Sprintf("%s (team %d)", v.Name, v.TeamID), v.PointsTotal, v.PointsPerDay24hAvg, v.Rank}, nil
-	case "donors":
-		if r < 1 || r > len(s.Ranks.Donors) {
-			return entity{}, fmt.Errorf("rank %d is outside the %s donors there are", r, fmtInt(int64(len(s.Ranks.Donors))))
-		}
-		v := s.donorView(int32(r-1), false)
-		return entity{v.Name, v.PointsTotal, v.PointsPerDay24hAvg, v.Rank}, nil
+	k, err := insightKind(kind)
+	if err != nil {
+		return entity{}, fmt.Errorf("kind must be \"teams\" or \"donors\"")
 	}
-	return entity{}, fmt.Errorf("kind must be \"teams\" or \"donors\"")
+	e, err := s.insightAtRank(k, r)
+	if err != nil {
+		return entity{}, fmt.Errorf("%s", err)
+	}
+	return e.display(), nil
 }
 
 // mcpGoal answers what a target would cost, rather than what the current rate produces.
@@ -1108,11 +1115,15 @@ func (s *Snapshot) mcpGoal(kind, who string, targetRank int, targetPoints int64,
 		fmt.Fprintf(&b, "  Gap today     %s points\n", fmtInt(goal.score-self.score))
 	}
 
+	// The same arithmetic /v1/goals answers with, rather than a second copy of it. The
+	// moving-target correction — the finish line is where the target will be, not where
+	// it is — is the mistake that makes a goal look reachable, and it should be wrong or
+	// right in one place.
 	needed := func(days float64) int64 {
-		// The target moves too, so the finish line is where it will be, not where it
-		// is. Ignoring this is the mistake that makes a goal look reachable.
-		at := float64(goal.score) + float64(goal.rate)*days
-		return int64(math.Ceil((at - float64(self.score)) / days))
+		return requiredRate(
+			InsightEntity{PointsTotal: self.score, PointsPerDay24hAvg: self.rate},
+			InsightEntity{PointsTotal: goal.score, PointsPerDay24hAvg: goal.rate},
+			days)
 	}
 
 	if by != "" {

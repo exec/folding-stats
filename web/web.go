@@ -112,7 +112,7 @@ func clientRoutes(appJS []byte) ([]*regexp.Regexp, error) {
 // /search is a form. With no query it renders an empty box, and every result it could
 // produce is already reachable at its own URL — listing it only invites something to
 // index a page that says nothing.
-var sitemapSkip = map[string]bool{"/search": true}
+var sitemapSkip = map[string]bool{"/search": true, "/watchlist": true}
 
 // staticRoutes returns the URL of every route that takes no parameter.
 //

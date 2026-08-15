@@ -120,7 +120,11 @@ Every response carries a `snapshot` block describing freshness, then the data.
 | `GET` | `/v1/donors/{name}/history` | `?team_id=` to scope to one team |
 | `GET` | `/v1/donors/{name}/rivals` | ranking around this donor, with projected overtakes. Paginated |
 | `GET` | `/v1/search` | `?q=` name prefix, exact name, or team ID |
+| `GET` | `/v1/compare` | compare two teams or donors, including a projected crossover |
+| `GET` | `/v1/goals` | required PPD for a rank, points total, rival, and optional deadline |
+| `GET` | `/v1/movers` | biggest measured 24-hour rank movements near the top |
 | `GET` | `/v1/posts`, `/v1/posts/{slug}` | site announcements |
+| `GET` | `/badge/{team\|donor}/{id}` | cacheable SVG for `?metric=rank\|ppd\|points` |
 
 ### Notes for clients
 
@@ -199,8 +203,9 @@ Every response carries a `snapshot` block describing freshness, then the data.
 ### MCP
 
 There is a Model Context Protocol server at `/mcp` — JSON-RPC 2.0 over POST, no key,
-no session, permissive CORS. It offers seven tools: `search`, `get_donor`, `get_team`,
-`leaderboard`, `production_history`, `compare` and `project_status`.
+no session, permissive CORS. It offers eleven tools: `search`, `get_donor`, `get_team`,
+`leaderboard`, `production_history`, `compare`, `what_would_it_take`, `movers`,
+`team_activity`, `rivals` and `project_status`.
 
 They are deliberately **not** a wrapper over the routes above. Exposing each endpoint
 as a tool would make "is my team catching up to theirs?" cost five round trips — find
