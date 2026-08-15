@@ -47,6 +47,11 @@ func (s *Server) PageMeta(p string) (PageMeta, bool) {
 	}
 
 	switch {
+	case p == "/teams/around-the-globe":
+		return PageMeta{
+			Title:       "Folding Around The Globe" + siteSuffix,
+			Description: "Explore Folding@home teams around the world and see global participation by country.",
+		}, true
 	case strings.HasPrefix(p, "/donors/"):
 		return snap.donorMeta(strings.TrimPrefix(p, "/donors/"))
 	case strings.HasPrefix(p, "/teams/"):
