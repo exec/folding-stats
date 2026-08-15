@@ -26,7 +26,7 @@ function tooltipBody(tip, country) {
     el('div.globe-tip-teams', ...country.teams.slice(0, 10).map((team) =>
       el('a', { href: `/teams/${team.team_id}` },
         el('span', team.name), el('span.num', short(team.points_total))))),
-    el('a.globe-tip-more', { href: `/teams/around-the-globe/${country.code.toLowerCase()}` },
+    el('a.globe-tip-more', { href: `/teams/country/${country.code.toLowerCase()}` },
       country.teams_total > 10 ? `View all ${n(country.teams_total)} teams →` : 'View country page →')
   );
 }

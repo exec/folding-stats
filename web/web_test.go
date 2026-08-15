@@ -158,6 +158,39 @@ func TestEveryAssetIsEmbedded(t *testing.T) {
 // everything else: a crawler indexes the not-found page as content, and an agent
 // probing for /openapi.json or /llms.txt is told it found one. On a site that invites
 // automated clients in robots.txt and publishes an MCP endpoint, that matters.
+// The globe moved from /teams/around-the-globe to /teams/country. The old name is in
+// the sitemap Google already crawled and in whatever people bookmarked, so it has to
+// keep arriving somewhere rather than 404ing.
+func TestRetiredGlobePathRedirects(t *testing.T) {
+	h, err := Handler(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for from, want := range map[string]string{
+		"/teams/around-the-globe":     "/teams/country",
+		"/teams/around-the-globe/":    "/teams/country",
+		"/teams/around-the-globe/no":  "/teams/country/no",
+		"/teams/around-the-globe/zzz": "/teams/country/zzz",
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, from, nil))
+		if rec.Code != http.StatusMovedPermanently {
+			t.Errorf("%s: status %d, want 301", from, rec.Code)
+		}
+		if got := rec.Header().Get("Location"); got != want {
+			t.Errorf("%s: Location %q, want %q", from, got, want)
+		}
+	}
+	// The new names must not themselves redirect, or the pair becomes a loop.
+	for _, p := range []string{"/teams/country", "/teams/country/no", "/teams/topic"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s: status %d, want 200", p, rec.Code)
+		}
+	}
+}
+
 func TestUnknownPathsAre404(t *testing.T) {
 	h, err := Handler(nil)
 	if err != nil {
@@ -172,7 +205,7 @@ func TestUnknownPathsAre404(t *testing.T) {
 	// Real pages, including ones with a user-supplied segment.
 	for _, p := range []string{
 		"/", "/overview", "/teams", "/donors", "/api", "/agents", "/bots", "/search",
-		"/privacy", "/disclaimer", "/teams/around-the-globe", "/teams/0", "/donors/Anonymous",
+		"/privacy", "/disclaimer", "/teams/country", "/teams/topic", "/teams/0", "/donors/Anonymous",
 		"/donors/Mr.Hello", "/teams/0/rivals", "/blog/a-free-folding-at-home-stats-api",
 	} {
 		if code, _ := hit(p); code != http.StatusOK {

@@ -27,7 +27,18 @@
 
   <nav class="nav">
     <a href="/overview" data-route="/overview">Overview</a>
-    <a href="/teams" data-route="/teams">Teams</a>
+    <!-- A disclosure rather than a scripted menu: it opens on click and on Enter,
+         closes on Escape, and works before app.js has loaded. The leaderboard keeps
+         its place at the top of the list, because it is still what most people mean
+         by "teams" and it would be a strange thing to reach only by typing the URL. -->
+    <details class="nav-menu">
+      <summary data-route="/teams">Teams</summary>
+      <div class="nav-menu-items">
+        <a href="/teams" data-route="/teams" data-exact>All teams</a>
+        <a href="/teams/country" data-route="/teams/country">By country</a>
+        <a href="/teams/topic" data-route="/teams/topic">By topic</a>
+      </div>
+    </details>
     <a href="/donors" data-route="/donors">Donors</a>
     <a href="/watchlist" data-route="/watchlist">Watchlist</a>
     <a href="/explore" data-route="/explore">Explore</a>

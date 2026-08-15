@@ -209,6 +209,24 @@ func (s *site) isRoute(clean string) bool {
 // The query string is carried across. A shared link to a leaderboard page is mostly
 // query string, and dropping it would land the reader on a different view of the site
 // than the one they were sent.
+// movedPath maps a retired page URL to its current one, or "" for anything else.
+//
+// /teams/around-the-globe became /teams/country when the Teams menu gained a second
+// way to slice the same list. The old name is in the sitemap, in whatever anybody
+// bookmarked, and in the badge-style links this site encourages people to paste
+// elsewhere — so it keeps working rather than 404ing, and says once and permanently
+// where the page went.
+func movedPath(clean string) string {
+	const old = "/teams/around-the-globe"
+	if clean == old {
+		return "/teams/country"
+	}
+	if rest, ok := strings.CutPrefix(clean, old+"/"); ok {
+		return "/teams/country/" + rest
+	}
+	return ""
+}
+
 func (s *site) canonicalRedirect(r *http.Request) string {
 	if s.canonical == "" || r.Host == "" || strings.EqualFold(r.Host, s.canonical) {
 		return ""
@@ -430,6 +448,14 @@ func Handler(meta MetaFunc) (http.Handler, error) {
 		// including rented ones nobody can log into to fix. So the old host keeps
 		// serving them for as long as any agent might still dial it, and only the
 		// human-facing shell moves.
+		if to := movedPath(clean); to != "" {
+			if r.URL.RawQuery != "" {
+				to += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, to, http.StatusMovedPermanently)
+			return
+		}
+
 		if to := s.canonicalRedirect(r); to != "" {
 			http.Redirect(w, r, to, http.StatusMovedPermanently)
 			return

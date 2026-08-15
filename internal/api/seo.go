@@ -47,13 +47,18 @@ func (s *Server) PageMeta(p string) (PageMeta, bool) {
 	}
 
 	switch {
-	case p == "/teams/around-the-globe":
+	case p == "/teams/country":
 		return PageMeta{
 			Title:       "Folding Around The Globe" + siteSuffix,
 			Description: "Explore Folding@home teams around the world and see global participation by country.",
 		}, true
-	case strings.HasPrefix(p, "/teams/around-the-globe/"):
-		code := strings.TrimSuffix(strings.TrimPrefix(p, "/teams/around-the-globe/"), "/")
+	case p == "/teams/topic":
+		return PageMeta{
+			Title:       "Folding by Topic" + siteSuffix,
+			Description: "Browse Folding@home teams by what brings them together, from universities and employers to games, hardware and hobbies.",
+		}, true
+	case strings.HasPrefix(p, "/teams/country/"):
+		code := strings.TrimSuffix(strings.TrimPrefix(p, "/teams/country/"), "/")
 		if def, ok := countryDefByCode(code); ok {
 			return PageMeta{
 				Title:       def.Name + " Folding@home teams" + siteSuffix,

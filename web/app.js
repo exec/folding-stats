@@ -165,9 +165,10 @@ const routes = [
   [/^\/blog\/([^/]+)\/?$/, (m) => views.postPage(view, { slug: decodeURIComponent(m[1]) })],
   [/^\/teams\/?$/, (m, q) =>
     views.teamsList(view, { page: +(q.get('page') || 1), sort: sortParam(q) }, navigate)],
-  [/^\/teams\/around-the-globe\/?$/, () => views.aroundTheGlobePage(view)],
-  [/^\/teams\/around-the-globe\/([^/]+)\/?$/, (m) =>
+  [/^\/teams\/country\/?$/, () => views.aroundTheGlobePage(view)],
+  [/^\/teams\/country\/([^/]+)\/?$/, (m) =>
     views.countryPage(view, { code: decodeURIComponent(m[1]) })],
+  [/^\/teams\/topic\/?$/, () => views.topicsPage(view)],
   // Ordered before the detail routes: the donor pattern is greedy enough to swallow
   // a /rivals suffix as part of the name.
   [/^\/teams\/([^/]+)\/rivals\/?$/, (m, q) =>
@@ -215,13 +216,21 @@ async function render({ quiet = false, keepContent = false } = {}) {
   const query = new URLSearchParams(location.search);
   const href = path + location.search;
 
-  for (const a of document.querySelectorAll('.nav a')) {
-    const r = a.dataset.route;
+  // Every nav target, including the Teams menu's summary, which is a nav item to
+  // everyone except a CSS selector.
+  for (const el of document.querySelectorAll('.nav [data-route]')) {
+    const r = el.dataset.route;
     // Home covers the landing page and the posts it links to; a reader inside an
-    // article has not left the section the nav says they are in.
-    const active = r === '/' ? path === '/' || path.startsWith('/blog') : path.startsWith(r);
-    a.setAttribute('aria-current', active ? 'page' : 'false');
+    // article has not left the section the nav says they are in. data-exact is for
+    // the entries a prefix would over-claim: "All teams" is not current on
+    // /teams/country, though the Teams menu above it is.
+    const active = r === '/' ? path === '/' || path.startsWith('/blog')
+      : el.hasAttribute('data-exact') ? path === r || path === r + '/'
+      : path.startsWith(r);
+    el.setAttribute('aria-current', active ? 'page' : 'false');
   }
+  // A menu left hanging open over the page it just navigated to.
+  for (const m of document.querySelectorAll('.nav-menu[open]')) m.open = false;
 
   if (cleanup) {
     cleanup();
@@ -398,6 +407,19 @@ input.addEventListener('keydown', (e) => {
 
 document.addEventListener('click', (e) => {
   if (!e.target.closest('#search')) closeResults();
+  // A <details> stays open until something closes it, and clicking past a menu is
+  // how everyone expects to dismiss one.
+  for (const m of document.querySelectorAll('.nav-menu[open]')) {
+    if (!m.contains(e.target)) m.open = false;
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  for (const m of document.querySelectorAll('.nav-menu[open]')) {
+    m.open = false;
+    m.querySelector('summary')?.focus();
+  }
 });
 
 // "/" focuses search from anywhere, the way every tool people already use does.
