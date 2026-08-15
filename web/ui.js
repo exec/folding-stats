@@ -181,19 +181,33 @@ export function pager(page, totalPages, totalItems, onGo) {
   return wrap;
 }
 
-/** A segmented control. Returns the element; `onPick` receives the chosen value. */
+/**
+ * A segmented control. Returns the element; `onPick` receives the chosen value.
+ *
+ * It moves its own selection. It used to stamp aria-pressed once and never touch it
+ * again, which worked only because most callers happened to rebuild the whole control
+ * on every pick — so a caller that repainted its content in place instead left the
+ * highlight sitting on the option the reader had just navigated away from. Owning the
+ * selection here means the control cannot disagree with itself, whatever the caller
+ * does afterwards; a caller that still rebuilds arrives at the same state.
+ */
 export function segmented(options, current, onPick) {
   const wrap = el('div.seg');
-  for (const o of options) {
-    wrap.append(
-      el('button', {
-        text: o.label,
-        title: o.title,
-        'aria-pressed': o.value === current ? 'true' : 'false',
-        onclick: () => onPick(o.value),
-      })
-    );
-  }
+  const buttons = options.map((o) => {
+    const b = el('button', {
+      text: o.label,
+      title: o.title,
+      'aria-pressed': o.value === current ? 'true' : 'false',
+      onclick: () => {
+        for (const [i, other] of buttons.entries()) {
+          other.setAttribute('aria-pressed', options[i].value === o.value ? 'true' : 'false');
+        }
+        onPick(o.value);
+      },
+    });
+    return b;
+  });
+  wrap.append(...buttons);
   return wrap;
 }
 
