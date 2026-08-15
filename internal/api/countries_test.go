@@ -23,6 +23,26 @@ func TestCountryViewStacksTeams(t *testing.T) {
 	}
 }
 
+// Dormant countries must survive the collection endpoint. They were filtered out of
+// it originally, which is invisible until the map offers an all-time view — and then
+// the countries that view exists for are the exact ones missing from it.
+func TestCountriesIncludesDormantOnes(t *testing.T) {
+	_, env := get(t, fixture(t), "/v1/countries")
+	got := decode[[]Country](t, env.Data)
+	if len(got) != len(countryDefs) {
+		t.Fatalf("got %d countries, want all %d", len(got), len(countryDefs))
+	}
+	var dormant int
+	for _, c := range got {
+		if c.TeamsActive == 0 {
+			dormant++
+		}
+	}
+	if dormant == 0 {
+		t.Fatal("no dormant country in the response; this test can no longer detect the filter")
+	}
+}
+
 func TestCountryEndpointRejectsUnknownCode(t *testing.T) {
 	rec, _ := get(t, fixture(t), "/v1/countries/XX")
 	if rec.Code != 404 {
