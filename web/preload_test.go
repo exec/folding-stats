@@ -303,8 +303,8 @@ func TestSecurityTxt(t *testing.T) {
 	}
 }
 
-// TestRobotsTxt pins the crawler policy, which for this site is an invitation rather
-// than a restriction.
+// TestRobotsTxt pins the crawler policy, which is open except for one expensive
+// derived request Googlebot otherwise makes once per donor page.
 //
 // The failure that matters is silent: /robots.txt previously fell through to the SPA
 // shell and returned an HTML document under a 200, so a crawler parsing it found no
@@ -327,8 +327,11 @@ func TestRobotsTxt(t *testing.T) {
 	if strings.Contains(body, "<!doctype") || strings.Contains(body, "<html") {
 		t.Fatal("robots.txt is serving the HTML shell; a crawler sees no directives at all")
 	}
-	if strings.Contains(body, "Disallow:") {
-		t.Errorf("robots.txt contains a Disallow; this site allows everything:\n%s", body)
+	if block := "User-agent: Googlebot\nDisallow: /v1/goals\n"; !strings.Contains(body, block) {
+		t.Errorf("Googlebot goals block is missing:\n%s", body)
+	}
+	if strings.Count(body, "Disallow:") != 1 {
+		t.Errorf("robots.txt blocks more than Googlebot's goals request:\n%s", body)
 	}
 	if !strings.Contains(body, "User-agent: *") || !strings.Contains(body, "Allow: /") {
 		t.Errorf("no blanket allow:\n%s", body)
@@ -358,7 +361,7 @@ func TestRobotsTxt(t *testing.T) {
 // remembers. So rather than pin an expected list, this asks the handler whether each
 // URL it publishes still resolves — which stays true as pages come and go.
 func TestSitemap(t *testing.T) {
-	h, err := Handler(nil)
+	h, err := Handler(nil, "/teams/topic/hardware", "/teams/country/us")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +412,8 @@ func TestSitemap(t *testing.T) {
 		}
 	}
 
-	for _, want := range []string{"/", "/api", "/agents", "/fold", "/teams", "/donors"} {
+	for _, want := range []string{"/", "/api", "/agents", "/fold", "/teams", "/donors",
+		"/teams/topic/hardware", "/teams/country/us"} {
 		if !seen[want] {
 			t.Errorf("%s missing from the sitemap", want)
 		}

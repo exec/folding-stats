@@ -5,10 +5,13 @@ import { el, clear, setQuiet, balanceStats } from '/ui.js';
 import { ago, agoCompact, dateTime, n, short, nameText } from '/format.js';
 import { onTick, start as startCountdown } from '/countdown.js';
 import { skewMs } from '/clock.js';
+import { initI18n, t, tr } from '/i18n.js';
 import * as views from '/views.js';
 
 const view = document.getElementById('view');
 let cleanup = null;
+
+initI18n();
 
 /* ---------------------------------------------------------------- theme --- */
 
@@ -48,24 +51,24 @@ function freshnessTitle(s) {
   // The interval is next_expected_at - at; the API no longer duplicates it as a field.
   const intervalSec = Math.round((Date.parse(s.next_expected_at) - Date.parse(s.at)) / 1000);
   const parts = [
-    `Updated ${ago(s.at)}`,
-    `Snapshot: ${dateTime(s.at)}`,
-    `Next expected: ${dateTime(s.next_expected_at)}`,
+    tr('Updated {0}', ago(s.at)),
+    tr('Snapshot: {0}', dateTime(s.at)),
+    tr('Next expected: {0}', dateTime(s.next_expected_at)),
     s.warming_up?.interval_estimated
-      ? 'Upstream interval not measured yet — assuming one hour.'
-      : `Measured upstream interval: ${Math.round(intervalSec / 60)} min (${intervalSec}s)`,
+      ? t('Upstream interval not measured yet — assuming one hour.')
+      : tr('Measured upstream interval: {0} min ({1}s)', Math.round(intervalSec / 60), intervalSec),
   ];
-  if (s.stale) parts.push('The expected update has not arrived yet.');
+  if (s.stale) parts.push(t('The expected update has not arrived yet.'));
   // A device clock minutes out is common and makes every relative time on the page
   // look wrong. Times here are measured against the server, so they stay correct —
   // but saying so beats leaving someone to wonder which of us is confused.
   const skew = Math.round(skewMs() / 60000);
   if (Math.abs(skew) >= 2) {
-    parts.push(`This device's clock is ${Math.abs(skew)} min ${skew > 0 ? 'ahead of' : 'behind'} ` +
-      `the server. Times shown here follow the server.`);
+    parts.push(tr("This device's clock is {0} min {1} the server. Times shown here follow the server.",
+      Math.abs(skew), t(skew > 0 ? 'ahead of' : 'behind')));
   }
   if (s.warming_up?.history_span_sec) {
-    parts.push('Less than 7 days of history collected — the per-day average spans a shorter window.');
+    parts.push(t('Less than 7 days of history collected — the per-day average spans a shorter window.'));
   }
   return parts.join('\n');
 }
@@ -90,7 +93,7 @@ onTick(({ text, state }) => {
   // first snapshot lands — so the block is never a lone dot with nothing beside it.
   freshText.hidden = text !== '';
   if (currentSnap) {
-    freshText.textContent = `Updated ${agoCompact(currentSnap.at)}`;
+    freshText.textContent = tr('Updated {0}', agoCompact(currentSnap.at));
     freshEl.title = freshnessTitle(currentSnap);
   }
 });
@@ -355,7 +358,7 @@ const runSearch = debounce(async (q) => {
     });
     if (!donors.length && !teams.length) {
       results.append(el('div.search-empty',
-        el('div', `Nothing matches “${q}”.`),
+        el('div', tr('Nothing matches “{0}”.', q)),
         el('div', { style: 'margin-top:4px;font-size:12px' },
           'Try fewer characters, or a numeric team ID.')));
     }

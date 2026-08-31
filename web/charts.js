@@ -20,6 +20,7 @@
 // series slots stay in their fixed order.
 
 import uPlot from '/vendor/uPlot.esm.min.js';
+import { language, tr } from '/i18n.js';
 import { short, n } from '/format.js';
 
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -70,12 +71,12 @@ function fade(hex, alpha) {
 const fmtDate = (ts, gran) => {
   const d = new Date(ts * 1000);
   if (gran === 'monthly') {
-    return d.toLocaleDateString(undefined, { timeZone: 'UTC', month: 'short', year: 'numeric' });
+    return d.toLocaleDateString(language, { timeZone: 'UTC', month: 'short', year: 'numeric' });
   }
   if (gran === 'daily') {
-    return d.toLocaleDateString(undefined, { timeZone: 'UTC', month: 'short', day: 'numeric' });
+    return d.toLocaleDateString(language, { timeZone: 'UTC', month: 'short', day: 'numeric' });
   }
-  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric' });
+  return d.toLocaleString(language, { month: 'short', day: 'numeric', hour: 'numeric' });
 };
 
 // uPlot picks tick boundaries in local time by default, which is right for instants
@@ -518,7 +519,7 @@ export function legend(container, items, onToggle) {
     if (onToggle) {
       el.type = 'button';
       el.setAttribute('aria-pressed', it.hidden ? 'false' : 'true');
-      el.title = it.hidden ? `Show ${it.label}` : `Hide ${it.label}`;
+      el.title = tr(it.hidden ? 'Show {0}' : 'Hide {0}', it.label);
       el.addEventListener('click', () => onToggle(it.label));
     }
     const sw = document.createElement('span');

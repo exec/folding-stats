@@ -13,6 +13,7 @@
 // arrived. Absolute skew cancels and never enters the arithmetic.
 
 import { api, onSnapshot } from '/api.js';
+import { t, tr } from '/i18n.js';
 
 /** How long after the predicted publish we start checking, and how often. */
 const CHECK_INTERVAL_MS = 20_000;
@@ -89,15 +90,15 @@ function emit() {
     // "next in 5:12" rather than "next update in 5:12": this sits beside "Updated
     // 30m ago" in a header where width is the scarcest thing on the page, and the word
     // it drops is already established by the thing next to it.
-    text = `next in ${plan.measured ? '' : '~'}${mmss(ms)}`;
+    text = tr('next in {0}', `${plan.measured ? '' : '~'}${mmss(ms)}`);
     state = 'waiting';
   } else if (-ms < CHECKING_WINDOW_MS) {
-    text = 'checking…';
+    text = t('checking…');
     state = 'checking';
   } else {
     // Count up instead. The figure moves every second, which is the difference
     // between a display that is waiting and one that has hung.
-    text = `overdue by ${mmss(-ms)}`;
+    text = tr('overdue by {0}', mmss(-ms));
     state = 'overdue';
   }
   for (const fn of listeners) fn({ text, state, remainingMs: ms });

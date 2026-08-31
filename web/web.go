@@ -11,6 +11,7 @@
 package web
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
@@ -19,6 +20,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"regexp"
@@ -28,7 +30,7 @@ import (
 	"folding/content"
 )
 
-//go:embed index.html icon.svg app.css app.js api.js ui.js views.js charts.js globe.js topicicons.js countdown.js clock.js format.js fah.js relay.js vendor
+//go:embed index.html icon.svg app.css app.js api.js ui.js views.js charts.js globe.js topicicons.js countdown.js clock.js format.js i18n.js fah.js relay.js vendor
 var assets embed.FS
 
 // assetRef matches a same-origin asset path in a quoted string: an ES module
@@ -62,15 +64,15 @@ type site struct {
 	// routes are the client-side routes, read out of app.js rather than restated
 	// here. A path matching none of them gets the shell with a 404 status.
 	routes []*regexp.Regexp
-	// staticPaths are the routes that take no parameter, so each names exactly one
-	// URL — the pages a sitemap can list.
+	// staticPaths are the fixed routes plus the finite parameterised routes supplied
+	// by the data owner — the pages a sitemap can list.
 	staticPaths []string
 	// canonical is the hostname pages should be served under, empty when the site
 	// answers to whatever it is asked for.
 	canonical string
-	// shellHead and shellTail bracket the metadata block in index.html; the block
-	// between them is rendered per request. See meta.go.
-	shellHead, shellTail []byte
+	// shellHead, shellMain and shellTail bracket the per-request metadata and the
+	// initial crawlable summary. See meta.go.
+	shellHead, shellMain, shellTail []byte
 	// meta looks up per-page metadata, nil when nothing supplied one.
 	meta MetaFunc
 }
@@ -228,7 +230,11 @@ func movedPath(clean string) string {
 }
 
 func (s *site) canonicalRedirect(r *http.Request) string {
-	if s.canonical == "" || r.Host == "" || strings.EqualFold(r.Host, s.canonical) {
+	if s.canonical == "" || r.Host == "" {
+		return ""
+	}
+	secure := r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	if strings.EqualFold(r.Host, s.canonical) && secure {
 		return ""
 	}
 	u := *r.URL
@@ -307,15 +313,28 @@ func newSite() (*site, error) {
 		return nil, fmt.Errorf("web: index.html missing from embedded assets")
 	}
 	s.preload = preloadLink(s.index)
-	if s.shellHead, s.shellTail, err = splitShell(s.index); err != nil {
+	var shellAfterHead []byte
+	if s.shellHead, shellAfterHead, err = splitShell(s.index); err != nil {
 		return nil, err
 	}
+	const mainMark = `<main id="view" aria-live="polite">`
+	i := bytes.Index(shellAfterHead, []byte(mainMark))
+	if i < 0 {
+		return nil, fmt.Errorf("web: no main view in index.html")
+	}
+	i += len(mainMark)
+	s.shellMain, s.shellTail = shellAfterHead[:i], shellAfterHead[i:]
 
 	if s.routes, err = clientRoutes(s.files["/app.js"]); err != nil {
 		return nil, err
 	}
 	s.staticPaths = staticRoutes(s.files["/app.js"])
 	s.canonical = strings.TrimSpace(os.Getenv("FOLDING_CANONICAL_HOST"))
+	if s.canonical == "" {
+		if u, err := url.Parse(strings.TrimSpace(os.Getenv("FOLDING_SITE_URL"))); err == nil {
+			s.canonical = u.Hostname()
+		}
+	}
 
 	s.assetExts = map[string]bool{}
 	s.assetDirs = map[string]bool{}
@@ -392,15 +411,40 @@ func sortStrings(s []string) {
 // meta supplies the per-page title and description written into that shell, and may
 // be nil — the site then serves its own defaults everywhere, which is what it did
 // before any of this existed.
-func Handler(meta MetaFunc) (http.Handler, error) {
+func Handler(meta MetaFunc, sitemapPaths ...string) (http.Handler, error) {
 	s, err := newSite()
 	if err != nil {
 		return nil, err
 	}
 	s.meta = meta
+	seen := make(map[string]bool, len(s.staticPaths)+len(sitemapPaths))
+	for _, p := range s.staticPaths {
+		seen[p] = true
+	}
+	for _, p := range sitemapPaths {
+		p = path.Clean("/" + strings.TrimPrefix(p, "/"))
+		if !seen[p] && !sitemapSkip[p] && s.isRoute(p) {
+			s.staticPaths = append(s.staticPaths, p)
+			seen[p] = true
+		}
+	}
+	sortStrings(s.staticPaths)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clean := path.Clean(r.URL.Path)
+
+		if to := movedPath(clean); to != "" {
+			if r.URL.RawQuery != "" {
+				to += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, to, http.StatusMovedPermanently)
+			return
+		}
+
+		if to := s.canonicalRedirect(r); to != "" {
+			http.Redirect(w, r, to, http.StatusMovedPermanently)
+			return
+		}
 
 		if clean == robotsPath {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -438,29 +482,6 @@ func Handler(meta MetaFunc) (http.Handler, error) {
 			return
 		}
 
-		// Reached by an old name: send a person to the current one.
-		//
-		// Pages only. The API, the MCP endpoint and the relay all keep answering on
-		// every name this service has ever had, and that is not tidiness — agents
-		// compiled months ago carry their relay URL as a default, and the websocket
-		// dialer treats anything that is not a 101 as a failed handshake rather than
-		// following it. A redirect there would strand every machine already enrolled,
-		// including rented ones nobody can log into to fix. So the old host keeps
-		// serving them for as long as any agent might still dial it, and only the
-		// human-facing shell moves.
-		if to := movedPath(clean); to != "" {
-			if r.URL.RawQuery != "" {
-				to += "?" + r.URL.RawQuery
-			}
-			http.Redirect(w, r, to, http.StatusMovedPermanently)
-			return
-		}
-
-		if to := s.canonicalRedirect(r); to != "" {
-			http.Redirect(w, r, to, http.StatusMovedPermanently)
-			return
-		}
-
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		// The shell is the one thing that must never be cached: it carries the
 		// version stamp that invalidates everything else.
@@ -490,7 +511,14 @@ func Handler(meta MetaFunc) (http.Handler, error) {
 		if s.preload != "" {
 			w.Header().Set("Link", s.preload)
 		}
-		http.ServeContent(w, r, "index.html", time.Time{}, strings.NewReader(s.shell(baseURL(r), clean, s.metaFor(clean))))
+		m := s.metaFor(clean)
+		body := s.shell(baseURL(r), clean, m)
+		if m.Status != 0 {
+			w.WriteHeader(m.Status)
+			io.WriteString(w, body)
+			return
+		}
+		http.ServeContent(w, r, "index.html", time.Time{}, strings.NewReader(body))
 	}), nil
 }
 
@@ -624,6 +652,10 @@ func robotsTxt(base string) string {
 	b.WriteString("User-agent: *\n")
 	b.WriteString("Content-Signal: search=yes, ai-input=yes\n")
 	b.WriteString("Allow: /\n")
+	// Rendering each donor page asks /v1/goals for its next rank milestone. Googlebot
+	// walked the 2.1M-donor graph and repeated that request once per page; blocking only
+	// the derived JSON subrequest preserves every indexable page and its core figures.
+	b.WriteString("\nUser-agent: Googlebot\nDisallow: /v1/goals\n")
 	for _, a := range agents {
 		b.WriteString("\nUser-agent: " + a + "\nAllow: /\n")
 	}

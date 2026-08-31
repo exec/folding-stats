@@ -85,8 +85,8 @@ func run(dir, addr, ua string, poll, compactAfter, keepDaily, keepRaw time.Durat
 		if !ok {
 			return web.Meta{}, false
 		}
-		return web.Meta{Title: m.Title, Description: m.Description, NoIndex: m.NoIndex}, true
-	})
+		return web.Meta{Title: m.Title, Description: m.Description, NoIndex: m.NoIndex, Status: m.Status}, true
+	}, api.SitemapPaths()...)
 	if err != nil {
 		return err
 	}

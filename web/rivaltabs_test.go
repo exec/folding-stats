@@ -85,7 +85,7 @@ func TestRivalTeamTabs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	abs := regexp.MustCompile(`'/(vendor/)?([A-Za-z.]+)\.(esm\.js|js)'`)
+	abs := regexp.MustCompile(`'/(vendor/)?([A-Za-z0-9.]+)\.(esm\.js|js)'`)
 	for _, name := range names {
 		src, err := assets.ReadFile(name)
 		if err != nil {

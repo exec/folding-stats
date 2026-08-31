@@ -42,10 +42,15 @@
     <a href="/donors" data-route="/donors">Donors</a>
     <a href="/watchlist" data-route="/watchlist">Watchlist</a>
     <a href="/explore" data-route="/explore">Explore</a>
-    <a href="/api" data-route="/api">API</a>
-    <a href="/agents" data-route="/agents">Agents</a>
-    <a href="/fold" data-route="/fold">My folding</a>
-    <a href="/bots" data-route="/bots">Bots</a>
+    <details class="nav-menu">
+      <summary>More</summary>
+      <div class="nav-menu-items">
+        <a href="/api" data-route="/api">API</a>
+        <a href="/agents" data-route="/agents">Agents</a>
+        <a href="/fold" data-route="/fold">My folding</a>
+        <a href="/bots" data-route="/bots">Bots</a>
+      </div>
+    </details>
   </nav>
 
   <div class="search" id="search">
@@ -66,6 +71,12 @@
        about the data, and spacing them like separate sections of the header spent
        header width saying they were unrelated. -->
   <div class="header-actions">
+    <select class="language-select" id="language-select" aria-label="Language">
+      <option value="en">English</option>
+      <option value="de">Deutsch</option>
+      <option value="fr">Français</option>
+      <option value="pt-BR">Português (Brasil)</option>
+    </select>
     <button class="icon-btn" id="theme-toggle" aria-label="Toggle colour theme" title="Toggle theme">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
         <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"></path>

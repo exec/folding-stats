@@ -191,6 +191,33 @@ func TestRetiredGlobePathRedirects(t *testing.T) {
 	}
 }
 
+func TestCanonicalHostAndSchemeRedirect(t *testing.T) {
+	t.Setenv("FOLDING_CANONICAL_HOST", "foldingstats.org")
+	h, err := Handler(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, from := range []string{
+		"http://foldingstats.org/teams?sort=production",
+		"https://www.foldingstats.org/teams?sort=production",
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, from, nil))
+		if rec.Code != http.StatusMovedPermanently {
+			t.Errorf("%s: status %d, want 301", from, rec.Code)
+		}
+		if got := rec.Header().Get("Location"); got != "https://foldingstats.org/teams?sort=production" {
+			t.Errorf("%s: Location %q", from, got)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://foldingstats.org/teams", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("canonical HTTPS page redirected: status %d", rec.Code)
+	}
+}
+
 func TestUnknownPathsAre404(t *testing.T) {
 	h, err := Handler(nil)
 	if err != nil {

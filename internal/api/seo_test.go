@@ -1,6 +1,8 @@
 package api
 
 import (
+	"net/http"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -48,7 +50,9 @@ func TestPageMeta(t *testing.T) {
 		t.Error("a real donor page is marked noindex")
 	}
 	check("/donors/toTOW", "toTOW")
-	check("/donors/DH/rivals", "DH", "rivals")
+	if rivals := check("/donors/DH/rivals", "DH", "rivals"); !rivals.NoIndex {
+		t.Error("a derivative donor rivals page is indexable")
+	}
 
 	// A team is identified by its name, which is what people search for.
 	check("/teams/32", "overclockers", "ranked #")
@@ -71,11 +75,16 @@ func TestPageMeta(t *testing.T) {
 	if !ok {
 		t.Fatal("an unknown donor produced no metadata at all")
 	}
-	if !gone.NoIndex {
-		t.Error("an unknown donor is indexable; that is a soft 404")
+	if !gone.NoIndex || gone.Status != http.StatusNotFound {
+		t.Errorf("unknown donor = %+v, want noindex 404", gone)
 	}
-	if missing, ok := s.PageMeta("/teams/999999"); !ok || !missing.NoIndex {
-		t.Errorf("unknown team: ok=%v meta=%+v, want noindex", ok, missing)
+	if missing, ok := s.PageMeta("/teams/999999"); !ok || !missing.NoIndex || missing.Status != http.StatusNotFound {
+		t.Errorf("unknown team: ok=%v meta=%+v, want noindex 404", ok, missing)
+	}
+	for _, path := range []string{"/teams/topic/no-such-topic", "/teams/country/zz", "/blog/no-such-post"} {
+		if missing, ok := s.PageMeta(path); !ok || !missing.NoIndex || missing.Status != http.StatusNotFound {
+			t.Errorf("%s: ok=%v meta=%+v, want noindex 404", path, ok, missing)
+		}
 	}
 	// A search result page is a view of pages that each already exist.
 	if sr, ok := s.PageMeta("/search"); !ok || !sr.NoIndex {
@@ -87,6 +96,29 @@ func TestPageMeta(t *testing.T) {
 	var empty Server
 	if _, ok := empty.PageMeta("/donors/DH"); ok {
 		t.Error("described a donor with no snapshot loaded")
+	}
+}
+
+func TestSitemapPathsAreTheCuratedDetailPages(t *testing.T) {
+	got := SitemapPaths()
+	if want := len(countryDefs) + len(topicDefs); len(got) != want {
+		t.Fatalf("got %d paths, want %d", len(got), want)
+	}
+	if !slices.IsSorted(got) || !slices.Contains(got, "/teams/country/us") ||
+		!slices.Contains(got, "/teams/topic/hardware") {
+		t.Errorf("curated paths are incomplete or unsorted: %v", got)
+	}
+}
+
+func TestSearchWorthy(t *testing.T) {
+	for _, tc := range []struct {
+		rank   int32
+		active bool
+		want   bool
+	}{{1, false, true}, {searchableRank, false, true}, {searchableRank + 1, false, false}, {searchableRank + 1, true, true}} {
+		if got := searchWorthy(tc.rank, tc.active); got != tc.want {
+			t.Errorf("searchWorthy(%d, %v) = %v, want %v", tc.rank, tc.active, got, tc.want)
+		}
 	}
 }
 

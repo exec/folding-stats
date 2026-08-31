@@ -152,6 +152,15 @@ a:hover { color: var(--accent); }
    inherited the header's section gap, which spent width implying they were unrelated
    to each other — and header width is the scarcest thing on this page. */
 .header-actions { display: flex; align-items: center; gap: var(--s2); flex: none; }
+.language-select {
+  max-width: 8rem;
+  padding: 6px var(--s2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink-secondary);
+  font: inherit;
+}
 
 .nav { display: flex; gap: var(--s1); }
 .nav a {
@@ -162,7 +171,8 @@ a:hover { color: var(--accent); }
   transition: background 120ms ease, color 120ms ease;
 }
 .nav a:hover { background: var(--surface-hover); color: var(--ink); }
-.nav a[aria-current="page"], .nav summary[aria-current="page"] {
+.nav a[aria-current="page"], .nav summary[aria-current="page"],
+.nav-menu:has(a[aria-current="page"]) > summary {
   background: var(--accent-quiet);
   color: var(--accent);
 }
@@ -1499,6 +1509,7 @@ footer {
 @media (max-width: 480px) {
   .brand-name { display: none; }
   .header-actions { margin-left: auto; }
+  .language-select { max-width: 6rem; }
 
   /* Six entries do not fit a 380px screen at the wider spacing, and the nav scrolls
      horizontally with a hidden scrollbar — so the last one is simply not there as far

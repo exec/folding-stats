@@ -42,6 +42,7 @@ func TestMetaReachesTheShell(t *testing.T) {
 		`<link rel="canonical" href="https://foldingstats.org/donors/DH">`,
 		`<meta property="og:title" content="DH — donor">`,
 		`<meta property="og:url" content="https://foldingstats.org/donors/DH">`,
+		`<h1 class="page-title">DH — donor</h1><p>DH is ranked #1.</p>`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing from the shell: %s", want)
@@ -64,6 +65,20 @@ func TestMetaReachesTheShell(t *testing.T) {
 	// Nil lookup is the old behaviour exactly: defaults everywhere, nothing broken.
 	if b := get(t, nil, "/donors/DH").Body.String(); !strings.Contains(b, "<title>Folding@home Stats</title>") {
 		t.Error("with no metadata source the shell should serve its defaults")
+	}
+}
+
+func TestRecordNotFoundUsesMetadataStatus(t *testing.T) {
+	rec := get(t, func(string) (Meta, bool) {
+		return Meta{Title: "Donor not found", Description: "No such donor.", NoIndex: true, Status: http.StatusNotFound}, true
+	}, "/donors/nobody")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status %d, want 404", rec.Code)
+	}
+	for _, want := range []string{"<title>Donor not found</title>", "<h1", `content="noindex,follow"`} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("404 shell missing %q", want)
+		}
 	}
 }
 

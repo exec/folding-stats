@@ -5,8 +5,10 @@
 // notation is the default in tables; the exact value goes in a title attribute so
 // nothing is actually hidden.
 
-const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 2 });
-const full = new Intl.NumberFormat();
+import { language, t, tr } from '/i18n.js';
+
+const compact = new Intl.NumberFormat(language, { notation: 'compact', maximumFractionDigits: 2 });
+const full = new Intl.NumberFormat(language);
 
 export const n = (v) => full.format(v ?? 0);
 export const short = (v) => compact.format(v ?? 0);
@@ -21,7 +23,7 @@ export function numCell(v) {
 }
 
 export function plural(count, one, many = one + 's') {
-  return `${n(count)} ${count === 1 ? one : many}`;
+  return `${n(count)} ${t(count === 1 ? one : many)}`;
 }
 
 /** Rank movement. Positive means the entity climbed. */
@@ -30,13 +32,16 @@ export function delta(v) {
   el.className = 'delta ' + (v > 0 ? 'up' : v < 0 ? 'down' : 'flat');
   // The arrow is a second channel so the direction is never colour alone.
   el.textContent = v > 0 ? `▲ ${n(v)}` : v < 0 ? `▼ ${n(-v)}` : '–';
-  el.title = v === 0 ? 'No change' : `${v > 0 ? 'Up' : 'Down'} ${n(Math.abs(v))} places`;
+  el.title = v === 0 ? t('No change') : `${t(v > 0 ? 'Up' : 'Down')} ${n(Math.abs(v))}`;
   return el;
 }
 
 import { now as serverNow } from '/clock.js';
 
-const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+const rtf = new Intl.RelativeTimeFormat(language, { numeric: 'auto' });
+const compactRTF = new Intl.RelativeTimeFormat(language, { numeric: 'auto', style: 'narrow' });
+
+export const future = (value, unit) => rtf.format(value, unit);
 
 /**
  * How long ago something happened.
@@ -61,7 +66,7 @@ export function ago(iso) {
     // 1h 60m is not a thing.
     const [hh, mm] = m === 60 ? [h + 1, 0] : [h, m];
     const label = mm ? `${hh}h ${mm}m` : `${hh}h`;
-    return secs < 0 ? `${label} ago` : `in ${label}`;
+    return secs < 0 ? tr('{0} ago', label) : tr('in {0}', label);
   }
   return rtf.format(Math.round(secs / 86400), 'day');
 }
@@ -82,11 +87,10 @@ export function agoCompact(iso) {
   const then = new Date(iso).getTime();
   if (!Number.isFinite(then)) return '';
   const secs = Math.round((serverNow() - then) / 1000);
-  if (secs < 0) return 'just now'; // a snapshot from the future is a clock problem, not an age
-  if (secs < 60) return 'just now';
-  if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
-  return `${Math.floor(secs / 86400)}d ago`;
+  if (secs < 60) return compactRTF.format(0, 'second');
+  if (secs < 3600) return compactRTF.format(-Math.round(secs / 60), 'minute');
+  if (secs < 86400) return compactRTF.format(-Math.floor(secs / 3600), 'hour');
+  return compactRTF.format(-Math.floor(secs / 86400), 'day');
 }
 
 /**
@@ -99,7 +103,7 @@ export function agoCompact(iso) {
 export function utcDate(iso) {
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return '';
-  return d.toLocaleDateString(undefined, { timeZone: 'UTC', month: 'short', day: 'numeric' });
+  return d.toLocaleDateString(language, { timeZone: 'UTC', month: 'short', day: 'numeric' });
 }
 
 export function dateTime(iso) {
@@ -107,12 +111,12 @@ export function dateTime(iso) {
   if (!Number.isFinite(d.getTime())) return '';
   // Named explicitly. A bare local time beside a UTC-labelled chart is the ambiguity
   // that makes the two look like they disagree when they do not.
-  return d.toLocaleString(undefined, { timeZoneName: 'short' });
+  return d.toLocaleString(language, { timeZoneName: 'short' });
 }
 
 /** The browser's timezone abbreviation, e.g. "CDT". */
 export function tzName() {
-  const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' })
+  const parts = new Intl.DateTimeFormat(language, { timeZoneName: 'short' })
     .formatToParts(new Date());
   return parts.find((p) => p.type === 'timeZoneName')?.value || 'local time';
 }
@@ -157,9 +161,9 @@ const TIER_LABEL = [
  */
 export function tierName(el, name, pointsPerDay) {
   nameText(el, name);
-  const t = tier(pointsPerDay);
-  el.classList.add('tier-name', `tier-${t}`);
-  if (!el.title) el.title = TIER_LABEL[t];
+  const band = tier(pointsPerDay);
+  el.classList.add('tier-name', `tier-${band}`);
+  if (!el.title) el.title = t(TIER_LABEL[band]);
   return el;
 }
 
@@ -182,13 +186,13 @@ export function nameText(el, name) {
  * saying "the last 7 days" two hours after collection began is simply false.
  */
 export function span(seconds) {
-  if (!seconds || seconds < 60) return 'less than a minute';
+  if (!seconds || seconds < 60) return t('less than a minute');
   const units = [['day', 86400], ['hour', 3600], ['minute', 60]];
   for (const [name, size] of units) {
     if (seconds >= size) {
       const v = Math.round(seconds / size);
-      return `${v} ${name}${v === 1 ? '' : 's'}`;
+      return new Intl.NumberFormat(language, { style: 'unit', unit: name, unitDisplay: 'long' }).format(v);
     }
   }
-  return 'less than a minute';
+  return t('less than a minute');
 }

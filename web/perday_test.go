@@ -84,7 +84,7 @@ func TestPerDayPoints(t *testing.T) {
 	// charts.js reaches format.js and uPlot by absolute path, which is how the browser
 	// resolves them and how node cannot. Copy the whole graph and rewrite the
 	// specifiers to the .mjs siblings beside it.
-	abs := regexp.MustCompile(`'/(vendor/)?([A-Za-z.]+)\.(esm\.js|js)'`)
+	abs := regexp.MustCompile(`'/(vendor/)?([A-Za-z0-9.]+)\.(esm\.js|js)'`)
 	for _, name := range names {
 		src, err := assets.ReadFile(name)
 		if err != nil {

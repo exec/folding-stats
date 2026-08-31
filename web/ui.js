@@ -1,5 +1,7 @@
 // Small DOM helpers and shared components.
 
+import { language, t, tr } from '/i18n.js';
+
 /** el('div.card', {title: 'x'}, child, child) */
 export function el(spec, attrs, ...children) {
   const [tag, ...classes] = spec.split('.');
@@ -10,15 +12,15 @@ export function el(spec, attrs, ...children) {
   } else if (attrs) {
     for (const [k, v] of Object.entries(attrs)) {
       if (v === undefined || v === null || v === false) continue;
-      if (k === 'text') node.textContent = v;
+      if (k === 'text') node.textContent = t(v);
       else if (k === 'html') node.innerHTML = v;
       else if (k.startsWith('on')) node.addEventListener(k.slice(2).toLowerCase(), v);
-      else node.setAttribute(k, v === true ? '' : v);
+      else node.setAttribute(k, v === true ? '' : ['title', 'aria-label', 'placeholder'].includes(k) ? t(v) : v);
     }
   }
   for (const c of children.flat()) {
     if (c === null || c === undefined || c === false) continue;
-    node.append(c.nodeType ? c : document.createTextNode(String(c)));
+    node.append(c.nodeType ? c : document.createTextNode(t(String(c))));
   }
   return node;
 }
@@ -114,7 +116,8 @@ export function setQuiet(v) {
 
 export function loading(view) {
   if (quiet) return;
-  clear(view).append(
+  if (view.querySelector('.server-summary')) return;
+	clear(view).append(
     el('div.page-head', el('div.skeleton', { style: 'height:32px;width:280px' })),
     el('div', { style: 'height:16px' }),
     skeleton(96),
@@ -156,7 +159,7 @@ export function pager(page, totalPages, totalItems, onGo) {
     });
 
   if (totalPages <= 1) {
-    wrap.append(el('span.count', `${totalItems.toLocaleString()} total`));
+    wrap.append(el('span.count', tr('{0} total', totalItems.toLocaleString(language))));
     return wrap;
   }
 
@@ -172,12 +175,12 @@ export function pager(page, totalPages, totalItems, onGo) {
   let prev = 0;
   for (const p of window_) {
     if (p - prev > 1) wrap.append(el('span.muted', { style: 'padding:0 2px' }, '…'));
-    wrap.append(btn(p.toLocaleString(), p, { current: p === page }));
+    wrap.append(btn(p.toLocaleString(language), p, { current: p === page }));
     prev = p;
   }
 
   wrap.append(btn('›', page + 1, { disabled: page >= totalPages, title: 'Next page' }));
-  wrap.append(el('span.count', `${totalItems.toLocaleString()} total`));
+  wrap.append(el('span.count', tr('{0} total', totalItems.toLocaleString(language))));
   return wrap;
 }
 

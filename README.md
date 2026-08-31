@@ -426,6 +426,7 @@ ExecStart=/usr/local/bin/foldingd -dir /var/lib/folding -addr 0.0.0.0:8080 \
           -user-agent "yourthing/1.0 (+https://example.com; F@H stats mirror)"
 Restart=always
 Environment=GOMEMLIMIT=2500MiB
+Environment=FOLDING_CANONICAL_HOST=foldingstats.org
 MemoryHigh=2800M
 MemoryMax=3400M
 ```

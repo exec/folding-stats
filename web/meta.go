@@ -34,6 +34,9 @@ type Meta struct {
 	// and saying so is what stops 20,000 sitemap URLs turning into 20,000 soft 404s
 	// the day a name is retired upstream.
 	NoIndex bool
+	// Status lets a route-shaped URL report that its record does not exist. Without
+	// it, /donors/nobody is a 200 soft 404 even though the snapshot knows better.
+	Status int
 }
 
 // MetaFunc returns the metadata for a path, or false to leave the shell's defaults
@@ -71,9 +74,18 @@ func splitShell(index []byte) (head, tail []byte, err error) {
 // shell renders the document for one URL.
 func (s *site) shell(base, path string, m Meta) string {
 	var b strings.Builder
-	b.Grow(len(s.shellHead) + len(s.shellTail) + 1024)
+	b.Grow(len(s.shellHead) + len(s.shellMain) + len(s.shellTail) + 1400)
 	b.Write(s.shellHead)
 	writeHead(&b, m, canonicalURL(base, path))
+	b.Write(s.shellMain)
+	// The app replaces this summary when it boots. Until then, people without
+	// JavaScript and crawlers waiting to render still receive the page's real subject
+	// rather than an empty main element and a footer.
+	b.WriteString(`<section class="section server-summary"><h1 class="page-title">`)
+	b.WriteString(html.EscapeString(m.Title))
+	b.WriteString(`</h1><p>`)
+	b.WriteString(html.EscapeString(m.Description))
+	b.WriteString(`</p></section>`)
 	b.Write(s.shellTail)
 	return b.String()
 }

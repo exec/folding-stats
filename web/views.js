@@ -6,11 +6,12 @@
 
 import { api, snapshot } from '/api.js';
 import { el, clear, card, cardWith, statTile, pager, segmented, notice, loading, skeleton, errorView, link } from '/ui.js';
-import { n, short, ago, dateTime, utcDate, delta, tierName, nameText, plural, span, tzName } from '/format.js';
+import { n, short, ago, dateTime, utcDate, delta, tierName, nameText, plural, span, tzName, future } from '/format.js';
 import { productionChart, seriesChart, stack, legend, palette, densify, perDayPoints, MAX_STACK_SERIES } from '/charts.js';
 import { LocalClient, Fleet, LOCAL_URL } from '/fah.js';
 import { topicIcon } from '/topicicons.js';
 import { RelayLink, identity, mintToken, exportCode, adoptCode } from '/relay.js';
+import { language, t, tr } from '/i18n.js';
 
 const PER_PAGE = 100;
 const WATCH_KEY = 'folding.watchlist';
@@ -43,9 +44,9 @@ function watchButton(kind, id, name) {
   const button = el('button.btn.watch-btn', { type: 'button' });
   const draw = () => {
     const active = watched().some((x) => watchID(x.kind, x.id) === key);
-    button.textContent = active ? '★ Watching' : '☆ Watch';
+    button.textContent = t(active ? '★ Watching' : '☆ Watch');
     button.setAttribute('aria-pressed', active ? 'true' : 'false');
-    button.title = active ? 'Remove from your watchlist' : 'Add to your watchlist';
+    button.title = t(active ? 'Remove from your watchlist' : 'Add to your watchlist');
   };
   button.addEventListener('click', () => {
     const items = watched();
@@ -87,7 +88,7 @@ const VAST_TEMPLATE = '';
 function activeWindow() {
   const s = snapshot();
   const w = s?.warming_up;
-  return !w?.history_span_sec ? '7 days' : span(w.history_span_sec);
+  return !w?.history_span_sec ? t('7 days') : span(w.history_span_sec);
 }
 
 const complete = () => {
@@ -248,18 +249,18 @@ function sortHeader(col, sort, onPick) {
  */
 function overtakeIn(days) {
   if (days === null || days === undefined) return null;
-  if (days <= 0) return 'level now';
+  if (days <= 0) return t('level now');
   if (days < 1) {
     const h = Math.max(1, Math.round(days * 24));
-    return `in ${h} ${h === 1 ? 'hour' : 'hours'}`;
+    return future(h, 'hour');
   }
   if (days < 14) {
     const d = Math.round(days);
-    return `in ${d} ${d === 1 ? 'day' : 'days'}`;
+    return future(d, 'day');
   }
-  if (days < 90) return `in ${Math.round(days / 7)} weeks`;
-  if (days < 730) return `in ${Math.round(days / 30.4)} months`;
-  return `in ${Math.round(days / 365)} years`;
+  if (days < 90) return future(Math.round(days / 7), 'week');
+  if (days < 730) return future(Math.round(days / 30.4), 'month');
+  return future(Math.round(days / 365), 'year');
 }
 
 /**
@@ -349,11 +350,11 @@ function rivalsCard(load, kind, { href, onPage } = {}) {
         el('div.chart-note',
           'Projected from each side’s current per-day average, held constant. ',
           'Nobody folds at a constant rate, so treat these as “about when”, not a date. ',
-          `Anything further out than ${Math.round(d.horizon_days / 365)} years is reported as not closing.`));
+          tr('Anything further out than {0} years is reported as not closing.', Math.round(d.horizon_days / 365))));
     } catch (err) {
       console.warn('rivals: could not load', err);
       clear(body).append(el('div.card-body',
-        el('div.muted', `Couldn\u2019t load rivals \u2014 ${err?.message || err}`)));
+        el('div.muted', tr('Couldn’t load rivals — {0}', err?.message || err))));
     } finally {
       body.classList.remove('swapping');
     }
@@ -431,7 +432,7 @@ async function donorRivalsSection(donor, teams) {
     ...rivalTeamTabs(teams).map((t) => ({
       value: String(t.team_id),
       label: t.team_name || `Team ${t.team_id}`,
-      title: `Where ${donor.name} stands among this team\u2019s members`,
+      title: tr('Where {0} stands among this team’s members', donor.name),
     }))];
   // One team and no global context worth switching to is still two fields; but a
   // donor on no teams has nothing to scope to, so the plain card is the whole answer.
@@ -469,7 +470,7 @@ function emptyChart(granularity) {
   }[granularity] || 'this window';
   return el('div.chart-empty',
     el('div', 'No production recorded'),
-    el('div', { style: 'font-size:12px;margin-top:4px' }, `Nothing in ${window_}.`));
+    el('div', { style: 'font-size:12px;margin-top:4px' }, tr('Nothing in {0}.', t(window_))));
 }
 
 /* ------------------------------------------------------------ components --- */
@@ -477,7 +478,7 @@ function emptyChart(granularity) {
 /* ------------------------------------------------------------------ home --- */
 
 const postDate = (iso) =>
-  new Date(iso).toLocaleDateString(undefined, {
+  new Date(iso).toLocaleDateString(language, {
     timeZone: 'UTC', year: 'numeric', month: 'long', day: 'numeric',
   });
 
@@ -546,8 +547,8 @@ function statsRail(d) {
       el('div.card-body',
         fig('Total points', short(d.points_total), n(d.points_total)),
         fig('Last 24 hours', short(d.points_last_24h), 'points across the project'),
-        fig('Active donors', short(d.donors_active), `of ${n(d.donors_total)} in the last ${activeWindow()}`),
-        fig('Teams', short(d.teams_active), `producing, of ${n(d.teams_total)}`),
+        fig('Active donors', short(d.donors_active), tr('of {0} in the last {1}', n(d.donors_total), activeWindow())),
+        fig('Teams', short(d.teams_active), tr('producing, of {0}', n(d.teams_total))),
         fig('Work units', short(d.wus_total), n(d.wus_total)))),
     card('The API',
       el('div.card-body',
@@ -580,7 +581,7 @@ export async function postPage(view, { slug }) {
  */
 function rankMovement(change, fallback) {
   if (change === undefined || change === null) return fallback;
-  return el('span.stat-move', delta(change), ' in 24h');
+  return el('span.stat-move', delta(change), ' ' + t('in 24h'));
 }
 
 /** The two bases the Percentile tile can be read on. */
@@ -619,10 +620,10 @@ function standingTile(standing, basis) {
   // Absent on this month is not last place: it is not being in the field at all, and
   // a percentage would be a measurement of something that did not happen.
   if (!s) return statTile('Percentile', '—', 'nothing produced this month', hint);
-  return statTile('Percentile', `Top ${pct(s.top_percent)}`,
+  return statTile('Percentile', tr('Top {0}', pct(s.top_percent)),
     basis === 'lifetime'
-      ? `of ${n(s.of)} tracked, by lifetime points`
-      : `of ${n(s.of)} that produced this month`,
+      ? tr('of {0} tracked, by lifetime points', n(s.of))
+      : tr('of {0} that produced this month', n(s.of)),
     hint);
 }
 
@@ -674,14 +675,14 @@ function streakTile(s) {
     'teams on one day is one day.';
   if (!s || !s.active_days) return statTile('Streak', '—', 'no production on record', hint);
   if (!s.current) {
-    return statTile('Streak', '—', `best run was ${plural(s.longest, 'day')}`, hint);
+    return statTile('Streak', '—', tr('best run was {0}', plural(s.longest, 'day')), hint);
   }
   const value = el(`span.streak.tier-${streakTier(s.current)}`,
     flame(), el('span', { text: plural(s.current, 'day') }));
   return statTile('Streak', value,
     s.at_collection_floor
       ? 'every day since collection began'
-      : `since ${utcDate(s.since)} · best ${plural(s.longest, 'day')}`,
+      : tr('since {0} · best {1}', utcDate(s.since), plural(s.longest, 'day')),
     hint);
 }
 
@@ -746,7 +747,7 @@ function ppdTile(d) {
   // Listings carry the scalar only; there is nothing to switch between there.
   if (windows.length === 0) {
     return statTile('PPD', short(d.points_per_day_24h_avg),
-      complete() ? '24-hour average' : `over ${activeWindow()} so far`,
+      complete() ? '24-hour average' : tr('over {0} so far', activeWindow()),
       'Points per day over the rolling 24 hours');
   }
 
@@ -756,7 +757,7 @@ function ppdTile(d) {
     const w = windows[i];
     const meta = PPD_WINDOWS[w.window];
     const sub = w.partial
-      ? `${meta.label} · only ${span(w.covers_sec)} collected`
+      ? tr('{0} · only {1} collected', t(meta.label), span(w.covers_sec))
       : meta.label;
     clear(tile).append(
       el('div.stat-label', { title: 'Points per day. Click the window to change it.' }, 'PPD'),
@@ -816,8 +817,8 @@ function perWUText(d) {
   const wus = d.wus_total ?? 0;
   if (!wus) return n(wus);
   const recent = d.recent?.points_per_wu;
-  if (!recent) return `${n(wus)} · ${n(d.points_per_wu)} points each, lifetime`;
-  return `${n(wus)} · ${short(recent)}/WU now, ${short(d.points_per_wu)} lifetime`;
+  if (!recent) return tr('{0} · {1} points each, lifetime', n(wus), n(d.points_per_wu));
+  return tr('{0} · {1}/WU now, {2} lifetime', n(wus), short(recent), short(d.points_per_wu));
 }
 
 /**
@@ -834,20 +835,20 @@ function chartNote(granularity, rate = 'total') {
   else if (granularity === 'weekly')
     s = `Weeks start Sunday 00:00 UTC. Gaps are weeks with no production.`;
   else if (granularity === 'daily') s = `Days are UTC. Gaps are days with no production.`;
-  else s = `Times are ${tzName()}. Gaps are hours with no production.`;
+  else s = tr('Times are {0}. Gaps are hours with no production.', tzName());
   if (rate !== 'per-day') return s;
   // The in-progress bucket is divided by the part of it that has elapsed, so it is a
   // rate so far and not a total, and it moves around early in the period. Saying so
   // costs a clause and stops the newest bar reading as a crash or a spike.
   return granularity === 'hourly'
-    ? `${s} Each point is its hour's output as PPD.`
-    : `${s} Each bar is PPD; the one in progress is measured over the part elapsed.`;
+    ? tr("{0} Each point is its hour's output as PPD.", t(s))
+    : tr('{0} Each bar is PPD; the one in progress is measured over the part elapsed.', t(s));
 }
 
 const DAY_MS = 86400e3;
 
 function dayLabel(ms) {
-  return new Date(ms).toLocaleDateString(undefined, {
+  return new Date(ms).toLocaleDateString(language, {
     timeZone: 'UTC', year: 'numeric', month: 'short', day: 'numeric',
   });
 }
@@ -866,7 +867,7 @@ function productionHeatmap(points) {
   const max = Math.max(...points.map((p) => p.points), 1);
   const grid = el('div.heatmap-grid', {
     role: 'img',
-    'aria-label': `Daily production from ${dayLabel(oldest)} through ${dayLabel(newest)}`,
+    'aria-label': tr('Daily production from {0} through {1}', dayLabel(oldest), dayLabel(newest)),
   });
   for (let at = start; at <= end; at += DAY_MS) {
     const p = values.get(at);
@@ -874,7 +875,7 @@ function productionHeatmap(points) {
     const level = value ? Math.max(1, Math.ceil(Math.log1p(value) / Math.log1p(max) * 4)) : 0;
     grid.append(el(`span.heat-cell.level-${level}${at < oldest || at > newest ? '.outside' : ''}`, {
       title: at < oldest || at > newest ? '' :
-        `${dayLabel(at)} UTC — ${n(value)} points, ${n(p?.wus || 0)} WUs`,
+        tr('{0} UTC — {1} points, {2} WUs', dayLabel(at), n(value), n(p?.wus || 0)),
     }));
   }
 
@@ -900,9 +901,9 @@ function productionHeatmap(points) {
       ...[0, 1, 2, 3, 4].map((v) => el(`span.heat-cell.level-${v}`)), el('span', 'More')),
     el('div.stats.heat-records',
       statTile('Best day', short(best.points), dayLabel(Date.parse(best.at))),
-      statTile('Best 7 days', short(best7.points), `ending ${dayLabel(best7.at)}`),
+      statTile('Best 7 days', short(best7.points), tr('ending {0}', dayLabel(best7.at))),
       statTile('Active days', n(points.length), 'in the retained daily record'),
-      statTile('Current / best streak', `${n(current)} / ${n(longest)}`, 'consecutive UTC days')));
+      statTile('Current / best streak', `${n(current)} / ${n(longest)}`, t('consecutive UTC days'))));
 }
 
 function downloadHistory(title, history) {
@@ -965,9 +966,9 @@ function historyCard(title, fetcher) {
 
   async function load() {
     const effective = shape === 'heatmap' ? 'daily' : granularity;
-    noteEl.textContent = shape === 'heatmap'
+    noteEl.textContent = t(shape === 'heatmap'
       ? 'Each square is one UTC day. Records use the retained daily history; hourly rows are not involved.'
-      : chartNote(granularity, rate);
+      : chartNote(granularity, rate));
     try {
       const params = { granularity: effective, metric: 'points' };
       if (shape === 'heatmap') {
@@ -1023,7 +1024,7 @@ function arrivalsTile(d) {
       'Donors seen for the first time in the last 24 hours');
   }
   return statTile('New donors', short(d.new_donors_24h),
-    `in 24h · ${n(d.new_teams_24h)} new teams`,
+    `${t('in 24h')} · ${tr('{0} new teams', n(d.new_teams_24h))}`,
     'Donors and teams seen for the first time in the last 24 hours');
 }
 
@@ -1046,9 +1047,9 @@ export async function overview(view) {
         'div.page-head',
         el('div.eyebrow', 'Folding@home'),
         el('h1.page-title', 'Every donor, every team, one snapshot'),
-        el('p.page-sub',
-          `Tracking ${n(d.donors_total)} donors across ${n(d.teams_total)} teams. ` +
-          `Updated hourly, with a free API and nothing standing in front of it.`)
+        el('p.page-sub', tr(
+          'Tracking {0} donors across {1} teams. Updated hourly, with a free API and nothing standing in front of it.',
+          n(d.donors_total), n(d.teams_total)))
       )
     );
 
@@ -1063,8 +1064,8 @@ export async function overview(view) {
           // has been collected, and naming the nominal window would overstate what
           // this count covers.
           statTile('Active donors', short(d.donors_active),
-            `of ${n(d.donors_total)} — produced in the last ${activeWindow()}`),
-          statTile('Active teams', short(d.teams_active), `of ${n(d.teams_total)}`),
+            tr('of {0} — produced in the last {1}', n(d.donors_total), activeWindow())),
+          statTile('Active teams', short(d.teams_active), tr('of {0}', n(d.teams_total))),
           statTile('Last 24 hours', short(d.points_last_24h), 'points across the project'),
           statTile('Work units', short(d.wus_total), n(d.wus_total)),
           arrivalsTile(d)
@@ -1124,13 +1125,13 @@ function teamTable(teams, { compact = false, sort = 'lifetime', offset = 0, onSo
       // The lifetime rank is a different number, and showing it here would look like
       // the sort had simply not worked.
       ranked
-        ? el('td.rank', { title: `Lifetime rank #${n(t.rank)}` }, n(offset + i + 1))
+        ? el('td.rank', { title: tr('Lifetime rank #{0}', n(t.rank)) }, n(offset + i + 1))
         : el('td.rank', n(t.rank)),
       el('td.left.name-cell', nameLink),
       ...cols.map((c) => {
         const active = c.key === sort ? '.metric' : '';
         if (c.key === 'members') {
-          return el(`td.num${active}`, { title: `${n(t.members_active)} active of ${n(t.members_total)}` },
+          return el(`td.num${active}`, { title: tr('{0} active of {1}', n(t.members_active), n(t.members_total)) },
             `${short(t.members_active)} / ${short(t.members_total)}`);
         }
         return el(`td.num${active}`, { title: n(t[c.field]) }, short(t[c.field]));
@@ -1147,7 +1148,7 @@ export async function teamsList(view, { page = 1, sort = 'lifetime' }, nav) {
     view.append(el('div.teams-page-head',
       el('div.page-head',
         el('h1.page-title', 'Teams'),
-        el('p.page-sub', `${n(res.page.total_items)} teams, ranked by ${SORT_BLURB[sort]}.`)),
+        el('p.page-sub', tr('{0} teams, ranked by {1}.', n(res.page.total_items), t(SORT_BLURB[sort])))),
       el('a.globe-link', { href: '/teams/country' },
         el('span.globe-link-icon', { 'aria-hidden': 'true' }, '◎'),
         el('span', 'Around the Globe'))));
@@ -1203,7 +1204,7 @@ export async function aroundTheGlobePage(view) {
         el('td.num', `${n(c.teams_active)} / ${n(c.teams_total)}`),
         el('td.num', { title: n(c.points_per_day_24h_avg) }, short(c.points_per_day_24h_avg)),
         el('td.num', { title: n(c.points_total) }, short(c.points_total)))));
-      clear(tableHost).append(card(`Countries (${n(rows.length)})`,
+      clear(tableHost).append(card(tr('Countries ({0})', n(rows.length)),
         el('div.table-wrap', el('table.data',
           el('thead', el('tr', el('th.left', 'Country'), el('th', 'Active / teams'),
             el('th', 'PPD'), el('th', 'Points'))), body))));
@@ -1238,13 +1239,13 @@ export async function countryPage(view, { code }) {
           el('a', { href: '/teams/country' }, 'Around the Globe'), el('span', '/'),
           el('span', c.name)),
         el('h1.page-title', c.name),
-        el('p.page-sub', `${plural(c.teams_total, 'team')} currently assigned to this country.`)),
+        el('p.page-sub', tr('{0} currently assigned to this country.', plural(c.teams_total, 'team')))),
       el('section.section', el('div.stats',
         statTile('Combined points', short(c.points_total), n(c.points_total)),
         statTile('Combined PPD', short(c.points_per_day_24h_avg), 'rolling 24-hour rate'),
-        statTile('Active teams', n(c.teams_active), `of ${n(c.teams_total)} assigned`),
+        statTile('Active teams', n(c.teams_active), tr('of {0} assigned', n(c.teams_total))),
         statTile('Last 7 days', short(c.points_last_7d), 'points'))),
-      el('section.section', card(`Teams (${n(c.teams_total)})`, teamTable(c.teams)))
+      el('section.section', card(tr('Teams ({0})', n(c.teams_total)), teamTable(c.teams)))
     );
   } catch (err) {
     errorView(view, err);
@@ -1281,7 +1282,7 @@ export async function topicsPage(view) {
           el('div.topic-head', topicIcon(t.slug), el('div.topic-name', t.name)),
           el('p.topic-desc', t.description),
           el('div.topic-figures',
-            el('span', `${n(t.teams_total)} ${t.teams_total === 1 ? 'team' : 'teams'}`),
+            el('span', plural(t.teams_total, 'team')),
             el('span.num', { title: n(t.points_per_day_24h_avg) },
               `${short(t.points_per_day_24h_avg)} PPD`)))))),
       el('p.chart-note',
@@ -1308,9 +1309,9 @@ export async function topicPage(view, { slug }) {
       el('section.section', el('div.stats',
         statTile('Combined points', short(t.points_total), n(t.points_total)),
         statTile('Combined PPD', short(t.points_per_day_24h_avg), 'rolling 24-hour rate'),
-        statTile('Active teams', n(t.teams_active), `of ${n(t.teams_total)} listed`),
+        statTile('Active teams', n(t.teams_active), tr('of {0} listed', n(t.teams_total))),
         statTile('Last 7 days', short(t.points_last_7d), 'points'))),
-      el('section.section', card(`Teams (${n(t.teams_total)})`, teamTable(t.teams)))
+      el('section.section', card(tr('Teams ({0})', n(t.teams_total)), teamTable(t.teams)))
     );
   } catch (err) {
     errorView(view, err);
@@ -1332,9 +1333,8 @@ export async function teamDetail(view, { id }, nav) {
         el('div.breadcrumb', el('a', { href: '/teams' }, 'Teams'), el('span', '/'),
           el('span', `#${n(t.rank)}`)),
         el('div.title-row', title, watchButton('team', String(t.team_id), t.name)),
-        el('p.page-sub',
-          `Team ${n(t.team_id)} · ${plural(t.members_total, 'member')} · ` +
-          `${n(t.members_active)} active in the last ${activeWindow()}`))
+        el('p.page-sub', tr('Team {0} · {1} · {2} active in the last {3}',
+          n(t.team_id), plural(t.members_total, 'member'), n(t.members_active), activeWindow())))
     );
 
     view.append(detailStats(t, [
@@ -1406,7 +1406,7 @@ async function teamMembersCard(teamID, nav) {
       });
       clear(body);
       if (!res.data.length) {
-        body.append(el('div.empty', activeOnly ? `No members produced in the last ${activeWindow()}.` : 'No members.'));
+        body.append(el('div.empty', activeOnly ? tr('No members produced in the last {0}.', activeWindow()) : 'No members.'));
         return;
       }
       body.append(memberTable(res.data, sort, (key) => {
@@ -1488,11 +1488,11 @@ function donorTable(donors, { compact = false, sort = 'lifetime', offset = 0, on
     // them already tells the story, and a warning on every top row is noise. The
     // full explanation lives on the donor's own page, where it appears once.
     if (d.likely_not_a_person) {
-      cell.title = `Appears on ${n(d.team_count)} teams — almost certainly a shared default name.`;
+      cell.title = tr('Appears on {0} teams — almost certainly a shared default name.', n(d.team_count));
     }
     body.append(el('tr', { class: idle ? 'dim' : null },
       ranked
-        ? el('td.rank', { title: `Lifetime rank #${n(d.rank)}` }, n(offset + i + 1))
+        ? el('td.rank', { title: tr('Lifetime rank #{0}', n(d.rank)) }, n(offset + i + 1))
         : el('td.rank', n(d.rank)),
       cell,
       ...cols.map((c) => {
@@ -1517,7 +1517,8 @@ export async function donorsList(view, { page = 1, sort = 'lifetime' }, nav) {
     view.append(
       el('div.page-head',
         el('h1.page-title', 'Donors'),
-        el('p.page-sub', `${n(res.page.total_items)} donors, ranked by ${SORT_BLURB[sort]} across every team they fold for.`))
+        el('p.page-sub', tr('{0} donors, ranked by {1} across every team they fold for.',
+          n(res.page.total_items), t(SORT_BLURB[sort]))))
     );
     view.append(
       card(null,
@@ -1553,14 +1554,13 @@ export async function donorDetail(view, { name }, nav) {
       el('p.page-sub',
         d.team_count === 1
           ? 'Folding for one team.'
-          : `Folding for ${n(d.team_count)} teams — totals below are the sum across all of them.`));
+          : tr('Folding for {0} teams — totals below are the sum across all of them.', n(d.team_count))));
     view.append(head);
 
     if (d.likely_not_a_person) {
-      view.append(el('div.section', notice(
-        `“${d.name}” appears on ${n(d.team_count)} teams. It is almost certainly a default or ` +
-        `placeholder name shared by many different people, so these totals are an aggregate ` +
-        `rather than one person's record.`)));
+      view.append(el('div.section', notice(tr(
+        "“{0}” appears on {1} teams. It is almost certainly a default or placeholder name shared by many different people, so these totals are an aggregate rather than one person's record.",
+        d.name, n(d.team_count)))));
     }
 
     view.append(detailStats(d, [
@@ -1660,7 +1660,9 @@ function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyD
       }, label, val ? el('span.tab-val', short(val)) : null);
 
     tabs.append(mk('all',
-      producers.length > 1 ? `Top ${Math.min(shown.length, MAX_STACK_SERIES)} ${noun}s` : `All ${noun}s`,
+      producers.length > 1
+        ? tr('Top {0} {1}s', Math.min(shown.length, MAX_STACK_SERIES), t(noun))
+        : tr('All {0}s', t(noun)),
       total));
     for (const c of shown) tabs.append(mk(c.key, c.label, c.value));
   }
@@ -1729,7 +1731,7 @@ function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyD
   async function load() {
     renderTabs();
     renderControls(selected === 'all' ? shown.length : 1);
-    noteEl.textContent = chartNote(granularity, rate);
+    noteEl.textContent = t(chartNote(granularity, rate));
     if (chart) chart.destroy();
     clear(legendEl);
     drawn = null;
@@ -1739,7 +1741,7 @@ function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyD
     try {
       if (selected === 'all' && !producers.length) {
         legendEl.append(el('div.chart-empty',
-          el('div', `No ${noun} has produced recently`),
+          el('div', tr('No {0} has produced recently', t(noun))),
           el('div', { style: 'font-size:12px;margin-top:4px' }, emptyDetail)));
         return;
       }
@@ -1806,7 +1808,7 @@ function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyD
           }
           if (arr.some((v) => v > 0)) {
             rows.push(arr);
-            labels.push(`Other (${rest.length})`);
+            labels.push(tr('Other ({0})', rest.length));
           }
         }
 
@@ -1859,7 +1861,7 @@ function breakdownCard(donor, teams) {
     noun: 'team',
     items: (teams || []).map(item),
     total: donor.points_last_7d,
-    emptyDetail: `${n(donor.team_count)} teams on record, none with output in the last 7 days.`,
+    emptyDetail: tr('{0} teams on record, none with output in the last 7 days.', n(donor.team_count)),
     fetchFor: (key, p) => api.donorHistory(donor.name, { ...p, team_id: key }),
     // The embedded breakdown is capped and ordered by lifetime points, so a donor's
     // actual producers can fall outside it entirely. Ask for them explicitly.
@@ -1887,7 +1889,7 @@ function teamMembersChartCard(team) {
     noun: 'member',
     items: [],
     total: team.points_last_7d,
-    emptyDetail: `${n(team.members_total)} members on record, none with output in the last 7 days.`,
+    emptyDetail: tr('{0} members on record, none with output in the last 7 days.', n(team.members_total)),
     fetchFor: (name, p) => api.donorHistory(name, { ...p, team_id: team.team_id }),
     // Always fetched: the team payload carries no roster, and the members worth
     // plotting are the recent producers rather than the lifetime leaders.
@@ -1922,10 +1924,10 @@ function teamsCard(donor, teams) {
         el('th.left', 'Team'), el('th', 'Rank in team'), el('th', 'PPD'), el('th', 'Points'))),
       body)
   );
-  const node = card(`Teams (${n(donor.team_count)})`, table);
+  const node = card(tr('Teams ({0})', n(donor.team_count)), table);
   if (donor.teams_truncated) {
     node.append(el('div', { style: 'padding:12px 24px' },
-      notice(`Showing the ${teams.length} highest-scoring teams of ${n(donor.team_count)}.`)));
+      notice(tr('Showing the {0} highest-scoring teams of {1}.', teams.length, n(donor.team_count)))));
   }
   return node;
 }
@@ -1971,14 +1973,14 @@ async function milestoneSection(entity, kind) {
   const rankText = g?.current_overtake_days != null
     ? overtakeIn(g.current_overtake_days)
     : g?.horizons?.find((h) => h.days === 90)
-      ? `${short(g.horizons.find((h) => h.days === 90).points_per_day)} PPD needed in 90 days`
+      ? tr('{0} PPD needed in 90 days', short(g.horizons.find((h) => h.days === 90).points_per_day))
       : 'not closing at the current rate';
 
   return el('section.section', card('Next milestones',
     el('div.card-body',
       el('div.stats',
         statTile('Points target', short(pointTarget), pointDays == null ? 'no current production' : overtakeIn(pointDays),
-          `Next round total: ${n(pointTarget)} points`),
+          tr('Next round total: {0} points', n(pointTarget))),
         rankTarget
           ? statTile('Rank target', `#${n(rankTarget)}`, rankText)
           : statTile('Rank target', '#1', 'already leading')))));
@@ -2010,7 +2012,7 @@ async function copyText(text, reveal, status) {
     getSelection().selectAllChildren(reveal);
     return;
   }
-  status.textContent = 'Copied';
+  status.textContent = t('Copied');
   clearTimeout(status.timer);
   status.timer = setTimeout(() => { status.textContent = ''; }, 1400);
 }
@@ -2033,11 +2035,11 @@ function badgeSection(entity, kind) {
       // Hidden until the clipboard refuses, then revealed so it can still be copied.
       const fallback = el('code.badge-md', { hidden: true }, md);
       return el('div.badge-row',
-        el('img', { src: path, alt: `${entity.name} ${metric} badge`, loading: 'lazy' }),
+        el('img', { src: path, alt: `${entity.name} ${t(metric)} ${t('badge')}`, loading: 'lazy' }),
         el('button.btn.badge-copy', {
           type: 'button',
           title: md,
-          'aria-label': `Copy the ${metric} badge markdown`,
+          'aria-label': tr('Copy the {0} badge markdown', t(metric)),
           onclick: () => copyText(md, fallback, done),
         }, 'Copy Markdown'),
         done,
@@ -2049,7 +2051,7 @@ function badgeSection(entity, kind) {
   return el('section.section', cardWith('Embeddable badges',
     el('button.linkish', {
       type: 'button',
-      onclick: (e) => { withName = !withName; e.target.textContent = withName ? 'Hide the name' : 'Show the name'; draw(); },
+      onclick: (e) => { withName = !withName; e.target.textContent = t(withName ? 'Hide the name' : 'Show the name'); draw(); },
     }, 'Show the name'),
     el('div.card-body',
       el('p.muted',
@@ -2153,7 +2155,7 @@ function compareTool() {
     el('button.btn.btn-primary', { type: 'submit' }, 'Compare'));
   const drawControls = () => clear(controls).append(kindControl(kind, (v) => {
     kind = v;
-    a.placeholder = b.placeholder = kind === 'team' ? 'Team number' : 'Exact donor name';
+    a.placeholder = b.placeholder = t(kind === 'team' ? 'Team number' : 'Exact donor name');
     drawControls();
   }));
   drawControls();
@@ -2164,11 +2166,11 @@ function compareTool() {
       const d = (await api.compare({ kind, a: a.value.trim(), b: b.value.trim() })).data;
       const leader = d.leader === 'tie' ? null : d[d.leader];
       clear(result).append(el('div.stats',
-        statTile(d.a.name, `#${n(d.a.rank)}`, `${short(d.a.points_per_day_24h_avg)} PPD · ${short(d.a.points_total)} points`),
-        statTile(d.b.name, `#${n(d.b.rank)}`, `${short(d.b.points_per_day_24h_avg)} PPD · ${short(d.b.points_total)} points`),
-        statTile('Gap', short(d.points_gap), leader ? `${leader.name} leads` : 'level'),
+        statTile(d.a.name, `#${n(d.a.rank)}`, `${short(d.a.points_per_day_24h_avg)} PPD · ${short(d.a.points_total)} ${t('points')}`),
+        statTile(d.b.name, `#${n(d.b.rank)}`, `${short(d.b.points_per_day_24h_avg)} PPD · ${short(d.b.points_total)} ${t('points')}`),
+        statTile('Gap', short(d.points_gap), leader ? tr('{0} leads', leader.name) : 'level'),
         statTile('Crossover', d.overtake_days == null ? '—' : overtakeIn(d.overtake_days),
-          d.overtake_at ? new Date(d.overtake_at).toLocaleDateString() : 'not closing at current rates')));
+          d.overtake_at ? new Date(d.overtake_at).toLocaleDateString(language) : t('not closing at current rates'))));
     } catch (err) {
       clear(result).append(el('div.error', err.message));
     }
@@ -2190,8 +2192,8 @@ function goalTool() {
   const syncTarget = () => {
     const type = targetType.value;
     target.type = type === 'overtake' ? 'text' : 'number';
-    target.placeholder = type === 'target_rank' ? 'Target rank' : type === 'target_points' ? 'Target points' :
-      (kind === 'team' ? 'Team number' : 'Exact donor name');
+    target.placeholder = t(type === 'target_rank' ? 'Target rank' : type === 'target_points' ? 'Target points' :
+      (kind === 'team' ? 'Team number' : 'Exact donor name'));
   };
   targetType.addEventListener('change', syncTarget);
   const form = el('form.tool-form', field('Who', who), field('Goal', targetType),
@@ -2199,7 +2201,7 @@ function goalTool() {
     el('button.btn.btn-primary', { type: 'submit' }, 'Calculate'));
   const drawControls = () => clear(controls).append(kindControl(kind, (v) => {
     kind = v;
-    who.placeholder = kind === 'team' ? 'Team number' : 'Exact donor name';
+    who.placeholder = t(kind === 'team' ? 'Team number' : 'Exact donor name');
     syncTarget();
     drawControls();
   }));
@@ -2210,14 +2212,14 @@ function goalTool() {
     try {
       const params = { kind, who: who.value.trim(), [targetType.value]: target.value.trim(), by: by.value };
       const d = (await api.goal(params)).data;
-      const tiles = [statTile('Gap today', short(d.points_gap), d.holding ? 'currently ahead' : 'still to close')];
+      const tiles = [statTile('Gap today', short(d.points_gap), t(d.holding ? 'currently ahead' : 'still to close'))];
       if (d.required_points_per_day != null) {
         tiles.push(statTile('Required PPD', short(d.required_points_per_day),
           d.subject.points_per_day_24h_avg ?
-            `${(d.required_points_per_day / d.subject.points_per_day_24h_avg).toFixed(1)}× current rate` : 'no current rate'));
+            tr('{0}× current rate', (d.required_points_per_day / d.subject.points_per_day_24h_avg).toFixed(1)) : t('no current rate')));
       } else {
-        for (const h of d.horizons || []) tiles.push(statTile(`In ${h.days} days`, short(h.points_per_day),
-          h.current_rate_multiple ? `${h.current_rate_multiple.toFixed(1)}× current rate` : 'required PPD'));
+        for (const h of d.horizons || []) tiles.push(statTile(tr('In {0} days', h.days), short(h.points_per_day),
+          h.current_rate_multiple ? tr('{0}× current rate', h.current_rate_multiple.toFixed(1)) : 'required PPD'));
       }
       clear(result).append(el('div.stats', ...tiles),
         el('p.chart-note', 'Moving targets include the points they are projected to add. Rates use the rolling 24-hour average.'));
@@ -2253,7 +2255,7 @@ function moversTool() {
       clear(body).append(el('div.grid-2',
         el('div', el('h3.tool-title', 'Climbed'), d.climbed.length ? moversTable(d.climbed) : el('div.empty', 'No measured climbs.')),
         el('div', el('h3.tool-title', 'Fell'), d.fell.length ? moversTable(d.fell) : el('div.empty', 'No measured falls.'))),
-        el('p.chart-note', `Measured within the top ${n(d.within)} of ${n(d.field_size)} ${kind}s. ` +
+        el('p.chart-note', tr('Measured within the top {0} of {1} {2}s. ', n(d.within), n(d.field_size), t(kind)) +
           'The bound avoids treating jumps across enormous zero-point ties as meaningful movement.'));
     } catch (err) {
       clear(body).append(el('div.error', err.message));
@@ -2274,8 +2276,6 @@ export async function explorePage(view, { tab = 'compare' } = {}) {
   ], tab, (v) => { history.replaceState(null, '', `/explore?tab=${v}`); draw(v); });
   const host = el('section.section');
   const draw = (which) => {
-    for (const b of tabs.querySelectorAll('button')) b.setAttribute('aria-pressed',
-      b.textContent.toLowerCase() === which ? 'true' : 'false');
     clear(host).append(which === 'goals' ? goalTool() : which === 'movers' ? moversTool() : compareTool());
   };
   view.append(el('div.page-head', el('h1.page-title', 'Explore'),
@@ -2318,9 +2318,8 @@ export async function rivalsPage(view, { kind, id, page, teamID }, nav) {
       // in, and #7 among teammates versus #7 among two million donors is the same
       // number for two unrelated achievements.
       el('p.page-sub', d.team_name
-        ? `Ranked #${n(d.rank)} on ${d.team_name}. Who is within reach on this team, ` +
-          'and who is within reach of them.'
-        : `Ranked #${n(d.rank)}. Who is within reach, and who is within reach of them.`)));
+        ? tr('Ranked #{0} on {1}. Who is within reach on this team, and who is within reach of them.', n(d.rank), d.team_name)
+        : tr('Ranked #{0}. Who is within reach, and who is within reach of them.', n(d.rank)))));
 
     // The page rides in the URL here so a link carries the view the sender was
     // looking at — the whole reason this exists as a page and not only a card.
@@ -2343,13 +2342,13 @@ export async function searchPage(view, { q }, nav) {
     clear(view);
     view.append(
       el('div.page-head',
-        el('h1.page-title', `Results for “${q}”`),
+        el('h1.page-title', tr('Results for “{0}”', q)),
         el('p.page-sub', 'Exact matches first, then names starting with what you typed. ',
           'Short names like ', el('code', 'DH'), ' work.'))
     );
     if (!teams.length && !donors.length) {
       view.append(card(null, el('div.empty',
-        el('div', { style: 'margin-bottom:6px' }, `Nothing matches “${q}”.`),
+        el('div', { style: 'margin-bottom:6px' }, tr('Nothing matches “{0}”.', q)),
         el('div.muted', 'Try fewer characters, or a numeric team ID.'))));
       return;
     }
@@ -2396,11 +2395,11 @@ export async function apiDocs(view) {
   const paintLive = (d) => {
     if (!d || d.requests_per_second === undefined) {
       liveValue.textContent = '—';
-      liveSub.textContent = 'not reporting';
+      liveSub.textContent = t('not reporting');
       return;
     }
     liveValue.textContent = `${d.requests_per_second} /s`;
-    liveSub.textContent = `${n(d.requests_last_60s)} in the last minute, origin only`;
+    liveSub.textContent = tr('{0} in the last minute, origin only', n(d.requests_last_60s));
   };
   paintLive(snap?.data);
 
@@ -2901,7 +2900,7 @@ function policyHead(view, title, sub) {
   view.append(el('div.page-head',
     el('h1.page-title', title),
     el('p.page-sub', sub),
-    el('p.page-sub', { style: 'font-size:12px' }, `Last updated ${POLICY_UPDATED}.`)));
+    el('p.page-sub', { style: 'font-size:12px' }, tr('Last updated {0}.', POLICY_UPDATED))));
 }
 
 export async function privacyPage(view) {
@@ -3389,8 +3388,8 @@ function build(view, fleet, donor) {
     else if (working) [state, sub, tone] = ['Folding', plural(fah.units.length, 'work unit'), 'good'];
     else [state, sub, tone] = ['Waiting', 'asking for a work unit', 'idle'];
 
-    statusText.textContent = state;
-    statusSub.textContent = sub ? '· ' + sub : '';
+    statusText.textContent = t(state);
+    statusSub.textContent = sub ? '· ' + t(sub) : '';
     dot.className = 'dot ' + tone;
 
     // Actions follow the state rather than sitting as three equals. Only a state that
@@ -3421,10 +3420,10 @@ function build(view, fleet, donor) {
       // status line.
       ...fah.gpus.map((g) => g.description + (gcfg[g.id] && gcfg[g.id].enabled ? '' : ' (off)')),
       cpus == null ? plural(i.cpus || 0, 'CPU')
-        : `${cpus} of ${plural(i.cpus || 0, 'CPU')} folding`,
-      'client ' + (i.version || '?'),
-      fah.config.user ? 'as ' + fah.config.user : null,
-      fah.config.team != null ? 'team ' + fah.config.team : null,
+        : tr('{0} of {1} folding', cpus, plural(i.cpus || 0, 'CPU')),
+      t('client') + ' ' + (i.version || '?'),
+      fah.config.user ? t('as') + ' ' + fah.config.user : null,
+      fah.config.team != null ? t('team') + ' ' + fah.config.team : null,
     ].filter(Boolean).join(' · ');
   };
 }
@@ -3472,11 +3471,11 @@ function buildFleet(view, fleet, donor) {
     const online = fleet.online.length;
     const folding = fleet.folding;
     const total = fleet.clients.length;
-    line.textContent = `${folding} of ${plural(total, 'machine')} folding`;
-    sub.textContent = fleet.ppd ? '· ' + short(fleet.ppd) + ' points/day combined' : '';
+    line.textContent = tr('{0} of {1} folding', folding, plural(total, 'machine'));
+    sub.textContent = fleet.ppd ? '· ' + tr('{0} points/day combined', short(fleet.ppd)) : '';
     dot.className = 'dot ' + (folding === total ? 'good' : (folding ? 'warn' : 'idle'));
     if (online < total) sub.textContent += (sub.textContent ? ' · ' : '· ') +
-      plural(total - online, 'machine') + ' not answering';
+      plural(total - online, 'machine') + ' ' + t('not answering');
 
     // Trouble first: offline, then paused, then idle, then working.
     const rank = { offline: 0, paused: 1, finishing: 2, waiting: 3, folding: 4 };
@@ -3514,12 +3513,12 @@ function machineRow(client, nameOf) {
       dot.className = 'dot ' + ({ folding: 'good', paused: 'warn', finishing: 'warn',
         offline: 'idle', waiting: 'idle' }[client.phase] || 'idle');
       name.textContent = nameOf(client);
-      phase.textContent = client.phase;
-      rate.textContent = client.ppd ? short(client.ppd) + '/day' : '';
+      phase.textContent = t(client.phase);
+      rate.textContent = client.ppd ? tr('{0}/day', short(client.ppd)) : '';
       fill.style.width = p + '%';
-      proj.textContent = u ? 'project ' + (u.assignment || {}).project + ' · ' + p.toFixed(1) + '%'
-        : (client.phase === 'offline' ? 'not answering' : 'no work unit');
-      left.textContent = u && u.eta ? u.eta + ' left' : '';
+      proj.textContent = u ? tr('project {0} · {1}%', (u.assignment || {}).project, p.toFixed(1))
+        : t(client.phase === 'offline' ? 'not answering' : 'no work unit');
+      left.textContent = u && u.eta ? tr('{0} left', u.eta) : '';
 
       clear(actions);
       if (client.key && client.link) {
@@ -3671,7 +3670,7 @@ function addMachine(fleet, first = false) {
             status.textContent = '';
             try {
               const adopted = await adoptCode(field.value);
-              status.textContent = 'Adopted. Reloading…';
+              status.textContent = t('Adopted. Reloading…');
               setTimeout(() => location.reload(), 600);
             } catch (e) {
               status.textContent = e.message;
@@ -3765,7 +3764,7 @@ function rentalsCard(fleet) {
 
   const tiles = [
     statTile('Rented', String(r.instances.length),
-      `${running.length} running`, 'Instances this key rents, from Vast rather than from what is connected.'),
+      tr('{0} running', running.length), 'Instances this key rents, from Vast rather than from what is connected.'),
     statTile('Cost', '$' + hourly.toFixed(3), 'per hour',
       'Running instances at their full rate, stopped ones at storage only — storage is billed either way.'),
   ];
@@ -3911,7 +3910,7 @@ function rentalSetup(fleet) {
         el('button.btn', { type: 'button', onClick: () => {
           const target = fleet.clients.find((c) => c.key === pick.value);
           if (!target) return;
-          status.textContent = 'Checking the key with Vast…';
+          status.textContent = t('Checking the key with Vast…');
           target.ask({ cmd: 'rentals.configure', key: field.value.trim() });
         } }, 'Use this key')),
       el('p.muted', { style: 'margin-bottom:0' },
@@ -3999,8 +3998,8 @@ function unitCard(u) {
       const p = Math.max(0, Math.min(100, (cur.wu_progress || 0) * 100));
       pct.textContent = p.toFixed(1) + '%';
       fill.style.width = p + '%';
-      rate.textContent = cur.ppd ? short(cur.ppd) + '/day' : '';
-      left.textContent = cur.eta ? cur.eta + ' left' : (cur.state === 'RUN' ? 'estimating…' : '');
+      rate.textContent = cur.ppd ? tr('{0}/day', short(cur.ppd)) : '';
+      left.textContent = cur.eta ? tr('{0} left', cur.eta) : (cur.state === 'RUN' ? t('estimating…') : '');
       // The bonus, derived from the client's own rate rather than recomputed.
       //
       // Folding@home pays a quick return bonus: the base credit is multiplied by
@@ -4036,9 +4035,9 @@ function unitCard(u) {
           `The bonus is lost entirely if the unit comes back after the bonus ` +
           `deadline, which is ${span(at.timeout || 0)} from assignment.\n\n` +
           'Estimated from the current rate, so it moves as the unit runs.';
-        creditRest.textContent = ' = ' + n(base + bonus) + ' on return';
+        creditRest.textContent = ' = ' + tr('{0} points on return', n(base + bonus));
       } else {
-        creditBase.textContent = base ? n(base) + ' points on return' : '';
+        creditBase.textContent = base ? tr('{0} points on return', n(base)) : '';
         creditBonus.textContent = '';
         creditBonus.removeAttribute('title');
         creditRest.textContent = '';
@@ -4091,7 +4090,7 @@ function setupCard(fleet) {
           'Try again'),
         ' once the client is running.');
     } else {
-      again.textContent = 'Still trying port 7396…';
+      again.textContent = t('Still trying port 7396…');
     }
   }
 

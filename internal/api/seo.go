@@ -16,6 +16,8 @@ package api
 // comes last, where losing it costs nothing.
 
 import (
+	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -28,6 +30,22 @@ type PageMeta struct {
 	Title       string
 	Description string
 	NoIndex     bool
+	Status      int
+}
+
+// SitemapPaths is the finite, reviewed part of the otherwise enormous detail-page
+// space. Donors and teams are deliberately absent; countries and topics are authored
+// lists whose pages are useful landing pages and cheap to crawl.
+func SitemapPaths() []string {
+	out := make([]string, 0, len(countryDefs)+len(topicDefs))
+	for _, def := range countryDefs {
+		out = append(out, "/teams/country/"+strings.ToLower(def.Code))
+	}
+	for _, def := range topicDefs {
+		out = append(out, "/teams/topic/"+def.Slug)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // site is the suffix every title carries. Search results show a truncated title, and
@@ -69,6 +87,7 @@ func (s *Server) PageMeta(p string) (PageMeta, bool) {
 			Title:       "Topic not found" + siteSuffix,
 			Description: "No topic by this name appears in Folding by Topic.",
 			NoIndex:     true,
+			Status:      http.StatusNotFound,
 		}, true
 	case strings.HasPrefix(p, "/teams/country/"):
 		code := strings.TrimSuffix(strings.TrimPrefix(p, "/teams/country/"), "/")
@@ -82,13 +101,19 @@ func (s *Server) PageMeta(p string) (PageMeta, bool) {
 			Title:       "Country not found" + siteSuffix,
 			Description: "No country by this code appears in Folding Around The Globe.",
 			NoIndex:     true,
+			Status:      http.StatusNotFound,
 		}, true
 	case strings.HasPrefix(p, "/donors/"):
 		return snap.donorMeta(strings.TrimPrefix(p, "/donors/"))
 	case strings.HasPrefix(p, "/teams/"):
 		return snap.teamMeta(strings.TrimPrefix(p, "/teams/"))
 	case strings.HasPrefix(p, "/blog/"):
-		return postMeta(strings.TrimPrefix(p, "/blog/"))
+		if m, ok := postMeta(strings.TrimPrefix(p, "/blog/")); ok {
+			return m, true
+		}
+		return PageMeta{Title: "Post not found" + siteSuffix,
+			Description: "No Folding@home Stats post exists at this address.",
+			NoIndex:     true, Status: http.StatusNotFound}, true
 	}
 
 	switch p {
@@ -171,6 +196,7 @@ func (s *Snapshot) donorMeta(rest string) (PageMeta, bool) {
 			Title:       name + " — donor not found" + siteSuffix,
 			Description: "No Folding@home donor by this name appears in the current statistics.",
 			NoIndex:     true,
+			Status:      http.StatusNotFound,
 		}, true
 	}
 	d := s.donorView(idx, false)
@@ -180,6 +206,7 @@ func (s *Snapshot) donorMeta(rest string) (PageMeta, bool) {
 			Title: d.Name + "'s rivals" + siteSuffix,
 			Description: "The Folding@home donors immediately above and below " + d.Name +
 				" at rank " + fmtInt(int64(d.Rank)) + ", and how long it would take to close the gap.",
+			NoIndex: true,
 		}, true
 	}
 	// Rank first: it is the fact that distinguishes this donor from the last one, and
@@ -196,6 +223,7 @@ func (s *Snapshot) donorMeta(rest string) (PageMeta, bool) {
 	return PageMeta{
 		Title:       d.Name + " — Folding@home donor stats",
 		Description: b.String(),
+		NoIndex:     d.LikelyNotAPerson || !searchWorthy(d.Rank, d.PointsLast7d > 0),
 	}, true
 }
 
@@ -214,6 +242,7 @@ func (s *Snapshot) teamMeta(rest string) (PageMeta, bool) {
 			Title:       "Team " + idStr + " not found" + siteSuffix,
 			Description: "No Folding@home team with this id appears in the current statistics.",
 			NoIndex:     true,
+			Status:      http.StatusNotFound,
 		}, true
 	}
 	t := s.teamView(slot)
@@ -228,6 +257,7 @@ func (s *Snapshot) teamMeta(rest string) (PageMeta, bool) {
 			Title: label + "'s rivals" + siteSuffix,
 			Description: "The Folding@home teams immediately above and below " + label +
 				" at rank " + fmtInt(int64(t.Rank)) + ", and how long it would take to close the gap.",
+			NoIndex: true,
 		}, true
 	}
 	return PageMeta{
@@ -237,7 +267,16 @@ func (s *Snapshot) teamMeta(rest string) (PageMeta, bool) {
 			fmtInt(t.PointsTotal) + " points from " + plural(int(t.WUsTotal), "work unit") +
 			" and " + plural(int(t.MembersActive), "active member") + " of " +
 			fmtInt(int64(t.MembersTotal)) + ".",
+		NoIndex: !searchWorthy(t.Rank, t.PointsLast7d > 0),
 	}, true
+}
+
+// Keep historically important pages searchable even during a quiet week, while the
+// active long tail remains eligible on current production rather than lifetime size.
+const searchableRank = 10_000
+
+func searchWorthy(rank int32, active bool) bool {
+	return active || rank <= searchableRank
 }
 
 // postMeta describes a written post, which already has a title and a summary.
