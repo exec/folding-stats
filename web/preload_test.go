@@ -330,6 +330,9 @@ func TestRobotsTxt(t *testing.T) {
 	if block := "User-agent: Googlebot\nDisallow: /v1/goals\n"; !strings.Contains(body, block) {
 		t.Errorf("Googlebot goals block is missing:\n%s", body)
 	}
+	if block := "User-agent: Applebot\nCrawl-delay: 10\n"; !strings.Contains(body, block) {
+		t.Errorf("Applebot crawl delay is missing:\n%s", body)
+	}
 	if strings.Count(body, "Disallow:") != 1 {
 		t.Errorf("robots.txt blocks more than Googlebot's goals request:\n%s", body)
 	}
