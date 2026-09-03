@@ -656,7 +656,7 @@ func robotsTxt(base string) string {
 	// the derived JSON subrequest preserves every indexable page and its core figures.
 	b.WriteString("\nUser-agent: Googlebot\nDisallow: /v1/goals\n")
 	for _, a := range []string{"Applebot", "Applebot-Extended", "meta-externalagent"} {
-		b.WriteString("\nUser-agent: " + a + "\nCrawl-delay: 10\n")
+		b.WriteString("\nUser-agent: " + a + "\nDisallow: /donors/\nDisallow: /teams/\n")
 	}
 	for _, a := range agents {
 		b.WriteString("\nUser-agent: " + a + "\nAllow: /\n")

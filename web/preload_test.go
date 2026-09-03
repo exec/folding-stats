@@ -331,12 +331,12 @@ func TestRobotsTxt(t *testing.T) {
 		t.Errorf("Googlebot goals block is missing:\n%s", body)
 	}
 	for _, a := range []string{"Applebot", "Applebot-Extended", "meta-externalagent"} {
-		if block := "User-agent: " + a + "\nCrawl-delay: 10\n"; !strings.Contains(body, block) {
-			t.Errorf("%s crawl delay is missing:\n%s", a, body)
+		if block := "User-agent: " + a + "\nDisallow: /donors/\nDisallow: /teams/\n"; !strings.Contains(body, block) {
+			t.Errorf("%s detail-page blocks are missing:\n%s", a, body)
 		}
 	}
-	if strings.Count(body, "Disallow:") != 1 {
-		t.Errorf("robots.txt blocks more than Googlebot's goals request:\n%s", body)
+	if strings.Count(body, "Disallow:") != 7 {
+		t.Errorf("robots.txt has an unexpected number of blocks:\n%s", body)
 	}
 	if !strings.Contains(body, "User-agent: *") || !strings.Contains(body, "Allow: /") {
 		t.Errorf("no blanket allow:\n%s", body)
