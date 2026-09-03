@@ -635,8 +635,7 @@ const robotsPath = "/robots.txt"
 func robotsTxt(base string) string {
 	agents := []string{
 		"ClaudeBot", "Claude-User", "Claude-SearchBot", "GPTBot", "OAI-SearchBot",
-		"CCBot", "Google-Extended", "Applebot-Extended", "Amazonbot", "Bytespider",
-		"meta-externalagent", "PerplexityBot", "cohere-ai",
+		"CCBot", "Google-Extended", "Amazonbot", "Bytespider", "PerplexityBot", "cohere-ai",
 	}
 	var b strings.Builder
 	b.WriteString("# Automated clients are welcome here. That is the point of the site.\n")
@@ -656,7 +655,9 @@ func robotsTxt(base string) string {
 	// walked the 2.1M-donor graph and repeated that request once per page; blocking only
 	// the derived JSON subrequest preserves every indexable page and its core figures.
 	b.WriteString("\nUser-agent: Googlebot\nDisallow: /v1/goals\n")
-	b.WriteString("\nUser-agent: Applebot\nCrawl-delay: 10\n")
+	for _, a := range []string{"Applebot", "Applebot-Extended", "meta-externalagent"} {
+		b.WriteString("\nUser-agent: " + a + "\nCrawl-delay: 10\n")
+	}
 	for _, a := range agents {
 		b.WriteString("\nUser-agent: " + a + "\nAllow: /\n")
 	}
