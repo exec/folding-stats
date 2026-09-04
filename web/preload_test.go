@@ -330,12 +330,12 @@ func TestRobotsTxt(t *testing.T) {
 	if block := "User-agent: Googlebot\nDisallow: /v1/goals\n"; !strings.Contains(body, block) {
 		t.Errorf("Googlebot goals block is missing:\n%s", body)
 	}
-	for _, a := range []string{"Applebot", "Applebot-Extended", "meta-externalagent"} {
+	for _, a := range []string{"Applebot", "Applebot-Extended", "meta-externalagent", "meta-webindexer"} {
 		if block := "User-agent: " + a + "\nDisallow: /donors/\nDisallow: /teams/\nDisallow: /v1/\n"; !strings.Contains(body, block) {
 			t.Errorf("%s detail-page blocks are missing:\n%s", a, body)
 		}
 	}
-	if strings.Count(body, "Disallow:") != 10 {
+	if strings.Count(body, "Disallow:") != 13 {
 		t.Errorf("robots.txt has an unexpected number of blocks:\n%s", body)
 	}
 	if !strings.Contains(body, "User-agent: *") || !strings.Contains(body, "Allow: /") {

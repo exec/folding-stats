@@ -655,7 +655,7 @@ func robotsTxt(base string) string {
 	// walked the 2.1M-donor graph and repeated that request once per page; blocking only
 	// the derived JSON subrequest preserves every indexable page and its core figures.
 	b.WriteString("\nUser-agent: Googlebot\nDisallow: /v1/goals\n")
-	for _, a := range []string{"Applebot", "Applebot-Extended", "meta-externalagent"} {
+	for _, a := range []string{"Applebot", "Applebot-Extended", "meta-externalagent", "meta-webindexer"} {
 		b.WriteString("\nUser-agent: " + a + "\nDisallow: /donors/\nDisallow: /teams/\nDisallow: /v1/\n")
 	}
 	for _, a := range agents {

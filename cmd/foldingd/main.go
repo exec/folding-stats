@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -147,7 +148,7 @@ func run(dir, addr, ua string, poll, compactAfter, keepDaily, keepRaw time.Durat
 		maintain(ctx, svc, db, archiver.Archive, compactAfter, keepDaily, keepRaw, log)
 	}()
 
-	httpSrv := newHTTPServer(addr, mux)
+	httpSrv := newHTTPServer(addr, blockBulkMetaCrawlers(mux))
 
 	go func() {
 		<-ctx.Done()
@@ -180,6 +181,21 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
+}
+
+func blockBulkMetaCrawlers(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		if strings.HasPrefix(p, "/donors/") || strings.HasPrefix(p, "/teams/") || strings.HasPrefix(p, "/v1/") {
+			ua := strings.ToLower(r.UserAgent())
+			if strings.Contains(ua, "meta-externalagent/") || strings.Contains(ua, "meta-webindexer/") {
+				w.Header().Set("Cache-Control", "no-store")
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // follow serves an archive somebody else is filling.
