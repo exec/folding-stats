@@ -125,6 +125,7 @@ Every response carries a `snapshot` block describing freshness, then the data.
 | `GET` | `/v1/movers` | biggest measured 24-hour rank movements near the top |
 | `GET` | `/v1/posts`, `/v1/posts/{slug}` | site announcements |
 | `GET` | `/badge/{team\|donor}/{id}` | cacheable SVG, `?metric=ppd\|rank\|points`, `?name=1` to show the entity |
+| `GET` | `/openapi.json` | OpenAPI 3.1 description of every public HTTP route |
 
 ### Notes for clients
 

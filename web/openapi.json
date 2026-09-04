@@ -1,0 +1,173 @@
+{
+  "openapi": "3.1.2",
+  "info": {
+    "title": "Folding@home Stats API",
+    "version": "1",
+    "description": "Free, public Folding@home donor and team statistics. No authentication or rate limit. Every JSON response uses the same envelope and identifies the upstream snapshot it reflects. v1 is not frozen; fields and behavior may change between deployments."
+  },
+  "servers": [{ "url": "/" }],
+  "tags": [
+    { "name": "Project" },
+    { "name": "Teams" },
+    { "name": "Donors" },
+    { "name": "Discovery" },
+    { "name": "Insights" },
+    { "name": "Content" },
+    { "name": "Badges" }
+  ],
+  "paths": {
+    "/v1/status": {
+      "get": { "operationId": "getStatus", "tags": ["Project"], "summary": "Get snapshot freshness and corpus size", "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/summary": {
+      "get": { "operationId": "getSummary", "tags": ["Project"], "summary": "Get project-wide totals", "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/summary/history": {
+      "get": { "operationId": "getProjectHistory", "tags": ["Project"], "summary": "Get project production history", "parameters": [{ "$ref": "#/components/parameters/Granularity" }, { "$ref": "#/components/parameters/From" }, { "$ref": "#/components/parameters/To" }, { "$ref": "#/components/parameters/Metric" }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/posts": {
+      "get": { "operationId": "listPosts", "tags": ["Content"], "summary": "List site announcements", "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/posts/{slug}": {
+      "get": { "operationId": "getPost", "tags": ["Content"], "summary": "Get one site announcement", "parameters": [{ "$ref": "#/components/parameters/PostSlug" }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/teams": {
+      "get": { "operationId": "listTeams", "tags": ["Teams"], "summary": "List the team leaderboard", "parameters": [{ "$ref": "#/components/parameters/TeamSort" }, { "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PerPage" }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/teams/{id}": {
+      "get": { "operationId": "getTeam", "tags": ["Teams"], "summary": "Get one team", "parameters": [{ "$ref": "#/components/parameters/TeamID" }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/teams/{id}/members": {
+      "get": { "operationId": "listTeamMembers", "tags": ["Teams"], "summary": "List a team's members", "parameters": [{ "$ref": "#/components/parameters/TeamID" }, { "$ref": "#/components/parameters/MemberSort" }, { "name": "active_only", "in": "query", "description": "Return only members that produced in the last seven days.", "schema": { "type": "boolean", "default": false } }, { "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PerPage" }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/teams/{id}/history": {
+      "get": { "operationId": "getTeamHistory", "tags": ["Teams"], "summary": "Get one team's production history", "parameters": [{ "$ref": "#/components/parameters/TeamID" }, { "$ref": "#/components/parameters/Granularity" }, { "$ref": "#/components/parameters/From" }, { "$ref": "#/components/parameters/To" }, { "$ref": "#/components/parameters/Metric" }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/teams/{id}/rivals": {
+      "get": { "operationId": "getTeamRivals", "tags": ["Teams"], "summary": "Get the ranking around a team", "parameters": [{ "$ref": "#/components/parameters/TeamID" }, { "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PerPage" }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/donors": {
+      "get": { "operationId": "listDonors", "tags": ["Donors"], "summary": "List the donor leaderboard", "parameters": [{ "$ref": "#/components/parameters/DonorSort" }, { "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PerPage" }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/donors/{name}": {
+      "get": { "operationId": "getDonor", "tags": ["Donors"], "summary": "Get one donor aggregated across teams", "parameters": [{ "$ref": "#/components/parameters/DonorName" }, { "name": "sort", "in": "query", "description": "Order the embedded team breakdown by recent production.", "schema": { "type": "string", "enum": ["production"] } }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/donors/{name}/teams": {
+      "get": { "operationId": "listDonorTeams", "tags": ["Donors"], "summary": "List a donor's complete team breakdown", "parameters": [{ "$ref": "#/components/parameters/DonorName" }, { "$ref": "#/components/parameters/DonorTeamSort" }, { "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PerPage" }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/donors/{name}/history": {
+      "get": { "operationId": "getDonorHistory", "tags": ["Donors"], "summary": "Get one donor's production history", "parameters": [{ "$ref": "#/components/parameters/DonorName" }, { "$ref": "#/components/parameters/TeamIDQuery" }, { "$ref": "#/components/parameters/Granularity" }, { "$ref": "#/components/parameters/From" }, { "$ref": "#/components/parameters/To" }, { "$ref": "#/components/parameters/Metric" }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/donors/{name}/rivals": {
+      "get": { "operationId": "getDonorRivals", "tags": ["Donors"], "summary": "Get the ranking around a donor", "parameters": [{ "$ref": "#/components/parameters/DonorName" }, { "$ref": "#/components/parameters/TeamIDQuery" }, { "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PerPage" }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/search": {
+      "get": { "operationId": "search", "tags": ["Discovery"], "summary": "Search donors and teams", "parameters": [{ "name": "q", "in": "query", "required": true, "description": "Name prefix, exact donor name, or numeric team ID.", "schema": { "type": "string", "minLength": 1 } }, { "name": "type", "in": "query", "schema": { "type": "string", "enum": ["team", "donor"] } }, { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 50, "default": 8 } }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/compare": {
+      "get": { "operationId": "compare", "tags": ["Insights"], "summary": "Compare two teams or donors", "parameters": [{ "$ref": "#/components/parameters/EntityKind" }, { "name": "a", "in": "query", "required": true, "description": "First team ID or exact donor name.", "schema": { "type": "string" } }, { "name": "b", "in": "query", "required": true, "description": "Second team ID or exact donor name.", "schema": { "type": "string" } }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/goals": {
+      "get": { "operationId": "calculateGoal", "tags": ["Insights"], "summary": "Calculate production needed to reach a target", "parameters": [{ "$ref": "#/components/parameters/EntityKind" }, { "name": "who", "in": "query", "required": true, "description": "Subject team ID or exact donor name.", "schema": { "type": "string" } }, { "name": "target_rank", "in": "query", "schema": { "type": "integer", "minimum": 1 } }, { "name": "target_points", "in": "query", "schema": { "type": "integer", "minimum": 1 } }, { "name": "overtake", "in": "query", "description": "Moving target team ID or exact donor name.", "schema": { "type": "string" } }, { "name": "by", "in": "query", "description": "Optional deadline.", "schema": { "type": "string", "format": "date" } }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/movers": {
+      "get": { "operationId": "getMovers", "tags": ["Insights"], "summary": "Get the largest measured 24-hour rank movements", "parameters": [{ "$ref": "#/components/parameters/EntityKind" }, { "name": "direction", "in": "query", "schema": { "type": "string", "enum": ["up", "down", "both"], "default": "both" } }, { "name": "within", "in": "query", "schema": { "type": "integer", "minimum": 10, "maximum": 10000, "default": 1000 } }, { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 25, "default": 10 } }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/countries": {
+      "get": { "operationId": "listCountries", "tags": ["Discovery"], "summary": "List country aggregates", "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/countries/{code}": {
+      "get": { "operationId": "getCountry", "tags": ["Discovery"], "summary": "Get one country and its assigned teams", "parameters": [{ "$ref": "#/components/parameters/CountryCode" }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/topics": {
+      "get": { "operationId": "listTopics", "tags": ["Discovery"], "summary": "List topic aggregates", "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/topics/{slug}": {
+      "get": { "operationId": "getTopic", "tags": ["Discovery"], "summary": "Get one topic and its assigned teams", "parameters": [{ "$ref": "#/components/parameters/TopicSlug" }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/v1/changes": {
+      "get": { "operationId": "getChanges", "tags": ["Discovery"], "summary": "Get entities changed since a snapshot", "parameters": [{ "name": "since", "in": "query", "required": true, "description": "Exclusive cursor: a snapshot.at timestamp or Unix seconds, no more than seven days old.", "schema": { "oneOf": [{ "type": "string", "format": "date-time" }, { "type": "integer" }] } }, { "name": "kind", "in": "query", "schema": { "type": "string", "enum": ["teams", "donors", "members"], "default": "teams" } }, { "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PerPage" }], "responses": { "200": { "$ref": "#/components/responses/Success" }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/badge/{kind}/{ref}": {
+      "get": { "operationId": "getBadge", "tags": ["Badges"], "summary": "Render a cacheable SVG badge", "parameters": [{ "name": "kind", "in": "path", "required": true, "schema": { "type": "string", "enum": ["team", "donor"] } }, { "name": "ref", "in": "path", "required": true, "description": "Numeric team ID or exact donor name.", "schema": { "type": "string" } }, { "name": "metric", "in": "query", "schema": { "type": "string", "enum": ["ppd", "rank", "points"], "default": "ppd" } }, { "name": "name", "in": "query", "description": "Include the entity name when set to 1.", "schema": { "type": "integer", "enum": [1] } }], "responses": { "200": { "description": "SVG badge", "content": { "image/svg+xml": { "schema": { "type": "string", "contentMediaType": "image/svg+xml" } } } }, "default": { "$ref": "#/components/responses/Problem" } } }
+    }
+  },
+  "components": {
+    "parameters": {
+      "Page": { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1, "default": 1 } },
+      "PerPage": { "name": "per_page", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 100 } },
+      "TeamSort": { "name": "sort", "in": "query", "schema": { "type": "string", "enum": ["lifetime", "per_day", "today", "this_week", "this_month", "last_24h", "wus", "members"], "default": "lifetime" } },
+      "DonorSort": { "name": "sort", "in": "query", "schema": { "type": "string", "enum": ["lifetime", "per_day", "today", "this_week", "this_month", "last_24h", "wus", "teams"], "default": "lifetime" } },
+      "MemberSort": { "name": "sort", "in": "query", "schema": { "type": "string", "enum": ["lifetime", "per_day", "today", "this_week", "this_month", "last_24h", "wus"], "default": "lifetime" } },
+      "DonorTeamSort": { "name": "sort", "in": "query", "schema": { "type": "string", "enum": ["points", "production"], "default": "points" } },
+      "Granularity": { "name": "granularity", "in": "query", "description": "Bucket size; cycle is an alias for hourly.", "schema": { "type": "string", "enum": ["hourly", "daily", "weekly", "monthly", "cycle"], "default": "hourly" } },
+      "From": { "name": "from", "in": "query", "description": "Inclusive start; the default depends on granularity.", "schema": { "type": "string", "format": "date-time" } },
+      "To": { "name": "to", "in": "query", "description": "Exclusive end, after from.", "schema": { "type": "string", "format": "date-time" } },
+      "Metric": { "name": "metric", "in": "query", "schema": { "type": "string", "enum": ["points", "wus"], "default": "points" } },
+      "TeamID": { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int32" } },
+      "TeamIDQuery": { "name": "team_id", "in": "query", "description": "Scope the donor to one team.", "schema": { "type": "integer", "format": "int32" } },
+      "DonorName": { "name": "name", "in": "path", "required": true, "description": "Exact, URL-encoded donor name.", "schema": { "type": "string" } },
+      "CountryCode": { "name": "code", "in": "path", "required": true, "schema": { "type": "string", "minLength": 2, "maxLength": 2 } },
+      "TopicSlug": { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" } },
+      "PostSlug": { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" } },
+      "EntityKind": { "name": "kind", "in": "query", "required": true, "schema": { "type": "string", "enum": ["team", "donor"] } }
+    },
+    "responses": {
+      "Success": { "description": "A snapshot-aware response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Envelope" } } } },
+      "Problem": { "description": "RFC 9457 problem details", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } }
+    },
+    "schemas": {
+      "Envelope": {
+        "type": "object",
+        "required": ["snapshot", "data"],
+        "properties": {
+          "snapshot": { "$ref": "#/components/schemas/Snapshot" },
+          "data": { "description": "The route-specific payload documented on the human-readable /api page." },
+          "page": { "$ref": "#/components/schemas/Page" }
+        }
+      },
+      "Snapshot": {
+        "type": "object",
+        "required": ["at", "next_expected_at", "stale", "server_time"],
+        "properties": {
+          "at": { "type": "string", "format": "date-time", "description": "Upstream publish time reflected by this response." },
+          "next_expected_at": { "type": "string", "format": "date-time" },
+          "previous_at": { "type": "string", "format": "date-time" },
+          "stale": { "type": "boolean" },
+          "server_time": { "type": "string", "format": "date-time" },
+          "warming_up": {
+            "type": "object",
+            "properties": {
+              "history_span_sec": { "type": "integer", "format": "int64" },
+              "interval_estimated": { "type": "boolean" },
+              "rank_change_24h_unavailable": { "type": "boolean" }
+            }
+          }
+        }
+      },
+      "Page": {
+        "type": "object",
+        "required": ["page", "per_page", "total_items", "total_pages"],
+        "properties": {
+          "page": { "type": "integer" },
+          "per_page": { "type": "integer" },
+          "total_items": { "type": "integer" },
+          "total_pages": { "type": "integer" }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "required": ["type", "title", "status", "detail", "error", "message"],
+        "properties": {
+          "type": { "type": "string", "format": "uri" },
+          "title": { "type": "string" },
+          "status": { "type": "integer" },
+          "detail": { "type": "string" },
+          "instance": { "type": "string" },
+          "error": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      }
+    }
+  }
+}

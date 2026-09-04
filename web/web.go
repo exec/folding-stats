@@ -30,7 +30,7 @@ import (
 	"folding/content"
 )
 
-//go:embed index.html icon.svg app.css app.js api.js ui.js views.js charts.js globe.js topicicons.js countdown.js clock.js format.js i18n.js fah.js relay.js vendor
+//go:embed index.html icon.svg openapi.json app.css app.js api.js ui.js views.js charts.js globe.js topicicons.js countdown.js clock.js format.js i18n.js fah.js relay.js vendor
 var assets embed.FS
 
 // assetRef matches a same-origin asset path in a quoted string: an ES module

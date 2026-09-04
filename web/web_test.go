@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -27,6 +28,7 @@ func TestServesAssetsAndRoutes(t *testing.T) {
 		{"/app.js", 200, "text/javascript", "no-cache"},
 		{"/vendor/uPlot.esm.min.js", 200, "text/javascript", "no-cache"},
 		{"/icon.svg", 200, "image/svg+xml", "no-cache"},
+		{"/openapi.json", 200, "application/json", "no-cache"},
 		// Client-side routes must deep-link to the shell, not 404.
 		{"/teams", 200, "text/html", "no-cache"},
 		{"/donors/DH", 200, "text/html", "no-cache"},
@@ -139,7 +141,8 @@ func TestEveryAssetIsEmbedded(t *testing.T) {
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".js") && !strings.HasSuffix(name, ".css") &&
-			!strings.HasSuffix(name, ".html") && !strings.HasSuffix(name, ".svg") {
+			!strings.HasSuffix(name, ".html") && !strings.HasSuffix(name, ".svg") &&
+			!strings.HasSuffix(name, ".json") {
 			continue
 		}
 		if strings.HasSuffix(name, "_test.js") {
@@ -147,6 +150,53 @@ func TestEveryAssetIsEmbedded(t *testing.T) {
 		}
 		if _, err := assets.Open(name); err != nil {
 			t.Errorf("%s exists on disk but is not embedded — add it to the go:embed directive", name)
+		}
+	}
+}
+
+// TestOpenAPICoversThePublicHTTPAPI makes the checked-in document fail loudly when
+// an existing route is omitted. The payload schemas are deliberately broad for now;
+// ponytail: add generated route-specific schemas when someone uses the document for
+// client generation rather than discovery.
+func TestOpenAPICoversThePublicHTTPAPI(t *testing.T) {
+	h, err := Handler(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/openapi.json", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", rec.Code)
+	}
+	var doc struct {
+		OpenAPI string `json:"openapi"`
+		Paths   map[string]struct {
+			Get struct {
+				OperationID string `json:"operationId"`
+			} `json:"get"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if doc.OpenAPI != "3.1.2" {
+		t.Errorf("OpenAPI version %q, want 3.1.2", doc.OpenAPI)
+	}
+	want := []string{
+		"/v1/status", "/v1/summary", "/v1/summary/history", "/v1/posts", "/v1/posts/{slug}",
+		"/v1/teams", "/v1/teams/{id}", "/v1/teams/{id}/members", "/v1/teams/{id}/history", "/v1/teams/{id}/rivals",
+		"/v1/donors", "/v1/donors/{name}", "/v1/donors/{name}/teams", "/v1/donors/{name}/history", "/v1/donors/{name}/rivals",
+		"/v1/search", "/v1/compare", "/v1/goals", "/v1/movers", "/v1/countries", "/v1/countries/{code}",
+		"/v1/topics", "/v1/topics/{slug}", "/v1/changes", "/badge/{kind}/{ref}",
+	}
+	if len(doc.Paths) != len(want) {
+		t.Errorf("documented %d paths, want %d", len(doc.Paths), len(want))
+	}
+	for _, p := range want {
+		if op, ok := doc.Paths[p]; !ok {
+			t.Errorf("missing path %s", p)
+		} else if op.Get.OperationID == "" {
+			t.Errorf("%s has no GET operationId", p)
 		}
 	}
 }
@@ -243,7 +293,7 @@ func TestUnknownPathsAre404(t *testing.T) {
 	// Misses, whatever they look like. The manifest names are the ones an agent
 	// actually probes for.
 	for _, p := range []string{
-		"/openapi.json", "/llms.txt", "/.well-known/ai-plugin.json", "/nope.png",
+		"/llms.txt", "/.well-known/ai-plugin.json", "/nope.png",
 		"/no-such-page", "/teams/0/nonsense", "/blog", "/v2/summary",
 	} {
 		code, body := hit(p)

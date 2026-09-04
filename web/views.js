@@ -2499,7 +2499,8 @@ export async function apiDocs(view) {
     el('div.page-head',
       el('h1.page-title', 'API'),
       el('p.page-sub',
-        'Free, public, and unauthenticated. No key, no sign-up, and nothing your browser has to solve first.'))
+        'Free, public, and unauthenticated. No key, no sign-up, and nothing your browser has to solve first. ',
+        link('/openapi.json', 'OpenAPI JSON →')))
   );
 
   // Above the endpoints, not below them: a caveat about stability is worthless to
