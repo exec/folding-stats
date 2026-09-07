@@ -191,7 +191,6 @@ var pragmas = []string{
 	"PRAGMA journal_mode = WAL",
 	"PRAGMA synchronous = NORMAL",
 	"PRAGMA temp_store = MEMORY",
-	"PRAGMA cache_size = -65536", // 64 MB page cache
 	"PRAGMA busy_timeout = 10000",
 	"PRAGMA foreign_keys = OFF",
 }

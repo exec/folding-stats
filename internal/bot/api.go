@@ -30,7 +30,7 @@ type Client struct {
 	HTTP *http.Client
 
 	mu    sync.RWMutex
-	at    string // the snapshot every cached entry belongs to
+	at    time.Time // the snapshot every cached entry belongs to
 	cache map[string][]byte
 }
 
@@ -226,16 +226,20 @@ func (c *Client) cached(path string) ([]byte, bool) {
 // cheapest possible policy: there is no per-entry expiry to track, because every entry
 // has exactly the same lifetime.
 func (c *Client) store(path string, snap Snapshot, body []byte) {
-	if !cacheable(path) {
-		return
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if at := snap.At.UTC().Format(time.RFC3339); at != c.at {
-		c.at = at
+	// A late response from the previous publish must not evict the new cache.
+	if snap.At.Before(c.at) {
+		return
+	}
+	if snap.At.After(c.at) {
+		c.at = snap.At
 		c.cache = make(map[string][]byte, len(c.cache))
 	}
-	c.cache[path] = body
+	// Even uncacheable status/search responses can announce a new publish.
+	if cacheable(path) {
+		c.cache[path] = body
+	}
 }
 
 /* ----------------------------------------------------------------- shapes --- */

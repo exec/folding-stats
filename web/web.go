@@ -478,7 +478,7 @@ func Handler(meta MetaFunc, sitemapPaths ...string) (http.Handler, error) {
 			}
 			w.Header().Set("Content-Type", contentType(clean))
 			s.setCache(w, r)
-			http.ServeContent(w, r, clean, time.Time{}, strings.NewReader(string(body)))
+			http.ServeContent(w, r, clean, time.Time{}, bytes.NewReader(body))
 			return
 		}
 

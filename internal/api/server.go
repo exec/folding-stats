@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -20,8 +22,8 @@ const (
 
 // Server serves the API from whichever Snapshot is currently published.
 //
-// Handlers hold no locks: a cycle builds a new Snapshot and swaps the pointer, so
-// requests in flight finish against the version they started with.
+// Handlers guard shared ingest state while building views, then release it before
+// encoding or writing a response.
 type Server struct {
 	snap atomic.Pointer[Snapshot]
 	mux  *http.ServeMux
@@ -187,7 +189,8 @@ func (s *Server) handle(fn handlerFunc, allowed ...string) http.HandlerFunc {
 		}
 		w.Header().Set("ETag", etag)
 		w.Header().Set("Cache-Control", cacheControl(snap, r.URL.Path))
-		if match := r.Header.Get("If-None-Match"); match == etag {
+		w.Header().Set("Vary", "Accept-Encoding")
+		if r.URL.Path != "/v1/status" && matchesETag(r, etag) {
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
@@ -210,10 +213,11 @@ func (s *Server) handle(fn handlerFunc, allowed ...string) http.HandlerFunc {
 		// the windows. warmingUp is the one straggler — it reads the live window — so
 		// it is evaluated here rather than in the Envelope literal below.
 		var (
-			data any
-			page *PageInfo
-			warm *WarmingUp
-			err  error
+			data       any
+			page       *PageInfo
+			warm       *WarmingUp
+			previousAt time.Time
+			err        error
 		)
 		func() {
 			if snap.Guard != nil {
@@ -224,6 +228,7 @@ func (s *Server) handle(fn handlerFunc, allowed ...string) http.HandlerFunc {
 				return
 			}
 			warm = warmingUp(snap)
+			previousAt = snap.PreviousAt()
 		}()
 		if err != nil {
 			writeAPIErrorFor(w, r, err)
@@ -239,7 +244,7 @@ func (s *Server) handle(fn handlerFunc, allowed ...string) http.HandlerFunc {
 		writeJSON(w, r, http.StatusOK, Envelope{
 			Snapshot: SnapshotInfo{
 				At:             snap.At.UTC(),
-				PreviousAt:     snap.PreviousAt(),
+				PreviousAt:     previousAt,
 				NextExpectedAt: snap.NextExpected.UTC(),
 				Stale:          !snap.StaleAfter.IsZero() && now.After(snap.StaleAfter),
 				ServerTime:     now,
@@ -249,6 +254,19 @@ func (s *Server) handle(fn handlerFunc, allowed ...string) http.HandlerFunc {
 			Page: page,
 		})
 	}
+}
+
+// GET and HEAD use weak comparison, including validators supplied as a list.
+func matchesETag(r *http.Request, etag string) bool {
+	for _, value := range r.Header.Values("If-None-Match") {
+		for tag := range strings.SplitSeq(value, ",") {
+			tag = strings.TrimSpace(tag)
+			if strings.TrimPrefix(tag, "W/") == etag {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // cacheControl lets clients cache until the next upstream publish is due. Once that
@@ -386,13 +404,24 @@ func writeErrorFor(w http.ResponseWriter, r *http.Request, code int, kind, msg s
 // ?sort=today&sort=wus quietly sorts by today — and worse, both spellings are distinct
 // cache keys for what a caller believes is one request.
 func checkQuery(r *http.Request, permitted map[string]bool, allowed []string) error {
-	q := r.URL.Query()
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return badRequest("invalid query parameters")
+	}
 	if len(q) == 0 {
 		return nil
+	}
+	// Keep short typo diagnostics useful without sorting or reflecting an
+	// attacker-controlled number of names. A valid query fits the route's map.
+	if len(q) > max(len(permitted), 16) {
+		return badRequest("too many query parameters for this endpoint")
 	}
 	var unknown []string
 	for k, v := range q {
 		if !permitted[k] {
+			if len(k) > 128 {
+				return badRequest("unrecognized query parameter name is too long")
+			}
 			unknown = append(unknown, k)
 			continue
 		}
@@ -403,25 +432,15 @@ func checkQuery(r *http.Request, permitted map[string]bool, allowed []string) er
 	if len(unknown) == 0 {
 		return nil
 	}
-	sortStrings(unknown)
+	slices.Sort(unknown)
 	if len(allowed) == 0 {
 		return badRequest("%s is not a parameter of this endpoint, which takes none",
 			strings.Join(unknown, ", "))
 	}
 	names := append([]string(nil), allowed...)
-	sortStrings(names)
+	slices.Sort(names)
 	return badRequest("%s is not a parameter of this endpoint. It accepts: %s",
 		strings.Join(unknown, ", "), strings.Join(names, ", "))
-}
-
-// sortStrings is an insertion sort, which is the right shape for the handful of names
-// these lists ever hold and avoids pulling sort into this file for it.
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
 }
 
 // statusError carries an HTTP status alongside a message.

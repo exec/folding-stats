@@ -1,8 +1,14 @@
 package bot
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/bwmarrin/discordgo"
 )
 
 // The payloads from the 2026-08-13 audit, verbatim. Donor and team names are chosen by
@@ -82,6 +88,145 @@ func TestTruncationCannotRebuildAFence(t *testing.T) {
 		if got := trunc(codeSafe(name), 28); strings.Contains(got, "`") {
 			t.Errorf("length %d produced a backtick after truncation: %q", n, got)
 		}
+	}
+}
+
+func TestCommandNamesStayLiteral(t *testing.T) {
+	for _, name := range []struct{ label, raw, escaped, clipped string }{
+		{"plain", "plain name", "plain name", "plain name"},
+		{"markdown", boldEscape, "A\\*\\*\n\\[V\\]\\(https://x.io\\)\n\\*\\*", "A\\*\\*\n\\[V\\]\\(https://x.io\\)\n\\*\\*"},
+		{"clip boundary", strings.Repeat("é", 28) + "\\*tail", strings.Repeat("é", 28) + "\\\\\\*tail", strings.Repeat("é", 28) + "\\\\…"},
+	} {
+		t.Run(name.label, func(t *testing.T) {
+			for _, tc := range []struct {
+				label, command, kind string
+				status               int
+				saved                bool
+				want                 string
+			}{
+				{"missing link", "link", "", http.StatusNotFound, false, "No donor named **" + name.escaped + "**. Names are case-sensitive and must match exactly — start typing and pick from the list."},
+				{"saved link", "link", "", http.StatusOK, true, "You are linked to **" + name.escaped + "**. Run **/link** with a name to change it, or **/unlink** to clear it."},
+				{"missing me", "me", "", http.StatusNotFound, true, "**" + name.escaped + "** is linked to your account but the service no longer has it. Use **/link** to set it again."},
+				{"successful link", "link", "", http.StatusOK, false, "Linked to **" + name.escaped + "**. **/me** will show this from now on."},
+				{"idle donor goal", "goal", "donors", http.StatusOK, false, "**" + name.clipped + "** is not producing right now, so at this rate the gap never closes. At **1M/day** it would take ~1 day."},
+				{"idle team goal", "goal", "teams", http.StatusOK, false, "**" + name.clipped + "** is not producing right now, so at this rate the gap never closes. At **1M/day** it would take ~1 day."},
+				{"API refusal", "link", "", http.StatusBadRequest, false, "No donor named " + name.escaped},
+			} {
+				t.Run(tc.label, func(t *testing.T) {
+					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(tc.status)
+						var response any = map[string]any{"data": Donor{Name: name.raw, Rank: 2}}
+						if tc.status != http.StatusOK {
+							response = map[string]string{"error": "bad_request", "message": "No donor named " + name.raw}
+						} else if r.URL.Path == "/v1/donors" || r.URL.Path == "/v1/teams" {
+							response = map[string]any{"data": []Donor{{Name: "leader", Rank: 1, PointsTotal: 1_000_000}}}
+						}
+						if err := json.NewEncoder(w).Encode(response); err != nil {
+							t.Error(err)
+						}
+					}))
+					defer srv.Close()
+					links, err := OpenLinks(t.TempDir() + "/links.json")
+					if err != nil {
+						t.Fatal(err)
+					}
+					if tc.saved {
+						if err := links.Set("u1", name.raw); err != nil {
+							t.Fatal(err)
+						}
+					}
+					b := &Bot{api: NewClient(srv.URL), links: links}
+					i := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{User: &discordgo.User{ID: "u1"}}}
+					who := name.raw
+					if tc.kind == "teams" {
+						who = "1"
+					}
+					opts := map[string]string{"donor": name.raw, "kind": tc.kind, "who": who}
+					if tc.saved {
+						opts["donor"] = ""
+					}
+					e, err := b.run(context.Background(), i, tc.command,
+						func(k string) string { return opts[k] }, func(string, int64) int64 { return 1 })
+					if tc.status == http.StatusBadRequest {
+						if err == nil {
+							t.Fatal("API refusal returned no error")
+						}
+						e = ErrorEmbed(b.explain(err))
+					} else if err != nil {
+						t.Fatal(err)
+					}
+					if e.Description != tc.want {
+						t.Errorf("description = %q, want %q", e.Description, tc.want)
+					}
+					if tc.label == "successful link" {
+						if got, _ := links.Get("u1"); got != name.raw {
+							t.Errorf("stored name = %q, want raw %q", got, name.raw)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestAlertErrorsKeepNamesLiteral(t *testing.T) {
+	for _, name := range []struct{ label, raw, escaped string }{
+		{"plain", "plain name", "plain name"},
+		{"markdown", boldEscape, "A\\*\\*\n\\[V\\]\\(https://x.io\\)\n\\*\\*"},
+	} {
+		t.Run(name.label, func(t *testing.T) {
+			for _, status := range []int{http.StatusOK, http.StatusBadRequest} {
+				t.Run(http.StatusText(status), func(t *testing.T) {
+					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						w.WriteHeader(status)
+						var response any = map[string]any{"data": Donor{Name: name.raw, Rank: 2}}
+						if status != http.StatusOK {
+							response = map[string]string{"error": "bad_request", "message": "No donor named " + name.raw}
+						}
+						if err := json.NewEncoder(w).Encode(response); err != nil {
+							t.Error(err)
+						}
+					}))
+					defer srv.Close()
+					alerts, err := OpenAlerts(t.TempDir() + "/alerts.json")
+					if err != nil {
+						t.Fatal(err)
+					}
+					b := &Bot{api: NewClient(srv.URL), alerts: alerts}
+					i := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+						User: &discordgo.User{ID: "u1"}, ChannelID: "c1",
+					}}
+					opts := map[string]*discordgo.ApplicationCommandInteractionDataOption{
+						"type":   {Value: string(AlertMilestone)},
+						"target": {Value: "d:" + name.raw},
+					}
+					add := func() (*discordgo.MessageEmbed, error) {
+						return b.alertAdd(context.Background(), i, &discordgo.ApplicationCommandInteractionData{}, opts)
+					}
+					e, err := add()
+					want := "No donor named " + name.escaped
+					if status != http.StatusOK {
+						if err == nil {
+							t.Fatal("API refusal returned no error")
+						}
+						e = ErrorEmbed(b.explain(err))
+					} else {
+						if err != nil || e.Color != colourGood {
+							t.Fatalf("adding alert: embed=%+v, err=%v", e, err)
+						}
+						e, err = add()
+						if err != nil || e.Color != colourBad {
+							t.Fatalf("duplicate alert: embed=%+v, err=%v", e, err)
+						}
+						want = "this channel already has that alert for " + name.escaped
+					}
+					if e.Description != want {
+						t.Errorf("description = %q, want %q", e.Description, want)
+					}
+				})
+			}
+		})
 	}
 }
 

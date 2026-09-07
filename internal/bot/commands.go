@@ -210,12 +210,13 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 // explain turns a failure into something a person can act on.
 //
 // The service already writes good refusals — "no donor named X. Names are
-// case-sensitive… use search" — so those are passed through verbatim. Only transport
-// failures get rewritten, because "connection refused" tells a Discord user nothing.
+// case-sensitive… use search" — so preserve the wording while escaping reflected
+// names. Only transport failures get rewritten, because "connection refused" tells
+// a Discord user nothing.
 func (b *Bot) explain(err error) string {
 	var a *APIError
 	if asAPIError(err, &a) {
-		return a.Message
+		return mdEsc(a.Message)
 	}
 	b.log.Error("command failed", "err", err)
 	return "The statistics service is not answering right now. It publishes hourly, so this is usually brief."
@@ -282,7 +283,7 @@ func (b *Bot) cmdMe(ctx context.Context, i *discordgo.InteractionCreate) (*disco
 		if NotFound(err) {
 			return ErrorEmbed(fmt.Sprintf(
 				"**%s** is linked to your account but the service no longer has it. Use **/link** to set it again.",
-				name)), nil
+				mdEsc(name))), nil
 		}
 		return nil, err
 	}
@@ -292,7 +293,7 @@ func (b *Bot) cmdMe(ctx context.Context, i *discordgo.InteractionCreate) (*disco
 func (b *Bot) cmdLink(ctx context.Context, i *discordgo.InteractionCreate, donor string) (*discordgo.MessageEmbed, error) {
 	if donor == "" {
 		if cur, ok := b.links.Get(userID(i)); ok {
-			return ErrorEmbed(fmt.Sprintf("You are linked to **%s**. Run **/link** with a name to change it, or **/unlink** to clear it.", cur)), nil
+			return ErrorEmbed(fmt.Sprintf("You are linked to **%s**. Run **/link** with a name to change it, or **/unlink** to clear it.", mdEsc(cur))), nil
 		}
 		return ErrorEmbed("You are not linked to anyone. Run **/link** and start typing your folding name."), nil
 	}
@@ -302,7 +303,7 @@ func (b *Bot) cmdLink(ctx context.Context, i *discordgo.InteractionCreate, donor
 		if NotFound(err) {
 			return ErrorEmbed(fmt.Sprintf(
 				"No donor named **%s**. Names are case-sensitive and must match exactly — start typing and pick from the list.",
-				donor)), nil
+				mdEsc(donor))), nil
 		}
 		return nil, err
 	}

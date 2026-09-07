@@ -356,7 +356,7 @@ func (b *Bot) cmdGoal(ctx context.Context, kind, who string, target int64) (*dis
 	case me.PerDay <= 0:
 		e.Description = fmt.Sprintf(
 			"**%s** is not producing right now, so at this rate the gap never closes. "+
-				"At **1M/day** it would take %s.", clip(me.Name, 30), etaText(float64(gap)/1e6))
+				"At **1M/day** it would take %s.", mdEsc(clip(me.Name, 30)), etaText(float64(gap)/1e6))
 		e.Color = colourWarn
 	default:
 		days := float64(gap) / float64(me.PerDay)

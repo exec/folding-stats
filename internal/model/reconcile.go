@@ -23,7 +23,12 @@ package model
 // on teams absent from the team feed — a real effect, since a new team can appear in
 // one feed a minute before the other — and the largest of those held 1.2M points.
 
-import "folding/internal/parse"
+import (
+	"math"
+	"sort"
+
+	"folding/internal/parse"
+)
 
 // Thresholds, as vars so tests can exercise the boundary without fabricating
 // billion-point fixtures.
@@ -47,18 +52,23 @@ var (
 	ReconcileWarnAt int64 = 10_000_000
 )
 
-// TeamExcess is a team whose member rows claim more than the team feed grants it.
+// TeamExcess is a team with excess points or unsafe member aggregates.
 type TeamExcess struct {
 	TeamID int32
-	// Excess is the member sum minus the authoritative total. Positive by construction.
+	// Excess is the representable member score sum minus the authoritative total.
+	// It need not be positive when Overflow is set, including WUs-only failures.
 	Excess int64
 	// Members is how many rows were summed, for the log line — one team going wrong
 	// with three members reads very differently from one with thirty thousand.
 	Members int
+	// Overflow requires quarantine regardless of the normal score tolerance.
+	Overflow bool
 }
 
 // Reconcile returns every team whose member rows sum past its authoritative total by
-// more than warnAt, worst first.
+// more than warnAt, worst first, plus teams that make member aggregates unsafe.
+// Callers must validate the authoritative team rows first. Member sums are checked
+// here so a forged score or WU count cannot reject the whole cycle before isolation.
 //
 // A team named by a member row but absent from the team feed is reconciled against
 // zero rather than skipped. Skipping it would leave the widest hole in the check: the
@@ -67,17 +77,29 @@ type TeamExcess struct {
 // rows in that position nothing, because they are four orders of magnitude below the
 // tolerance.
 func Reconcile(teams []parse.TeamRow, users []parse.UserRow, warnAt int64) []TeamExcess {
-	authoritative := make(map[int32]int64, len(teams))
+	type totals struct{ score, wus int64 }
+	authoritative := make(map[int32]totals, len(teams))
 	for _, t := range teams {
-		// Duplicate team rows are summed rather than overwritten, matching how the
-		// rest of the model treats repeated identities.
-		authoritative[t.ID] += t.Score
+		// Preserve reconciliation's treatment of duplicate team rows.
+		a := authoritative[t.ID]
+		a.score += t.Score
+		a.wus += t.WUs
+		authoritative[t.ID] = a
 	}
 
 	type sum struct {
-		score int64
-		rows  int
+		totals
+		rows                       int
+		scoreOverflow, wusOverflow bool
 	}
+	add := func(total *int64, value int64) bool {
+		if value < 0 || *total > math.MaxInt64-value {
+			return true
+		}
+		*total += value
+		return false
+	}
+	var all sum
 	claimed := make(map[int32]*sum, len(teams))
 	for _, u := range users {
 		s := claimed[u.TeamID]
@@ -85,30 +107,32 @@ func Reconcile(teams []parse.TeamRow, users []parse.UserRow, warnAt int64) []Tea
 			s = &sum{}
 			claimed[u.TeamID] = s
 		}
-		// Overflow is not a concern here: ValidateSnapshot has already proved every
-		// total in this snapshot sums inside int64.
-		s.score += u.Score
+		s.scoreOverflow = s.scoreOverflow || add(&s.score, u.Score)
+		s.wusOverflow = s.wusOverflow || add(&s.wus, u.WUs)
+		all.scoreOverflow = all.scoreOverflow || add(&all.score, u.Score)
+		all.wusOverflow = all.wusOverflow || add(&all.wus, u.WUs)
 		s.rows++
 	}
 
 	var out []TeamExcess
 	for id, s := range claimed {
-		if excess := s.score - authoritative[id]; excess > warnAt {
-			out = append(out, TeamExcess{TeamID: id, Excess: excess, Members: s.rows})
+		a := authoritative[id]
+		// When a corpus total overflows, normal tolerances cannot apply to that
+		// counter. Removing its positive-excess teams bounds the remaining total
+		// by the already validated authoritative sum, even across different teams.
+		overflow := s.scoreOverflow || s.wusOverflow ||
+			(all.scoreOverflow && s.score > a.score) ||
+			(all.wusOverflow && s.wus > a.wus)
+		if excess := s.score - a.score; excess > warnAt || overflow {
+			out = append(out, TeamExcess{TeamID: id, Excess: excess, Members: s.rows, Overflow: overflow})
 		}
 	}
 	// Worst first, then by id, so a log line is stable between cycles and the most
 	// serious team is the one a reader sees.
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0; j-- {
-			a, b := out[j-1], out[j]
-			if b.Excess > a.Excess || (b.Excess == a.Excess && b.TeamID < a.TeamID) {
-				out[j-1], out[j] = b, a
-				continue
-			}
-			break
-		}
-	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		return a.Excess > b.Excess || (a.Excess == b.Excess && a.TeamID < b.TeamID)
+	})
 	return out
 }
 

@@ -2,10 +2,11 @@ package api
 
 import (
 	"bytes"
-	"compress/gzip"
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/klauspost/compress/gzip"
 )
 
 // This API's responses are repetitive field names wrapped around numbers, which is
@@ -66,7 +67,7 @@ func acceptsGzip(r *http.Request) bool {
 func writeBody(w http.ResponseWriter, r *http.Request, code int, contentType string, b []byte) {
 	h := w.Header()
 	h.Set("Content-Type", contentType)
-	h.Add("Vary", "Accept-Encoding")
+	h.Set("Vary", "Accept-Encoding")
 
 	if len(b) < compressMinBytes || !acceptsGzip(r) {
 		h.Set("Content-Length", itoa(len(b)))

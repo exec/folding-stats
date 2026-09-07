@@ -1031,9 +1031,8 @@ func TestWarmingUpDisappearsWhenWarm(t *testing.T) {
 	}
 
 	// With a full window and a measured cadence there is nothing left to qualify.
-	warm := *snap
-	warm.IntervalMeasured = true
-	if w := warmingUp(&warm); w != nil && w.HistorySpanSec == 0 && !w.IntervalEstimated {
+	snap.IntervalMeasured = true
+	if w := warmingUp(snap); w != nil && w.HistorySpanSec == 0 && !w.IntervalEstimated {
 		t.Error("warming_up returned an empty object; it should be nil")
 	}
 }

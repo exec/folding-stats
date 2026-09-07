@@ -370,6 +370,9 @@ func (s *Store) MembersHistory(ctx context.Context, ids []int32, from, to time.T
 	if len(ids) == 0 {
 		return nil, nil
 	}
+	if len(ids) == 1 {
+		return s.MemberHistory(ctx, ids[0], from, to, g)
+	}
 	g = g.Normalize()
 
 	var table, bucketCol, groupCol, pointsCol, wusCol string

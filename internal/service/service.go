@@ -308,7 +308,9 @@ func (s *Service) applyCycle(ctx context.Context, p snapshotPair) error {
 	if err != nil {
 		return err
 	}
-	if err := model.ValidateSnapshot(teamRows, userRows); err != nil {
+	// Reconciliation needs safe authoritative totals, but must isolate unsafe
+	// member rows before validating the entire user corpus.
+	if err := model.ValidateSnapshot(teamRows, nil); err != nil {
 		return fmt.Errorf("rejecting unsafe snapshot: %w", err)
 	}
 
@@ -318,20 +320,20 @@ func (s *Service) applyCycle(ctx context.Context, p snapshotPair) error {
 	// team's members cannot together hold more than the team does. See
 	// model.Reconcile.
 	//
-	// Anything at all is worth a line, because the live corpus has never produced a
-	// single one; only an excess past the tolerance costs a team its member rows for
-	// this cycle.
+	// Normal excesses retain the existing tolerance. An overflowing score or WU
+	// aggregate always quarantines the implicated teams so others can advance.
 	if over := model.Reconcile(teamRows, userRows, model.ReconcileWarnAt); len(over) > 0 {
 		var dropped []model.TeamExcess
 		for _, t := range over {
 			lvl := s.Log.Warn
-			if t.Excess > model.ReconcileTolerance {
+			drop := t.Overflow || t.Excess > model.ReconcileTolerance
+			if drop {
 				lvl = s.Log.Error
 				dropped = append(dropped, t)
 			}
-			lvl("cross-feed reconciliation: members claim more than their team holds",
+			lvl("cross-feed reconciliation: unsafe or excessive member totals",
 				"team", t.TeamID, "excess", t.Excess, "member_rows", t.Members,
-				"dropped", t.Excess > model.ReconcileTolerance)
+				"overflow", t.Overflow, "dropped", drop)
 		}
 		if len(dropped) > 0 {
 			before := len(userRows)
@@ -340,6 +342,9 @@ func (s *Service) applyCycle(ctx context.Context, p snapshotPair) error {
 				"teams", len(dropped), "rows", before-len(userRows),
 				"at", p.at.Format(time.RFC3339))
 		}
+	}
+	if err := model.ValidateSnapshot(teamRows, userRows); err != nil {
+		return fmt.Errorf("rejecting unsafe snapshot: %w", err)
 	}
 
 	s.guard.Lock()

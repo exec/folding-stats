@@ -326,16 +326,11 @@ func sortSlotsByScoreDesc(slots []int32, members []model.Member) {
 // rosterRanks reports whether a member has anything to rank on this column, using
 // the cheapest test that answers it.
 //
-// This is not the same as computing the value and comparing it to zero, and the
-// difference is the whole cost of the operation. PointsPerDay divides the seven-day
-// total by the span that member has actually been observed for, and that span costs a
-// binary search over the retained cycles — 882,940 of them to partition the largest
-// roster, which measured 12.9ms against 2.3ms for the columns that are a plain array
-// read. It is zero exactly when the seven-day total is zero, so the division is only
-// needed for the members that survive the partition.
+// The rolling-day average is positive exactly when its total is positive: the
+// divisor is at most one day. Avoid a span lookup for every inactive member.
 func (s *Snapshot) rosterRanks(slot int32, k rank.SortKey) bool {
 	if k == rank.PerDay {
-		return s.Members.Last7d(slot) > 0
+		return s.Members.Last24h(slot) > 0
 	}
 	return s.rosterValue(slot, k) > 0
 }
@@ -344,7 +339,9 @@ func (s *Snapshot) rosterRanks(slot int32, k rank.SortKey) bool {
 func (s *Snapshot) rosterValue(slot int32, k rank.SortKey) int64 {
 	switch k {
 	case rank.PerDay:
-		return s.Members.PointsPerDay(slot)
+		return s.Members.PointsPerDay24h(slot)
+	case rank.Today:
+		return s.Members.Today(slot)
 	case rank.Last24h:
 		return s.Members.Last24h(slot)
 	case rank.ThisWeek:
@@ -524,6 +521,10 @@ func tieAt(n int, rank int32, score func(i int) int64) int32 {
 		return 0
 	}
 	v := score(i)
+	// Unique scores need only their neighbours, which is common on leaderboard pages.
+	if (i == 0 || score(i-1) != v) && (i == n-1 || score(i+1) != v) {
+		return 1
+	}
 	lo, hi := 0, i // first index holding v
 	for lo < hi {
 		mid := int(uint(lo+hi) >> 1)

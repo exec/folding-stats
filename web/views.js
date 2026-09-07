@@ -1343,7 +1343,7 @@ export async function teamDetail(view, { id }, nav) {
         'Rank by lifetime points, and places moved over the last 24 hours'),
     ]));
 
-    view.append(await milestoneSection(t, 'team'));
+    view.append(milestoneSection(t, 'team'));
     view.append(badgeSection(t, 'team'));
 
     const hist = historyCard('Production', (p) => api.teamHistory(t.team_id, p));
@@ -1569,7 +1569,7 @@ export async function donorDetail(view, { name }, nav) {
         'Rank across all donors, and places moved over the last 24 hours'),
     ]));
 
-    view.append(await milestoneSection(d, 'donor'));
+    view.append(milestoneSection(d, 'donor'));
     view.append(badgeSection(d, 'donor'));
 
     const hist = historyCard('Production', (p) => api.donorHistory(d.name, p));
@@ -1959,31 +1959,32 @@ function nextRankTarget(rank) {
   return Math.max(1, Math.floor((rank - 1) / step) * step);
 }
 
-async function milestoneSection(entity, kind) {
+function milestoneSection(entity, kind) {
   const pointTarget = nextPointTarget(entity.points_total);
   const rate = entity.points_per_day_24h_avg || 0;
   const pointDays = rate > 0 ? (pointTarget - entity.points_total) / rate : null;
   const rankTarget = nextRankTarget(entity.rank);
-  let rankGoal = null;
+  const rankNote = el('span', rankTarget ? 'Loading…' : 'already leading');
+  // The optional goal must not hold up history, members and rivals requests.
   if (rankTarget) {
-    rankGoal = await api.goal({ kind, who: kind === 'team' ? entity.team_id : entity.name,
-      target_rank: rankTarget }).catch(() => null);
+    api.goal({ kind, who: kind === 'team' ? entity.team_id : entity.name,
+      target_rank: rankTarget }).then((res) => {
+      const g = res.data;
+      const horizon = g?.horizons?.find((h) => h.days === 90);
+      rankNote.textContent = g?.current_overtake_days != null
+        ? overtakeIn(g.current_overtake_days)
+        : horizon
+          ? tr('{0} PPD needed in 90 days', short(horizon.points_per_day))
+          : t('not closing at the current rate');
+    }).catch(() => { rankNote.textContent = t('Couldn’t load rank target'); });
   }
-  const g = rankGoal?.data;
-  const rankText = g?.current_overtake_days != null
-    ? overtakeIn(g.current_overtake_days)
-    : g?.horizons?.find((h) => h.days === 90)
-      ? tr('{0} PPD needed in 90 days', short(g.horizons.find((h) => h.days === 90).points_per_day))
-      : 'not closing at the current rate';
 
   return el('section.section', card('Next milestones',
     el('div.card-body',
       el('div.stats',
         statTile('Points target', short(pointTarget), pointDays == null ? 'no current production' : overtakeIn(pointDays),
           tr('Next round total: {0} points', n(pointTarget))),
-        rankTarget
-          ? statTile('Rank target', `#${n(rankTarget)}`, rankText)
-          : statTile('Rank target', '#1', 'already leading')))));
+        statTile('Rank target', `#${n(rankTarget || 1)}`, rankNote)))));
 }
 
 /**

@@ -49,6 +49,9 @@ func TestFreshnessProbeIsNeverCached(t *testing.T) {
 	}
 
 	// A new publish must invalidate everything, and the probe is what notices.
+	if _, err := c.GetEnvelope(ctx, "/v1/summary"); err != nil {
+		t.Fatal(err)
+	}
 	before := hits.Load()
 	at = "2026-08-11T07:51:17Z"
 	if _, err := c.GetEnvelope(ctx, "/v1/status"); err != nil {
@@ -68,8 +71,22 @@ func TestFreshnessProbeIsNeverCached(t *testing.T) {
 	if got.Donors != 7 {
 		t.Errorf("data decoded as %+v; Get must unmarshal the data, not the envelope", got)
 	}
-	if hits.Load() <= before {
-		t.Error("nothing was refetched after the publish")
+	if got := hits.Load() - before; got != 2 {
+		t.Errorf("after a publish got %d requests, want a probe and a refreshed summary", got)
+	}
+}
+
+func TestLateResponseDoesNotEvictNewSnapshot(t *testing.T) {
+	c := NewClient("")
+	old := Snapshot{At: time.Date(2026, 8, 11, 6, 0, 0, 0, time.UTC)}
+	fresh := Snapshot{At: old.At.Add(time.Hour)}
+	c.store("/v1/summary", fresh, []byte("fresh"))
+	c.store("/v1/teams/1", old, []byte("old"))
+	if body, ok := c.cached("/v1/summary"); !ok || string(body) != "fresh" {
+		t.Fatal("late response evicted the new snapshot")
+	}
+	if _, ok := c.cached("/v1/teams/1"); ok {
+		t.Fatal("late response entered the new snapshot's cache")
 	}
 }
 

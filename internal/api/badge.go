@@ -74,10 +74,14 @@ func (s *Server) badge(w http.ResponseWriter, r *http.Request) {
 	segments = append(segments, value)
 
 	etag := `"` + buildID() + "-badge-" + snap.ETag + `"`
+	if acceptsGzip(r) {
+		etag = etag[:len(etag)-1] + `-gz"`
+	}
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Last-Modified", snap.At.UTC().Format(http.TimeFormat))
 	w.Header().Set("Cache-Control", cacheControl(snap, r.URL.Path))
-	if r.Header.Get("If-None-Match") == etag {
+	w.Header().Set("Vary", "Accept-Encoding")
+	if matchesETag(r, etag) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}

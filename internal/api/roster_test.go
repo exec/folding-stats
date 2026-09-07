@@ -21,9 +21,10 @@ func TestRosterHeadMatchesUncachedOrdering(t *testing.T) {
 			keep := func(slot int32) bool { return !active || snap.Members.Last7d(slot) > 0 }
 
 			// Uncached: a snapshot with no memo takes the build path every time.
-			bare := *snap
-			bare.rosters = nil
-			want := bare.rosterHead(slots, k, active, keep)
+			memo := snap.rosters
+			snap.rosters = nil
+			want := snap.rosterHead(slots, k, active, keep)
+			snap.rosters = memo
 
 			// Cached, twice: the second call must come from the memo and still agree.
 			got1 := snap.rosterHead(slots, k, active, keep)

@@ -11,6 +11,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,20 +70,31 @@ func Open(path string) (*Store, error) {
 }
 
 func openPool(path string, conns int) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", path)
+	// DSN pragmas run for every physical connection, including replacements.
+	// Executing them on sql.DB configures only whichever connection it checks out.
+	params := url.Values{}
+	for _, p := range pragmas {
+		params.Add("_pragma", strings.TrimPrefix(p, "PRAGMA "))
+	}
+	// Bound each pool's page caches to 64 MiB total: 8 MiB per reader, 64 MiB
+	// for the sole writer. SQLite allocates this allowance only as pages are read.
+	params.Add("_pragma", fmt.Sprintf("cache_size = %d", -65536/conns))
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	db, err := sql.Open("sqlite", path+separator+params.Encode())
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(conns)
 	db.SetMaxIdleConns(conns)
 	// Connections are cheap to keep and expensive to re-establish, since every new
-	// one must re-apply the pragmas below.
+	// one must re-apply the pragmas above.
 	db.SetConnMaxLifetime(0)
-	for _, p := range pragmas {
-		if _, err := db.Exec(p); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("store: %s: %w", p, err)
-		}
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: opening database: %w", err)
 	}
 	return db, nil
 }

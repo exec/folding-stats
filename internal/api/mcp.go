@@ -1253,80 +1253,36 @@ func (s *Snapshot) mcpMovers(kind, direction string, within, limit int) (string,
 	within = clampInt(within, 1000, 10, 10000)
 	limit = clampInt(limit, 10, 1, 25)
 
-	type mover struct {
-		name   string
-		rank   int32
-		change int32
-		rate   int64
-	}
-	var all []mover
-	var field int
-
-	switch kind {
-	case "teams":
-		order := s.Ranks.TeamOrder
-		field = len(order)
-		for _, slot := range order[:min(within, len(order))] {
-			c, ok := s.Ranks.TeamChange24h(slot)
-			if !ok || c == 0 {
-				continue
-			}
-			v := s.teamView(slot)
-			all = append(all, mover{fmt.Sprintf("%s (team %d)", v.Name, v.TeamID), v.Rank, c, v.PointsPerDay7dAvg})
-		}
-	case "donors":
-		field = len(s.Ranks.Donors)
-		for i := 0; i < min(within, field); i++ {
-			c, ok := s.Ranks.DonorChange24h(int32(i))
-			if !ok || c == 0 {
-				continue
-			}
-			v := s.donorView(int32(i), false)
-			all = append(all, mover{v.Name, v.Rank, c, v.PointsPerDay7dAvg})
-		}
-	default:
+	if kind != "teams" && kind != "donors" {
 		return "", fmt.Errorf("kind must be \"teams\" or \"donors\"")
 	}
-
-	if len(all) == 0 {
-		return fmt.Sprintf("Nothing in the top %s %s moved in the last 24 hours — or less "+
+	result := s.moverView(strings.TrimSuffix(kind, "s"), direction, within, limit)
+	if len(result.Climbed) == 0 && len(result.Fell) == 0 {
+		return fmt.Sprintf("Nothing in the top %s %s moved in the requested direction in the last 24 hours — or less "+
 			"than a day of history has been observed, in which case there is no earlier "+
 			"ranking to compare against.", fmtInt(int64(within)), kind), nil
 	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Biggest 24-hour rank movements in the top %s of %s %s\n",
-		fmtInt(int64(within)), fmtInt(int64(field)), kind)
+		fmtInt(int64(within)), fmtInt(int64(result.FieldSize)), kind)
 
-	show := func(title string, up bool) {
-		sort.Slice(all, func(i, j int) bool {
-			if up {
-				return all[i].change > all[j].change
-			}
-			return all[i].change < all[j].change
-		})
-		var shown int
-		var body strings.Builder
-		for _, m := range all {
-			if shown == limit || (up && m.change <= 0) || (!up && m.change >= 0) {
-				break
-			}
-			fmt.Fprintf(&body, "  %+5d  #%-8s %-36s %12s/day\n",
-				m.change, fmtInt(int64(m.rank)), truncate(m.name, 36), fmtInt(m.rate))
-			shown++
-		}
-		if shown == 0 {
+	show := func(title string, movers []Mover) {
+		if len(movers) == 0 {
 			return
 		}
-		fmt.Fprintf(&b, "\n%s:\n%s", title, body.String())
+		fmt.Fprintf(&b, "\n%s:\n", title)
+		for _, m := range movers {
+			name := m.Name
+			if m.TeamID != nil {
+				name = fmt.Sprintf("%s (team %d)", name, *m.TeamID)
+			}
+			fmt.Fprintf(&b, "  %+5d  #%-8s %-36s %12s/day\n",
+				m.Change24h, fmtInt(int64(m.Rank)), truncate(name, 36), fmtInt(m.PointsPerDay7dAvg))
+		}
 	}
-
-	if direction != "down" {
-		show("Climbed", true)
-	}
-	if direction != "up" {
-		show("Fell", false)
-	}
+	show("Climbed", result.Climbed)
+	show("Fell", result.Fell)
 
 	b.WriteString("\nMovement is places gained or lost since 24 hours ago, and is measured against\n" +
 		"the corpus as it stood then — an entity that did not exist a day ago has no\n" +

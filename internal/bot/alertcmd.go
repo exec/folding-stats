@@ -245,7 +245,7 @@ func (b *Bot) alertAdd(ctx context.Context, i *discordgo.InteractionCreate,
 			channelID, err)), nil
 	}
 	if err := b.alerts.Add(a); err != nil {
-		return ErrorEmbed(err.Error()), nil
+		return ErrorEmbed(mdEsc(err.Error())), nil
 	}
 
 	return &discordgo.MessageEmbed{

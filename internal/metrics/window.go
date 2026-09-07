@@ -330,12 +330,13 @@ func (w *Window) ObservedSpan(id int32) time.Duration {
 	if len(w.cycles) == 0 || id < 0 {
 		return 0
 	}
+	// Most entities predate the retained window; only recent arrivals need a search.
+	if id < w.cycles[0].count {
+		return w.CoveredSpan()
+	}
 	i := sort.Search(len(w.cycles), func(i int) bool { return w.cycles[i].count > id })
 	if i == len(w.cycles) {
 		return 0 // never present at any retained cycle
-	}
-	if i == 0 {
-		return w.CoveredSpan()
 	}
 	// It first appeared at cycle i, so its earliest possible delta is the next one,
 	// covering the interval that starts here. No mean-interval adjustment: this
@@ -357,7 +358,11 @@ func (w *Window) ObservedSpan(id int32) time.Duration {
 // Days they existed for and produced nothing on are real zeros and still count —
 // only days before we had ever seen them are excluded.
 func (w *Window) PointsPerDay(id int32) int64 {
-	return PerDay(w.get(w.last7d, id), w.ObservedSpan(id))
+	points := w.get(w.last7d, id)
+	if points == 0 {
+		return 0
+	}
+	return PerDay(points, w.ObservedSpan(id))
 }
 
 // PointsPerDay24h is production in the rolling day, expressed as points per day.
@@ -375,11 +380,15 @@ func (w *Window) PointsPerDay(id int32) int64 {
 // day's work would understate it by eight times. Only the period actually observed
 // counts, capped at the window itself.
 func (w *Window) PointsPerDay24h(id int32) int64 {
+	points := w.get(w.last24, id)
+	if points == 0 {
+		return 0
+	}
 	span := w.ObservedSpan(id)
 	if span > day {
 		span = day
 	}
-	return PerDay(w.get(w.last24, id), span)
+	return PerDay(points, span)
 }
 
 // PerDay divides production by the period it was observed over, as points per day.

@@ -280,6 +280,27 @@ func TestObservedSpanIsBoundedByTheWindow(t *testing.T) {
 	}
 }
 
+func BenchmarkWindowRates(b *testing.B) {
+	w := New(2)
+	for hour := 0; hour <= 168; hour++ {
+		w.Push(mon(0).Add(time.Duration(hour)*time.Hour), deltas(d(0, 100)))
+	}
+	for _, tc := range []struct {
+		name string
+		id   int32
+	}{{"active", 0}, {"idle", 1}} {
+		b.Run(tc.name, func(b *testing.B) {
+			var rate int64
+			for b.Loop() {
+				rate = w.PointsPerDay(tc.id) + w.PointsPerDay24h(tc.id)
+			}
+			if (tc.id == 0 && rate <= 0) || (tc.id == 1 && rate != 0) {
+				b.Fatal(rate)
+			}
+		})
+	}
+}
+
 func TestPointsPerDayIsNotLast24h(t *testing.T) {
 	// A donor can be spiky: DH showed Last24h 34,539,445 against a 7-day average of
 	// 7,079,867 — nearly 5x. Anything treating the average as a 24-hour figure

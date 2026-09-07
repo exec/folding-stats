@@ -210,7 +210,9 @@ func (a *Agent) session(ctx context.Context) error {
 	errs := make(chan error, 3)
 	go func() { errs <- a.localLoop(ctx, up, resync) }()
 	go func() { errs <- a.pumpDown(ctx, up, resync) }()
-	go func() { a.watchRentals(ctx, a); errs <- nil }()
+	if a.rentals != nil {
+		go func() { a.watchRentals(ctx, a); errs <- nil }()
+	}
 
 	select {
 	case <-ctx.Done():

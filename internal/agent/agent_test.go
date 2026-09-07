@@ -1,15 +1,83 @@
 package agent
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
+
 	p "folding/internal/relayproto"
 )
+
+func TestSessionStaysConnectedWithoutRentals(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	forwarded := make(chan struct{}, 1)
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.Close()
+		ws.WriteJSON(p.Frame{Type: p.TypeHello, Nonce: "test"})
+		var frame p.Frame
+		if ws.ReadJSON(&frame) != nil {
+			return
+		}
+		ws.WriteJSON(p.Frame{Type: p.TypeReady})
+		if ws.ReadJSON(&frame) == nil && frame.Type == p.TypeUp {
+			forwarded <- struct{}{}
+		}
+		ws.ReadJSON(&frame) // Hold the connection until cancellation closes it.
+	}))
+	defer relay.Close()
+	local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.Close()
+		ws.WriteMessage(websocket.TextMessage, []byte(`{"state":"ready"}`))
+		ws.ReadMessage()
+	}))
+	defer local.Close()
+	a, err := New(Config{
+		KeyPath: t.TempDir() + "/machine.key",
+		Relay:   "ws" + strings.TrimPrefix(relay.URL, "http"),
+		Local:   "ws" + strings.TrimPrefix(local.URL, "http"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- a.session(ctx) }()
+	select {
+	case <-forwarded:
+	case err := <-done:
+		t.Fatalf("session ended before forwarding: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("session did not forward local state")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("session ended without a rental watcher: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("session did not stop on cancellation")
+	}
+}
 
 // TestKeyIsGeneratedOnceAndKept is the property the security model rests on: the
 // private key is made here and never travels. If it were regenerated on each start,

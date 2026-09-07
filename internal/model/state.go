@@ -268,19 +268,20 @@ func ValidateSnapshot(teams []parse.TeamRow, users []parse.UserRow) error {
 
 // grow returns a slice of exactly n elements, reusing the backing array when it is
 // already large enough. Reused buffers are always fully overwritten or reset by the
-// caller, so stale contents cannot leak between cycles.
+// caller, so stale contents cannot leak between cycles. Keep an eighth of headroom,
+// as the metric windows do: one new member must not reallocate the entire corpus.
 func grow32(s []int32, n int) []int32 {
 	if cap(s) >= n {
 		return s[:n]
 	}
-	return make([]int32, n)
+	return make([]int32, n, n+n/8)
 }
 
 func grow64(s []int64, n int) []int64 {
 	if cap(s) >= n {
 		return s[:n]
 	}
-	out := make([]int64, n)
+	out := make([]int64, n, n+n/8)
 	copy(out, s)
 	return out
 }
@@ -289,7 +290,7 @@ func growBool(s []bool, n int) []bool {
 	if cap(s) >= n {
 		return s[:n]
 	}
-	out := make([]bool, n)
+	out := make([]bool, n, n+n/8)
 	copy(out, s)
 	return out
 }

@@ -237,51 +237,56 @@ func (s *Server) movers(snap *Snapshot, r *http.Request) (any, *PageInfo, error)
 		return nil, nil, badRequest("direction must be up, down or both")
 	}
 
+	return snap.moverView(kind, direction, within, limit), nil, nil
+}
+
+// Select on ranks and changes first; names and production are only needed for the
+// at most fifty returned rows, not every candidate in the top ten thousand.
+func (s *Snapshot) moverView(kind, direction string, within, limit int) Movers {
 	result := Movers{Kind: kind, Within: within, Climbed: []Mover{}, Fell: []Mover{}}
-	var all []Mover
+	type candidate struct {
+		rank, change int32
+	}
+	var all []candidate
 	if kind == "team" {
-		result.FieldSize = len(snap.Ranks.TeamOrder)
-		for _, slot := range snap.Ranks.TeamOrder[:min(within, result.FieldSize)] {
-			change, ok := snap.Ranks.TeamChange24h(slot)
-			if !ok || change == 0 {
-				continue
+		result.FieldSize = len(s.Ranks.TeamOrder)
+		for i, slot := range s.Ranks.TeamOrder[:min(within, result.FieldSize)] {
+			change, ok := s.Ranks.TeamChange24h(slot)
+			if ok && change != 0 {
+				all = append(all, candidate{int32(i + 1), change})
 			}
-			v := snap.teamView(slot)
-			id := v.TeamID
-			all = append(all, Mover{InsightEntity: InsightEntity{Kind: kind, Name: v.Name, TeamID: &id,
-				Rank: v.Rank, PointsTotal: v.PointsTotal, PointsPerDay24hAvg: v.PointsPerDay24hAvg,
-				PointsPerDay7dAvg: v.PointsPerDay7dAvg}, Change24h: change})
 		}
 	} else {
-		result.FieldSize = len(snap.Ranks.Donors)
+		result.FieldSize = len(s.Ranks.Donors)
 		for i := 0; i < min(within, result.FieldSize); i++ {
-			change, ok := snap.Ranks.DonorChange24h(int32(i))
-			if !ok || change == 0 {
-				continue
+			change, ok := s.Ranks.DonorChange24h(int32(i))
+			if ok && change != 0 {
+				all = append(all, candidate{int32(i + 1), change})
 			}
-			v := snap.donorView(int32(i), false)
-			all = append(all, Mover{InsightEntity: InsightEntity{Kind: kind, Name: v.Name,
-				Rank: v.Rank, PointsTotal: v.PointsTotal, PointsPerDay24hAvg: v.PointsPerDay24hAvg,
-				PointsPerDay7dAvg: v.PointsPerDay7dAvg}, Change24h: change})
 		}
 	}
 
-	sort.Slice(all, func(i, j int) bool { return all[i].Change24h > all[j].Change24h })
+	sort.Slice(all, func(i, j int) bool { return all[i].change > all[j].change })
+	view := func(c candidate) Mover {
+		// Candidates came from this ranking, so the rank is known to exist.
+		v, _ := s.insightAtRank(kind, int(c.rank))
+		return Mover{InsightEntity: v, Change24h: c.change}
+	}
 	if direction != "down" {
-		for _, m := range all {
-			if m.Change24h <= 0 || len(result.Climbed) == limit {
+		for _, c := range all {
+			if c.change <= 0 || len(result.Climbed) == limit {
 				break
 			}
-			result.Climbed = append(result.Climbed, m)
+			result.Climbed = append(result.Climbed, view(c))
 		}
 	}
 	if direction != "up" {
 		for i := len(all) - 1; i >= 0 && len(result.Fell) < limit; i-- {
-			if all[i].Change24h >= 0 {
+			if all[i].change >= 0 {
 				break
 			}
-			result.Fell = append(result.Fell, all[i])
+			result.Fell = append(result.Fell, view(all[i]))
 		}
 	}
-	return result, nil, nil
+	return result
 }

@@ -1,11 +1,54 @@
 package model
 
 import (
+	"math"
 	"strings"
 	"testing"
 
 	"folding/internal/parse"
 )
+
+func TestReconcileOverflowIsolation(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		teams []parse.TeamRow
+		users []parse.UserRow
+		want  []int32
+	}{
+		{"exact maximum", []parse.TeamRow{{ID: 1, Score: math.MaxInt64, WUs: math.MaxInt64}},
+			[]parse.UserRow{{TeamID: 1, Score: math.MaxInt64, WUs: math.MaxInt64}}, nil},
+		{"duplicate team authority", []parse.TeamRow{{ID: 1, Score: 10, WUs: 1}, {ID: 1, Score: 20, WUs: 2}},
+			[]parse.UserRow{{TeamID: 1, Score: 30, WUs: 3}}, nil},
+		{"duplicate overflow at maximum authority", []parse.TeamRow{{ID: 1, Score: math.MaxInt64}},
+			[]parse.UserRow{{TeamID: 1, Score: math.MaxInt64}, {TeamID: 1, Score: 1}}, []int32{1}},
+		{"duplicate work unit overflow", []parse.TeamRow{{ID: 1, WUs: math.MaxInt64}},
+			[]parse.UserRow{{TeamID: 1, WUs: math.MaxInt64}, {TeamID: 1, WUs: 1}}, []int32{1}},
+		{"global score overflow inside tolerance", []parse.TeamRow{{ID: 1, Score: math.MaxInt64 - 10}, {ID: 2, Score: 10}},
+			[]parse.UserRow{{TeamID: 1, Score: math.MaxInt64 - 10}, {TeamID: 2, Score: 11}}, []int32{2}},
+		{"global work unit overflow", []parse.TeamRow{{ID: 1, WUs: math.MaxInt64 - 10}, {ID: 2, WUs: 10}},
+			[]parse.UserRow{{TeamID: 1, WUs: math.MaxInt64 - 10}, {TeamID: 2, WUs: 11}}, []int32{2}},
+		{"normal tolerance", []parse.TeamRow{{ID: 1, Score: 100, WUs: 10}},
+			[]parse.UserRow{{TeamID: 1, Score: 101, WUs: 11}}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := ValidateSnapshot(tc.teams, nil); err != nil {
+				t.Fatal(err)
+			}
+			over := Reconcile(tc.teams, tc.users, ReconcileWarnAt)
+			if len(over) != len(tc.want) {
+				t.Fatalf("quarantine = %+v, want %v", over, tc.want)
+			}
+			for i, id := range tc.want {
+				if over[i].TeamID != id {
+					t.Fatalf("quarantine = %+v, want %v", over, tc.want)
+				}
+			}
+			if err := ValidateSnapshot(tc.teams, DropTeams(tc.users, over)); err != nil {
+				t.Fatalf("unsafe rows survived reconciliation: %v", err)
+			}
+		})
+	}
+}
 
 // The attack, driven through the real scanners rather than through hand-built rows.
 // A transcription of what the parser is believed to produce would pass while the

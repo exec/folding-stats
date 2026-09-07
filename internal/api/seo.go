@@ -126,7 +126,7 @@ func (s *Server) PageMeta(p string) (PageMeta, bool) {
 	case "/teams":
 		return PageMeta{
 			Title: "Team rankings" + siteSuffix,
-			Description: "All " + compact(len(snap.State.Teams)) +
+			Description: "All " + compact(snap.Totals.Teams) +
 				" Folding@home teams ranked by points, with active member counts and daily production. Free JSON API, no sign-up.",
 		}, true
 	case "/overview":
@@ -181,6 +181,10 @@ func (s *Server) PageMeta(p string) (PageMeta, bool) {
 
 // donorMeta describes one donor's page. rest is everything after /donors/.
 func (s *Snapshot) donorMeta(rest string) (PageMeta, bool) {
+	if s.Guard != nil {
+		s.Guard.RLock()
+		defer s.Guard.RUnlock()
+	}
 	name, rivals := strings.CutSuffix(rest, "/rivals")
 	name = strings.TrimSuffix(name, "/")
 	if name == "" {
@@ -229,6 +233,10 @@ func (s *Snapshot) donorMeta(rest string) (PageMeta, bool) {
 
 // teamMeta describes one team's page. rest is everything after /teams/.
 func (s *Snapshot) teamMeta(rest string) (PageMeta, bool) {
+	if s.Guard != nil {
+		s.Guard.RLock()
+		defer s.Guard.RUnlock()
+	}
 	idStr, rivals := strings.CutSuffix(rest, "/rivals")
 	idStr = strings.TrimSuffix(idStr, "/")
 

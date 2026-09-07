@@ -44,6 +44,10 @@ func (s *Store) MemberDays(ctx context.Context, ids []int32) ([]Day, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
+	if len(ids) == 1 {
+		return s.days(ctx,
+			`SELECT bucket, points, wus FROM member_daily WHERE member_id = ? AND points > 0 ORDER BY bucket`, ids[0])
+	}
 	// Padded to a power of two for the same reason as MembersHistory: it keeps the
 	// statement cache to a handful of query texts instead of one per donor width. The
 	// padding id is negative and matches nothing.

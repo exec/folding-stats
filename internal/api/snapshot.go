@@ -1,9 +1,7 @@
 // Package api serves the read-only HTTP interface.
 //
-// Everything served between ingest cycles is a pure function of one immutable
-// Snapshot, so handlers never lock, never query, and never recompute. A cycle builds
-// a fresh Snapshot and swaps it in atomically; in-flight requests finish against the
-// old one.
+// Each published Snapshot owns its rankings and derived views, while sharing live
+// ingest state under a read lock. History and daily detail also read the store.
 //
 // # Resource model
 //
