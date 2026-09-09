@@ -18,6 +18,11 @@ func TestBlockBulkMetaCrawlers(t *testing.T) {
 		{"/v1/teams", "meta-externalagent/1.1", http.StatusForbidden},
 		{"/teams/32", metaUA, http.StatusForbidden},
 		{"/donors/DH", metaUA, http.StatusForbidden},
+		{"/badge/donor/DH", "meta-externalagent/1.1", http.StatusForbidden},
+		{"/badge/team/32?metric=rank", "Meta-ExternalAgent/1.1", http.StatusForbidden},
+		{"/badge/team/32", metaUA, http.StatusForbidden},
+		{"/badge/team/32", "Mozilla/5.0", http.StatusNoContent},
+		{"/badge/donor/DH", "facebookexternalhit/1.1", http.StatusNoContent},
 		{"/teams/32", "facebookexternalhit/1.1", http.StatusNoContent},
 		{"/v1/teams", "Mozilla/5.0", http.StatusNoContent},
 		{"/", metaUA, http.StatusNoContent},
@@ -28,6 +33,9 @@ func TestBlockBulkMetaCrawlers(t *testing.T) {
 		h.ServeHTTP(rec, req)
 		if rec.Code != tc.want {
 			t.Errorf("%s %q: status %d, want %d", tc.path, tc.ua, rec.Code, tc.want)
+		}
+		if tc.want == http.StatusForbidden && rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("%s: crawler refusal must not be cached", tc.path)
 		}
 	}
 }

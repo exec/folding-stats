@@ -186,7 +186,7 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 func blockBulkMetaCrawlers(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
-		if strings.HasPrefix(p, "/donors/") || strings.HasPrefix(p, "/teams/") || strings.HasPrefix(p, "/v1/") {
+		if strings.HasPrefix(p, "/donors/") || strings.HasPrefix(p, "/teams/") || strings.HasPrefix(p, "/v1/") || strings.HasPrefix(p, "/badge/") {
 			ua := strings.ToLower(r.UserAgent())
 			if strings.Contains(ua, "meta-externalagent/") || strings.Contains(ua, "meta-webindexer/") {
 				w.Header().Set("Cache-Control", "no-store")
