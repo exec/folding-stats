@@ -865,11 +865,7 @@ func (t *Table) buildSearchIndex(st *model.State) {
 }
 
 // TeamPrefix returns up to limit team slots whose names begin with q,
-// case-insensitively, ordered by rank so the strongest team leads.
-//
-// Names that equal q exactly sort to the front of the prefix range, so a caller
-// looking for an exact hit finds it among the first results rather than needing a
-// separate pass over every team.
+// case-insensitively, with exact names first and rank ordering within each group.
 func (t *Table) TeamPrefix(st *model.State, q string, limit int) []int32 {
 	if q == "" || limit <= 0 || len(t.teamNameOrder) == 0 {
 		return nil
@@ -887,16 +883,22 @@ func (t *Table) TeamPrefix(st *model.State, q string, limit int) []int32 {
 		if !hasPrefixFold(name(slot), p) {
 			break // sorted, so the prefix range has ended
 		}
-		hits = append(hits, slot)
-		// A one-letter query would otherwise walk most of the corpus; stop once there
-		// is plenty to rank.
-		if len(hits) >= limit*20 {
+		// Include all equal-length matches so a case variant cannot hide an exact hit.
+		// shortcut: rank only 20*limit prefix candidates; scan the full range if broad-prefix accuracy is needed.
+		if len(hits) >= limit*20 && len(name(slot)) > len(p) {
 			break
 		}
+		hits = append(hits, slot)
 	}
 
 	// Unlike Donors, team slots are not stored in rank order, so rank explicitly.
+	exactID, hasExact := st.Names.Lookup(q)
 	sort.Slice(hits, func(a, b int) bool {
+		aExact := hasExact && st.Teams[hits[a]].NameID == exactID
+		bExact := hasExact && st.Teams[hits[b]].NameID == exactID
+		if aExact != bExact {
+			return aExact
+		}
 		return t.TeamRankOf(hits[a]) < t.TeamRankOf(hits[b])
 	})
 	if len(hits) > limit {
@@ -942,7 +944,7 @@ func hasPrefixFold(s, prefix []byte) bool {
 }
 
 // DonorPrefix returns up to limit donor indices whose names begin with q,
-// case-insensitively, ordered by rank so the most significant match leads.
+// case-insensitively, with the exact name first and remaining matches in rank order.
 func (t *Table) DonorPrefix(st *model.State, q string, limit int) []int32 {
 	if q == "" || limit <= 0 || len(t.nameOrder) == 0 {
 		return nil
@@ -954,22 +956,36 @@ func (t *Table) DonorPrefix(st *model.State, q string, limit int) []int32 {
 		return !lessFold(st.Names.Bytes(t.Donors[t.nameOrder[i]].NameID), p)
 	})
 
+	exact := int32(-1)
+	if id, ok := st.Names.Lookup(q); ok {
+		exact = t.DonorIndexOf(id)
+	}
 	var hits []int32
+	if exact >= 0 {
+		hits = append(hits, exact)
+	}
 	for i := lo; i < len(t.nameOrder); i++ {
 		d := t.nameOrder[i]
 		if !hasPrefixFold(st.Names.Bytes(t.Donors[d].NameID), p) {
 			break // sorted, so the prefix range has ended
 		}
-		hits = append(hits, d)
-		// Scanning the whole range for a one-letter query would mean walking most
-		// of the corpus, so stop once there is plenty to rank.
+		if d != exact {
+			hits = append(hits, d)
+		}
+		// shortcut: rank only 20*limit prefix candidates; scan the full range if broad-prefix accuracy is needed.
 		if len(hits) >= limit*20 {
 			break
 		}
 	}
 
 	// Donors are stored in rank order, so a numeric sort on the index ranks them.
-	sort.Slice(hits, func(a, b int) bool { return hits[a] < hits[b] })
+	sort.Slice(hits, func(a, b int) bool {
+		aExact, bExact := hits[a] == exact, hits[b] == exact
+		if aExact != bExact {
+			return aExact
+		}
+		return hits[a] < hits[b]
+	})
 	if len(hits) > limit {
 		hits = hits[:limit]
 	}

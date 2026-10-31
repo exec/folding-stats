@@ -104,14 +104,17 @@ type Snapshot struct {
 	rostersMu sync.Mutex
 	rosters   map[rosterKey]*rosterEntry
 
+	// Large-team activity selections are shared across callers and requested limits.
+	activityMu sync.Mutex
+	activities map[int32]*activityEntry
+
 	// Guard protects State, Members and Teams, which are the live ingest
 	// structures rather than copies.
 	//
 	// Publishing a new snapshot does not detach the old one: both point at the same
 	// arrays, which the next cycle mutates in place and may reallocate. Copying
 	// instead would mean duplicating ~300 MB every hour. So readers take the read
-	// lock and the ingest loop takes the write lock for the ~1.3 s it spends
-	// mutating — about 0.04% of each hour.
+	// lock and ingest holds the write lock through commit, rebuilding and publication.
 	//
 	// May be nil in tests that never ingest concurrently.
 	Guard *sync.RWMutex
@@ -152,7 +155,8 @@ func Build(st *model.State, members, teams *metrics.Window, tbl *rank.Table, s *
 	snap := &Snapshot{
 		State: st, Members: members, Teams: teams, Ranks: tbl, Store: s,
 		At: at, NextExpected: nextExpected, ETag: etag,
-		rosters: make(map[rosterKey]*rosterEntry),
+		rosters:    make(map[rosterKey]*rosterEntry),
+		activities: make(map[int32]*activityEntry),
 	}
 
 	maxTeamID := int32(0)

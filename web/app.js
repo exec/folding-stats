@@ -163,22 +163,22 @@ const sortParam = (q) => {
 };
 
 const routes = [
-  [/^\/$/, () => views.home(view)],
-  [/^\/overview\/?$/, () => views.overview(view)],
-  [/^\/blog\/([^/]+)\/?$/, (m) => views.postPage(view, { slug: decodeURIComponent(m[1]) })],
-  [/^\/teams\/?$/, (m, q) =>
+  [/^\/$/, (view) => views.home(view)],
+  [/^\/overview\/?$/, (view) => views.overview(view)],
+  [/^\/blog\/([^/]+)\/?$/, (view, m) => views.postPage(view, { slug: decodeURIComponent(m[1]) })],
+  [/^\/teams\/?$/, (view, m, q) =>
     views.teamsList(view, { page: +(q.get('page') || 1), sort: sortParam(q) }, navigate)],
-  [/^\/teams\/country\/?$/, () => views.aroundTheGlobePage(view)],
-  [/^\/teams\/country\/([^/]+)\/?$/, (m) =>
+  [/^\/teams\/country\/?$/, (view) => views.aroundTheGlobePage(view)],
+  [/^\/teams\/country\/([^/]+)\/?$/, (view, m) =>
     views.countryPage(view, { code: decodeURIComponent(m[1]) })],
-  [/^\/teams\/topic\/?$/, () => views.topicsPage(view)],
-  [/^\/teams\/topic\/([^/]+)\/?$/, (m) =>
+  [/^\/teams\/topic\/?$/, (view) => views.topicsPage(view)],
+  [/^\/teams\/topic\/([^/]+)\/?$/, (view, m) =>
     views.topicPage(view, { slug: decodeURIComponent(m[1]) })],
   // Ordered before the detail routes: the donor pattern is greedy enough to swallow
   // a /rivals suffix as part of the name.
-  [/^\/teams\/([^/]+)\/rivals\/?$/, (m, q) =>
+  [/^\/teams\/([^/]+)\/rivals\/?$/, (view, m, q) =>
     views.rivalsPage(view, { kind: 'team', id: decodeURIComponent(m[1]), page: +(q.get('page') || 0) || undefined }, navigate)],
-  [/^\/donors\/(.+?)\/rivals\/?$/, (m, q) =>
+  [/^\/donors\/(.+?)\/rivals\/?$/, (view, m, q) =>
     views.rivalsPage(view, {
       kind: 'donor', id: decodeURIComponent(m[1]),
       page: +(q.get('page') || 0) || undefined,
@@ -187,24 +187,23 @@ const routes = [
       // the API and come back 400 where the honest answer is the unscoped board.
       teamID: /^\d+$/.test(q.get('team_id') || '') ? q.get('team_id') : undefined,
     }, navigate)],
-  [/^\/teams\/([^/]+)\/?$/, (m) => views.teamDetail(view, { id: decodeURIComponent(m[1]) }, navigate)],
-  [/^\/donors\/?$/, (m, q) =>
+  [/^\/teams\/([^/]+)\/?$/, (view, m) => views.teamDetail(view, { id: decodeURIComponent(m[1]) }, navigate)],
+  [/^\/donors\/?$/, (view, m, q) =>
     views.donorsList(view, { page: +(q.get('page') || 1), sort: sortParam(q) }, navigate)],
-  [/^\/donors\/(.+?)\/?$/, (m) => views.donorDetail(view, { name: decodeURIComponent(m[1]) }, navigate)],
-  [/^\/watchlist\/?$/, () => views.watchlistPage(view)],
-  [/^\/explore\/?$/, (m, q) => views.explorePage(view, { tab: q.get('tab') || 'compare' })],
-  [/^\/search\/?$/, (m, q) => views.searchPage(view, { q: q.get('q') || '' }, navigate)],
-  [/^\/api\/?$/, () => views.apiDocs(view)],
-  [/^\/agents\/?$/, () => views.agentsPage(view)],
-  [/^\/bots\/?$/, () => views.botsPage(view)],
-  [/^\/fold\/?$/, () => views.foldPage(view)],
-  [/^\/privacy\/?$/, () => views.privacyPage(view)],
-  [/^\/disclaimer\/?$/, () => views.disclaimerPage(view)],
+  [/^\/donors\/(.+?)\/?$/, (view, m) => views.donorDetail(view, { name: decodeURIComponent(m[1]) }, navigate)],
+  [/^\/watchlist\/?$/, (view) => views.watchlistPage(view)],
+  [/^\/explore\/?$/, (view, m, q) => views.explorePage(view, { tab: q.get('tab') || 'compare' })],
+  [/^\/search\/?$/, (view, m, q) => views.searchPage(view, { q: q.get('q') || '' }, navigate)],
+  [/^\/api\/?$/, (view) => views.apiDocs(view)],
+  [/^\/agents\/?$/, (view) => views.agentsPage(view)],
+  [/^\/bots\/?$/, (view) => views.botsPage(view)],
+  [/^\/fold\/?$/, (view) => views.foldPage(view)],
+  [/^\/privacy\/?$/, (view) => views.privacyPage(view)],
+  [/^\/disclaimer\/?$/, (view) => views.disclaimerPage(view)],
 ];
 
 let rendering = false;
-// Kept-content renders currently in flight; see the dim below.
-let swapping = 0;
+let renderSeq = 0;
 
 /**
  * @param quiet        an in-place refresh from new data: keep content, keep scroll,
@@ -219,7 +218,10 @@ let swapping = 0;
 async function render({ quiet = false, keepContent = false } = {}) {
   const path = location.pathname;
   const query = new URLSearchParams(location.search);
-  const href = path + location.search;
+  const seq = ++renderSeq;
+  const target = el('div');
+  // Keep the server summary on the first load; later renders own separate containers.
+  if (seq === 1) target.append(...view.childNodes);
 
   // Every nav target, including the Teams menu's summary, which is a nav item to
   // everyone except a CSS selector.
@@ -241,6 +243,12 @@ async function render({ quiet = false, keepContent = false } = {}) {
     cleanup();
     cleanup = null;
   }
+  rendering = false;
+  // Only the newest render owns the shared loading and cache settings.
+  view.classList.toggle('swapping', keepContent);
+  setQuiet(quiet || keepContent);
+  setCacheMode(quiet ? 'reload' : 'default');
+  if ((!quiet && !keepContent) || seq === 1) clear(view).append(target);
 
   for (const [re, handler] of routes) {
     const m = path.match(re);
@@ -248,38 +256,30 @@ async function render({ quiet = false, keepContent = false } = {}) {
       // A quiet refresh is a data swap under a reader's cursor: no skeletons, and no
       // yanking them back to the top of a page they had scrolled down.
       if (!quiet && !keepContent) window.scrollTo(0, 0);
-      setQuiet(quiet || keepContent);
-      // A quiet render is triggered by a new snapshot, so its fetches must not be
-      // answered from the previous one's cache. A tab switch is a different URL and
-      // wants the cache, so it is deliberately not included here.
-      if (quiet) setCacheMode('reload');
-      // Nothing blanks during a kept-content swap, so without this the click has no
-      // acknowledgement at all until the response lands. A short dim is feedback; a
-      // skeleton is a flash.
-      //
-      // Counted rather than a flag: clicking a second tab before the first responds
-      // leaves two renders in flight, and whichever finishes first would otherwise
-      // clear the dim while the other is still loading — reintroducing exactly the
-      // flicker this removes.
-      if (keepContent) swapping++;
-      view.classList.toggle('swapping', swapping > 0);
       rendering = true;
       try {
-        cleanup = (await handler(m, query)) || null;
+        const dispose = (await handler(target, m, query)) || null;
+        if (seq !== renderSeq) {
+          dispose?.();
+          return false;
+        }
+        cleanup = dispose;
+        if (target.parentNode !== view) clear(view).append(target);
       } finally {
-        setQuiet(false);
-        setCacheMode('default');
-        if (keepContent) swapping--;
-        view.classList.toggle('swapping', swapping > 0);
-        rendering = false;
+        if (seq === renderSeq) {
+          setQuiet(false);
+          setCacheMode('default');
+          view.classList.remove('swapping');
+          rendering = false;
+        }
       }
-      // The reader navigated while this was in flight, so what just landed is the
-      // wrong page. Redraw the one they actually asked for.
-      if (href !== location.pathname + location.search) render();
-      return;
+      return true;
     }
   }
 
+  setQuiet(false);
+  setCacheMode('default');
+  view.classList.remove('swapping');
   clear(view).append(
     el('div.page-head', el('h1.page-title', 'Not found')),
     el('div.card', el('div.empty', 'No page at ', el('code', path), '.'))
@@ -295,7 +295,7 @@ export function navigate(to, { keepContent = false } = {}) {
 document.addEventListener('dataupdate', async () => {
   // A navigation already in flight will paint fresher data than this would.
   if (rendering) return;
-  await render({ quiet: true });
+  if (!await render({ quiet: true })) return;
   // Say so, briefly. Numbers changing with no acknowledgement looks like a glitch.
   view.classList.remove('refreshed');
   void view.offsetWidth; // restart the animation rather than ignore a repeat
@@ -320,16 +320,14 @@ const input = document.getElementById('q');
 const results = document.getElementById('search-results');
 let searchSeq = 0;
 let activeIdx = -1;
-
-const debounce = (fn, ms) => {
-  let t;
-  return (...a) => {
-    clearTimeout(t);
-    t = setTimeout(() => fn(...a), ms);
-  };
-};
+let searchTimer;
+let searchController;
 
 function closeResults() {
+  searchSeq++;
+  clearTimeout(searchTimer);
+  searchController?.abort();
+  searchController = null;
   clear(results);
   activeIdx = -1;
 }
@@ -338,34 +336,39 @@ function closeResults() {
 // the objection to them is a full page of near-misses replacing what you were
 // looking at, not the matching itself. An exact hit is pinned first and marked, so
 // "these look similar" never gets mistaken for "this is you".
-const runSearch = debounce(async (q) => {
-  if (!q) return closeResults();
-  const seq = ++searchSeq;
-  try {
-    const res = await api.search(q, undefined, { limit: 8 });
-    if (seq !== searchSeq) return;
-    const { teams, donors, exact_donor: exactDonor, exact_team: exactTeam } = res.data;
-    clear(results);
-    activeIdx = -1;
+function runSearch(q) {
+  closeResults();
+  if (!q) return;
+  const seq = searchSeq;
+  const controller = new AbortController();
+  searchController = controller;
+  searchTimer = setTimeout(async () => {
+    try {
+      const res = await api.search(q, undefined, { limit: 8, signal: controller.signal });
+      if (seq !== searchSeq) return;
+      const { teams, donors, exact_donor: exactDonor, exact_team: exactTeam } = res.data;
+      clear(results);
+      activeIdx = -1;
 
-    donors.forEach((d, i) => {
-      results.append(resultRow('Donor', d.name, d.points_total,
-        `/donors/${encodeURIComponent(d.name)}`, i === 0 && exactDonor));
-    });
-    teams.forEach((t, i) => {
-      results.append(resultRow('Team', t.name, t.points_total,
-        `/teams/${t.team_id}`, i === 0 && exactTeam));
-    });
-    if (!donors.length && !teams.length) {
-      results.append(el('div.search-empty',
-        el('div', tr('Nothing matches “{0}”.', q)),
-        el('div', { style: 'margin-top:4px;font-size:12px' },
-          'Try fewer characters, or a numeric team ID.')));
+      donors.forEach((d, i) => {
+        results.append(resultRow('Donor', d.name, d.points_total,
+          `/donors/${encodeURIComponent(d.name)}`, i === 0 && exactDonor));
+      });
+      teams.forEach((t, i) => {
+        results.append(resultRow('Team', t.name, t.points_total,
+          `/teams/${t.team_id}`, i === 0 && exactTeam));
+      });
+      if (!donors.length && !teams.length) {
+        results.append(el('div.search-empty',
+          el('div', tr('Nothing matches “{0}”.', q)),
+          el('div', { style: 'margin-top:4px;font-size:12px' },
+            'Try fewer characters, or a numeric team ID.')));
+      }
+    } catch {
+      if (seq === searchSeq) closeResults();
     }
-  } catch {
-    closeResults();
-  }
-}, 130);
+  }, 130);
+}
 
 function resultRow(kind, name, points, href, exact) {
   const nameEl = el('span');
@@ -461,9 +464,4 @@ try {
   // Private mode, or storage full. Revalidating once is the safe way to fail.
   staleBundle = true;
 }
-if (staleBundle) {
-  setCacheMode('reload');
-  render().finally(() => setCacheMode('default'));
-} else {
-  render();
-}
+render({ quiet: staleBundle });

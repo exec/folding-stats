@@ -110,6 +110,7 @@ class Chart {
   }
 
   render(data, meta) {
+    if (this.destroyed) return;
     this.data = data;
     this.meta = meta;
     this.destroyPlot();
@@ -138,6 +139,7 @@ class Chart {
   }
 
   destroy() {
+    this.destroyed = true;
     this.destroyPlot();
     this.ro.disconnect();
     document.removeEventListener('themechange', this.onTheme);

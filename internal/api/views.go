@@ -355,7 +355,7 @@ func (s *Snapshot) rosterValue(slot int32, k rank.SortKey) int64 {
 }
 
 // orderRoster returns the slots at positions [lo, hi) of a team's roster ordered by
-// key, and how many members the ordering covers.
+// key. The result may alias slots and must not be modified.
 //
 // Sorting a roster outright is not affordable on the largest team: 882,940 members
 // costs 13ms, against a 0.11ms median, on a route anyone can request. But of 2.1M
@@ -368,10 +368,16 @@ func (s *Snapshot) rosterValue(slot int32, k rank.SortKey) int64 {
 // sorted head and touches nothing else; only a page reaching past it walks the roster,
 // and then only to skip what is already above.
 func (s *Snapshot) orderRoster(slots []int32, k rank.SortKey, activeOnly bool, lo, hi int) []int32 {
+	if lo == hi {
+		return nil
+	}
+	if k == rank.Lifetime && !activeOnly {
+		return slots[lo:hi]
+	}
 	keep := func(slot int32) bool { return !activeOnly || s.Members.Last7d(slot) > 0 }
 
-	// Lifetime is the order the roster is already stored in.
-	if k == rank.Lifetime {
+	// Small filtered rosters are cheaper to scan than to memoize.
+	if k == rank.Lifetime && (s.rosters == nil || len(slots) < rosterCacheMin) {
 		out := make([]int32, 0, hi-lo)
 		seen := 0
 		for _, slot := range slots {
@@ -389,6 +395,9 @@ func (s *Snapshot) orderRoster(slots []int32, k rank.SortKey, activeOnly bool, l
 	}
 
 	head := s.rosterHead(slots, k, activeOnly, keep)
+	if k == rank.Lifetime {
+		return head[min(lo, len(head)):min(hi, len(head))]
+	}
 
 	out := make([]int32, 0, hi-lo)
 	for i := lo; i < hi && i < len(head); i++ {
@@ -442,8 +451,8 @@ const (
 	rosterCacheMax = 256
 )
 
-// rosterHead returns the members of a roster that rank on this column, ordered, and
-// remembers the answer for the life of the snapshot.
+// rosterHead remembers the ordered nonzero head, or the whole filtered lifetime
+// order, for the life of the snapshot.
 //
 // Building it means touching every member of the team: 882,940 of them on the largest,
 // which measured 5.9ms against a 0.06ms baseline — the slowest thing any anonymous
@@ -465,13 +474,15 @@ func (s *Snapshot) rosterHead(slots []int32, k rank.SortKey, activeOnly bool, ke
 			if !keep(slot) {
 				continue
 			}
-			if s.rosterRanks(slot, k) {
+			if k == rank.Lifetime || s.rosterRanks(slot, k) {
 				head = append(head, scored{slot, s.rosterValue(slot, k)})
 			}
 		}
 		// Stable, so members tied on the column keep lifetime order rather than an
 		// arbitrary one that reshuffles between cycles for no reason.
-		sort.SliceStable(head, func(a, b int) bool { return head[a].v > head[b].v })
+		if k != rank.Lifetime {
+			sort.SliceStable(head, func(a, b int) bool { return head[a].v > head[b].v })
+		}
 		out := make([]int32, len(head))
 		for i, h := range head {
 			out[i] = h.slot

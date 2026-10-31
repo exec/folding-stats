@@ -46,6 +46,22 @@ func (s *Server) Publish(snap *Snapshot) { s.snap.Store(snap) }
 // Current returns the published snapshot, or nil.
 func (s *Server) Current() *Snapshot { return s.snap.Load() }
 
+// lockSnapshot returns a snapshot with its live state locked for reading.
+// A reader queued behind ingest must adopt the snapshot published before unlock.
+func (s *Server) lockSnapshot() *Snapshot {
+	for {
+		snap := s.snap.Load()
+		if snap == nil || snap.Guard == nil {
+			return snap
+		}
+		snap.Guard.RLock()
+		if s.snap.Load() == snap {
+			return snap
+		}
+		snap.Guard.RUnlock()
+	}
+}
+
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/status", s.handle(s.status))
 	s.mux.HandleFunc("GET /v1/summary", s.handle(s.summary))
@@ -148,12 +164,18 @@ func (s *Server) handle(fn handlerFunc, allowed ...string) http.HandlerFunc {
 			writeAPIErrorFor(w, r, err)
 			return
 		}
-		snap := s.snap.Load()
+		snap := s.lockSnapshot()
 		if snap == nil {
 			writeError(w, http.StatusServiceUnavailable, "no_data",
 				"no snapshot has been ingested yet")
 			return
 		}
+		guard := snap.Guard
+		defer func() {
+			if guard != nil {
+				guard.RUnlock()
+			}
+		}()
 
 		// Data is immutable between cycles, so a conditional request can be
 		// answered without touching any of it.
@@ -191,6 +213,10 @@ func (s *Server) handle(fn handlerFunc, allowed ...string) http.HandlerFunc {
 		w.Header().Set("Cache-Control", cacheControl(snap, r.URL.Path))
 		w.Header().Set("Vary", "Accept-Encoding")
 		if r.URL.Path != "/v1/status" && matchesETag(r, etag) {
+			if guard != nil {
+				guard.RUnlock()
+				guard = nil
+			}
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
@@ -212,24 +238,17 @@ func (s *Server) handle(fn handlerFunc, allowed ...string) http.HandlerFunc {
 		// allocates its own string, so nothing in `data` points back into the arena or
 		// the windows. warmingUp is the one straggler — it reads the live window — so
 		// it is evaluated here rather than in the Envelope literal below.
-		var (
-			data       any
-			page       *PageInfo
-			warm       *WarmingUp
-			previousAt time.Time
-			err        error
-		)
-		func() {
-			if snap.Guard != nil {
-				snap.Guard.RLock()
-				defer snap.Guard.RUnlock()
-			}
-			if data, page, err = fn(snap, r); err != nil {
-				return
-			}
+		data, page, err := fn(snap, r)
+		var warm *WarmingUp
+		var previousAt time.Time
+		if err == nil {
 			warm = warmingUp(snap)
 			previousAt = snap.PreviousAt()
-		}()
+		}
+		if guard != nil {
+			guard.RUnlock()
+			guard = nil
+		}
 		if err != nil {
 			writeAPIErrorFor(w, r, err)
 			return

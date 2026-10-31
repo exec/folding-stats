@@ -693,6 +693,60 @@ func TestReplayFromScratchNeedsTotalsCleared(t *testing.T) {
 	}
 }
 
+func TestProductionFromZeroSurvivesRestart(t *testing.T) {
+	s := open(t)
+	st := model.NewState()
+	writeCycle(t, s, st, at(1), teams(parse.TeamRow{ID: 32, Name: "oc"}),
+		users(parse.UserRow{Name: "DH", TeamID: 32}))
+	st = model.NewState()
+	if err := s.LoadIdentity(context.Background(), st); err != nil {
+		t.Fatal(err)
+	}
+	c := writeCycle(t, s, st, at(2), teams(parse.TeamRow{ID: 32, Name: "oc", Score: 100, WUs: 1}),
+		users(parse.UserRow{Name: "DH", TeamID: 32, Score: 100, WUs: 1}))
+	if len(c.MemberDeltas) != 1 || len(c.TeamDeltas) != 1 {
+		t.Fatalf("production from restored zero baseline missing: %+v", c)
+	}
+	restored := model.NewState()
+	if err := s.LoadIdentity(context.Background(), restored); err != nil {
+		t.Fatal(err)
+	}
+	if restored.Members[0].Score != 100 || restored.Teams[0].Score != 100 ||
+		restored.Members[0].WUs != 1 || restored.Teams[0].WUs != 1 {
+		t.Fatal("production from zero was not persisted")
+	}
+	ds, err := s.DeltasSince(context.Background(), at(1))
+	if err != nil || len(ds) != 2 || len(ds[1].Members) != 1 || len(ds[1].Teams) != 1 ||
+		ds[1].Members[0].DScore != 100 || ds[1].Teams[0].DScore != 100 {
+		t.Fatalf("stored production = %+v, err %v", ds, err)
+	}
+}
+
+func TestTeamRenamesSurviveRestartWithoutInventingProduction(t *testing.T) {
+	s := open(t)
+	st := model.NewState()
+	for i, tc := range []struct {
+		name  string
+		score int64
+	}{{"old", 100}, {"new", 200}, {"name only", 200}} {
+		c := writeCycle(t, s, st, at(i+1), teams(parse.TeamRow{ID: 32, Name: tc.name, Score: tc.score}), nil)
+		if i == 0 && len(c.RenamedTeams) != 0 || i > 0 && len(c.RenamedTeams) != 1 {
+			t.Fatalf("cycle %d rename slots = %v", i, c.RenamedTeams)
+		}
+		if i == 2 && len(c.TeamDeltas) != 0 {
+			t.Fatalf("name-only change invented production: %+v", c.TeamDeltas)
+		}
+		st = model.NewState()
+		if err := s.LoadIdentity(context.Background(), st); err != nil {
+			t.Fatal(err)
+		}
+		if len(st.Teams) != 1 || st.Teams[0].ID != 32 || st.Teams[0].Score != tc.score ||
+			st.Names.Name(st.Teams[0].NameID) != tc.name {
+			t.Fatalf("cycle %d restored team = %+v, want name %q and score %d", i, st.Teams, tc.name, tc.score)
+		}
+	}
+}
+
 func TestCompactStillPrunesWithoutLosingRollups(t *testing.T) {
 	// Compaction now only prunes. The buckets written at ingest must survive it.
 	s := open(t)

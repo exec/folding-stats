@@ -23,25 +23,28 @@ func (s *Server) badge(w http.ResponseWriter, r *http.Request) {
 		writeAPIErrorFor(w, r, err)
 		return
 	}
-	snap := s.snap.Load()
-	if snap == nil {
-		writeErrorFor(w, r, http.StatusServiceUnavailable, "no_data", "no snapshot has been ingested yet")
-		return
-	}
 	kind, err := insightKind(r.PathValue("kind"))
 	if err != nil {
 		writeAPIErrorFor(w, r, err)
 		return
 	}
 
+	var snap *Snapshot
 	var entity InsightEntity
 	func() {
+		snap = s.lockSnapshot()
+		if snap == nil {
+			return
+		}
 		if snap.Guard != nil {
-			snap.Guard.RLock()
 			defer snap.Guard.RUnlock()
 		}
 		entity, err = snap.insightEntity(kind, r.PathValue("ref"))
 	}()
+	if snap == nil {
+		writeErrorFor(w, r, http.StatusServiceUnavailable, "no_data", "no snapshot has been ingested yet")
+		return
+	}
 	if err != nil {
 		writeAPIErrorFor(w, r, err)
 		return

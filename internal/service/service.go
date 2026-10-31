@@ -91,11 +91,6 @@ type Service struct {
 	// guard serialises mutation of state and the windows against API reads, which
 	// serve directly from those structures rather than from a copy.
 	guard sync.RWMutex
-	// publishMu serialises publishes against each other. Ingest and the periodic
-	// refresh both call publish from their own goroutines, and guard is held for
-	// reading there — which admits concurrent holders and so cannot protect the
-	// table cache from being written twice.
-	publishMu sync.Mutex
 }
 
 var (
@@ -245,9 +240,12 @@ func pairSnapshots(teams, users []feed.Snapshot) []snapshotPair {
 	return out
 }
 
-// Ingest applies every archived cycle that has not been applied yet, oldest first,
+// Ingest applies archived cycles newer than the live state, oldest first,
 // and publishes the resulting view. Returns the number of cycles applied.
 func (s *Service) Ingest(ctx context.Context) (int, error) {
+	// State, persisted deltas, windows and rankings become visible together.
+	s.guard.Lock()
+	defer s.guard.Unlock()
 	if s.ingestErr != nil {
 		return 0, s.ingestErr
 	}
@@ -270,7 +268,9 @@ func (s *Service) Ingest(ctx context.Context) (int, error) {
 
 	var n int
 	for _, p := range pairSnapshots(teams, users) {
-		if s.applied[p.at.Unix()] {
+		// Late arrivals need an ordered replay; applying one here rewinds totals
+		// while the rolling windows and stored latest cycle remain ahead.
+		if !p.at.After(s.state.At) || s.applied[p.at.Unix()] {
 			continue
 		}
 		if err := s.applyCycle(ctx, p); err != nil {
@@ -278,6 +278,7 @@ func (s *Service) Ingest(ctx context.Context) (int, error) {
 			// not be silently forgotten.
 			s.Log.Error("cycle failed", "at", p.at.Format(time.RFC3339), "err", err)
 			if s.ingestErr != nil {
+				s.Server.Publish(nil)
 				return n, s.ingestErr
 			}
 			continue
@@ -347,9 +348,7 @@ func (s *Service) applyCycle(ctx context.Context, p snapshotPair) error {
 		return fmt.Errorf("rejecting unsafe snapshot: %w", err)
 	}
 
-	s.guard.Lock()
 	cycle := s.state.Apply(p.at, teamRows, userRows)
-	s.guard.Unlock()
 	// Unreachable while the ValidateSnapshot above runs on the same rows, and checked
 	// anyway: cycle is dereferenced a few lines down and again by the windows, so if
 	// the two checks ever drift apart the symptom is a panic in the ingest loop rather
@@ -386,12 +385,10 @@ func (s *Service) applyCycle(ctx context.Context, p snapshotPair) error {
 		return s.ingestErr
 	}
 
-	s.guard.Lock()
 	s.memberWin.Grow(len(s.state.Members))
 	s.memberWin.Push(p.at, cycle.MemberDeltas)
 	s.teamWin.Grow(len(s.state.Teams))
 	s.teamWin.Push(p.at, cycle.TeamDeltas)
-	s.guard.Unlock()
 
 	s.Log.Info("cycle applied",
 		"at", p.at.Format(time.RFC3339),
@@ -437,29 +434,15 @@ func (s *Service) warnRegressions(c *model.Cycle) {
 
 // publish rebuilds the ranked view when the corpus has moved, and swaps it in.
 //
-// Only ingest calls this, and only after the cycle's deltas have reached the windows.
-// That ordering is load-bearing rather than incidental: applyCycle advances state.At
-// under one lock and pushes the deltas under a later one, so anything publishing
-// between the two builds a table from windows that do not yet hold the cycle — and
-// caches it under the new state.At, so ingest's own publish then finds a matching key
-// and keeps the stale table for the rest of the cycle. Every rate ordering and every
-// rank_change_24h would be a cycle behind.
+// Only Ingest calls this, holding guard until the new snapshot is published.
 //
-// A periodic Refresh used to do exactly that. It was removed rather than fixed: it
+// A periodic Refresh was removed because it
 // republished a byte-identical snapshot every five minutes, because everything it
 // could have changed — staleness above all — is computed per request from the live
 // structures instead. If a future field ever does need to age, compute it in the
 // handler the way Stale is, rather than reintroducing a second publisher here.
 func (s *Service) publish() {
 	start := time.Now()
-
-	s.publishMu.Lock()
-	defer s.publishMu.Unlock()
-
-	// Read lock: building the ranked view only reads state, but it must not run
-	// while a cycle is mutating it.
-	s.guard.RLock()
-	defer s.guard.RUnlock()
 
 	// Bracket the build: the old table is still referenced by s.tbl throughout, so
 	// this is the one window where two of them are reachable at once.
@@ -509,15 +492,12 @@ func (s *Service) publish() {
 	snap.Interval = s.cadence.Interval()
 	snap.IntervalMeasured = s.cadence.Measured()
 
-	// Aggregate the project history now rather than per request. This runs under the
-	// read lock, which the queries do not need — but it costs about 5ms once an hour
-	// against an ingest that already holds the write lock for ~1.3s, so splitting the
-	// lock to save it would buy nothing and add a second place state can be read.
+	// Aggregate history before publication so its cache matches the committed cycle.
 	//
 	// Failure is logged, not fatal: the snapshot serves correctly without the cache,
 	// and refusing to publish a good snapshot because an optimisation failed would
 	// turn a slow endpoint into an outage.
-	// Bounded, because this holds the read lock: a query that never returns would
+	// Bounded, because this holds the ingest lock: a query that never returns would
 	// block every future ingest rather than just this optimisation.
 	warmCtx, cancelWarm := context.WithTimeout(context.Background(), cycleWriteTimeout)
 	if err := snap.WarmProjectHistory(warmCtx); err != nil {
@@ -598,9 +578,7 @@ func (s *Service) refreshMonthTotals(ctx context.Context) {
 		s.Log.Warn("month totals: members", "err", err)
 		return
 	}
-	s.guard.Lock()
 	s.teamMonth, s.memberMonth = teamMonth, memberMonth
-	s.guard.Unlock()
 }
 
 // observeCadence refreshes the publish-interval estimate from the stored cycles.

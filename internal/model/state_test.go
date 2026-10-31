@@ -76,6 +76,45 @@ func TestSecondCycleProducesDelta(t *testing.T) {
 	}
 }
 
+func TestZeroTotalsRemainAnObservedBaseline(t *testing.T) {
+	s := NewState()
+	for i, tc := range []struct{ score, wus, delta, deltaWUs int64 }{
+		{0, 0, 0, 0}, {0, 0, 0, 0}, {100, 2, 100, 2},
+		{0, 0, -100, -2}, {0, 1, 0, 1}, {50, 1, 50, 0},
+	} {
+		c := s.Apply(t0().Add(time.Duration(i)*time.Hour),
+			teams(parse.TeamRow{ID: 32, Name: "oc", Score: tc.score, WUs: tc.wus}),
+			users(parse.UserRow{Name: "DH", TeamID: 32, Score: tc.score, WUs: tc.wus}))
+		for _, ds := range [][]Delta{c.MemberDeltas, c.TeamDeltas} {
+			if tc.delta == 0 && tc.deltaWUs == 0 {
+				if len(ds) != 0 {
+					t.Fatalf("cycle %d: unexpected deltas %+v", i, ds)
+				}
+			} else if len(ds) != 1 || ds[0].DScore != tc.delta || ds[0].DWUs != tc.deltaWUs {
+				t.Fatalf("cycle %d: deltas %+v, want %d points and %d WUs", i, ds, tc.delta, tc.deltaWUs)
+			}
+		}
+	}
+}
+
+func TestResetTotalsForgetsBaselinesButKeepsFutureIdentity(t *testing.T) {
+	s := NewState()
+	for _, id := range []int32{1, 2} {
+		s.AppendTeam(id, s.Names.Intern(fmt.Sprint(id)))
+		s.AppendMember(s.Names.Intern(fmt.Sprint(id)), id)
+	}
+	s.ResetTotals()
+	s.Apply(t0(), teams(parse.TeamRow{ID: 1, Name: "1"}), users(parse.UserRow{Name: "1", TeamID: 1}))
+	c := s.Apply(t0().Add(time.Hour),
+		teams(parse.TeamRow{ID: 1, Name: "1", Score: 100}, parse.TeamRow{ID: 2, Name: "2", Score: 500}),
+		users(parse.UserRow{Name: "1", TeamID: 1, Score: 100}, parse.UserRow{Name: "2", TeamID: 2, Score: 500}))
+	for _, ds := range [][]Delta{c.MemberDeltas, c.TeamDeltas} {
+		if len(ds) != 1 || ds[0].ID != 0 || ds[0].DScore != 100 {
+			t.Fatalf("replayed deltas = %+v, want only the observed entity's 100 points", ds)
+		}
+	}
+}
+
 func TestIdleMembersProduceNoDelta(t *testing.T) {
 	s := NewState()
 	in := users(

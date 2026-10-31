@@ -333,13 +333,16 @@ function rivalsCard(load, kind, { href, onPage } = {}) {
   const node = href
     ? cardWith('Rivals', el('a.section-link', { href }, 'Open ↗'), body)
     : card('Rivals', body);
+  let loadSeq = 0;
 
-  async function go(page) {
+  async function go(page, initial) {
+    const seq = ++loadSeq;
     // The old rows stay while the next page loads, for the same reason the
     // leaderboard tabs do: a skeleton here collapses the card and springs it back.
     body.classList.add('swapping');
     try {
-      const res = await load({ page, per_page: RIVALS_PER_PAGE });
+      const res = initial || await load({ page, per_page: RIVALS_PER_PAGE });
+      if (seq !== loadSeq) return;
       const d = res.data;
       clear(body).append(
         rivalsTable(d, kind),
@@ -352,11 +355,12 @@ function rivalsCard(load, kind, { href, onPage } = {}) {
           'Nobody folds at a constant rate, so treat these as “about when”, not a date. ',
           tr('Anything further out than {0} years is reported as not closing.', Math.round(d.horizon_days / 365))));
     } catch (err) {
+      if (seq !== loadSeq) return;
       console.warn('rivals: could not load', err);
       clear(body).append(el('div.card-body',
         el('div.muted', tr('Couldn’t load rivals — {0}', err?.message || err))));
     } finally {
-      body.classList.remove('swapping');
+      if (seq === loadSeq) body.classList.remove('swapping');
     }
   }
 
@@ -937,6 +941,10 @@ function historyCard(title, fetcher) {
   let rate = 'total';
   let shape = 'lines';
   let exported = null;
+  let requestKey = null;
+  let request = null;
+  let series = {};
+  let loadSeq = 0;
 
   const controls = el('div.chart-toolbar');
   const noteEl = el('div.chart-note', chartNote(granularity, rate));
@@ -947,14 +955,12 @@ function historyCard(title, fetcher) {
     const effective = shape === 'heatmap' ? 'daily' : granularity;
     clear(controls).append(segmented(HISTORY_SHAPES, shape, (v) => {
       shape = v;
-      exported = null;
-      renderControls();
       load();
     }));
     if (shape !== 'heatmap') {
       controls.append(
-        segmented(GRANULARITIES, granularity, (v) => { granularity = v; exported = null; renderControls(); load(); }),
-        segmented(RATES, rate, (v) => { rate = v; renderControls(); load(); })
+        segmented(GRANULARITIES, granularity, (v) => { granularity = v; load(); }),
+        segmented(RATES, rate, (v) => { rate = v; load(); })
       );
     }
     if (effective !== 'hourly' && exported?.granularity === effective) {
@@ -965,6 +971,7 @@ function historyCard(title, fetcher) {
   }
 
   async function load() {
+    const seq = ++loadSeq;
     const effective = shape === 'heatmap' ? 'daily' : granularity;
     noteEl.textContent = t(shape === 'heatmap'
       ? 'Each square is one UTC day. Records use the retained daily history; hourly rows are not involved.'
@@ -975,7 +982,17 @@ function historyCard(title, fetcher) {
         params.from = new Date(snapshotMs() - 5 * 365 * DAY_MS).toISOString();
         params.to = new Date(snapshotMs()).toISOString();
       }
-      const res = await fetcher(params);
+      const key = JSON.stringify([snapshot()?.at, params]);
+      if (key !== requestKey) {
+        requestKey = key;
+        exported = null;
+        series = {};
+        // Sharing the promise also avoids duplicate requests while history is loading.
+        request = fetcher(params);
+      }
+      renderControls();
+      const res = await request;
+      if (seq !== loadSeq) return;
       const pts = res.data.points || [];
       exported = res.data;
       renderControls();
@@ -992,20 +1009,22 @@ function historyCard(title, fetcher) {
         return;
       }
       clear(visual).append(plotEl);
-      const dense = densify(pts, granularity, { ...chartSpan(), perDay: rate === 'per-day' });
-      const xs = dense.map((p) => Math.floor(Date.parse(p.at) / 1000));
-      const ys = dense.map((p) => p.points);
-      chart.render([xs, ys], { granularity, perDay: rate === 'per-day', shape });
+      if (!series[rate]) {
+        const dense = densify(pts, granularity, { ...chartSpan(), perDay: rate === 'per-day' });
+        series[rate] = [dense.map((p) => Math.floor(Date.parse(p.at) / 1000)), dense.map((p) => p.points)];
+      }
+      chart.render(series[rate], { granularity, perDay: rate === 'per-day', shape });
     } catch (err) {
+      if (seq !== loadSeq) return;
+      requestKey = null;
       chart.render(null);
       clear(visual).append(plotEl);
       clear(legendEl).append(el('div.error', { style: 'padding:40px 0' }, err.message));
     }
   }
 
-  renderControls();
   load();
-  return { node, destroy: () => chart.destroy() };
+  return { node, destroy: () => { loadSeq++; chart.destroy(); } };
 }
 
 /**
@@ -1375,6 +1394,7 @@ async function teamMembersCard(teamID, nav) {
   let page = 1;
   let activeOnly = false;
   let sort = 'lifetime';
+  let loadSeq = 0;
   const body = el('div');
   const controls = el('div.chart-toolbar');
   const node = cardWith('Members', controls, body);
@@ -1397,6 +1417,7 @@ async function teamMembersCard(teamID, nav) {
   }
 
   async function load() {
+    const seq = ++loadSeq;
     clear(body).append(el('div', { style: 'padding:24px' }, el('div.skeleton', { style: 'height:180px' })));
     renderControls();
     try {
@@ -1404,6 +1425,7 @@ async function teamMembersCard(teamID, nav) {
         page, per_page: PER_PAGE, active_only: activeOnly ? 'true' : undefined,
         sort: sort === 'lifetime' ? undefined : sort,
       });
+      if (seq !== loadSeq) return;
       clear(body);
       if (!res.data.length) {
         body.append(el('div.empty', activeOnly ? tr('No members produced in the last {0}.', activeWindow()) : 'No members.'));
@@ -1421,6 +1443,7 @@ async function teamMembersCard(teamID, nav) {
         load();
       }));
     } catch (err) {
+      if (seq !== loadSeq) return;
       clear(body).append(el('div.error', err.message));
     }
   }
@@ -1626,6 +1649,27 @@ function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyD
   let shape = 'stacked';
   let selected = 'all';
   let chart = null;
+  let loadSeq = 0;
+  let disposed = false;
+  let historyAt;
+  const histories = new Map();
+
+  function historyFor(key) {
+    const at = snapshot()?.at;
+    if (at !== historyAt) {
+      histories.clear();
+      historyAt = at;
+    }
+    const cacheKey = JSON.stringify([granularity, key]);
+    if (!histories.has(cacheKey)) {
+      const request = fetchFor(key, { granularity }).catch((err) => {
+        if (histories.get(cacheKey) === request) histories.delete(cacheKey);
+        throw err;
+      });
+      histories.set(cacheKey, request);
+    }
+    return histories.get(cacheKey);
+  }
 
   const noteEl = el('div.chart-note', chartNote(granularity, rate));
   const body = el('div.card-body', { style: 'padding:0' }, tabs, legendEl, plotEl, noteEl);
@@ -1676,7 +1720,13 @@ function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyD
     // overlaid are the same picture, and a control that changes nothing is worse
     // than no control at all.
     if (bands > 1) {
-      controls.append(segmented(SHAPES, shape, (v) => { shape = v; load(); }));
+      controls.append(segmented(SHAPES, shape, (v) => {
+        shape = v;
+        if (drawn && historyAt === snapshot()?.at) {
+          renderControls(bands);
+          draw();
+        } else load();
+      }));
     }
   }
 
@@ -1686,7 +1736,7 @@ function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyD
   let drawn = null;
 
   function draw() {
-    if (!drawn) return;
+    if (disposed || !drawn) return;
     const keep = drawn.labels.map((l) => !hidden.has(l));
     // Never hide everything: an empty chart is not a view of anything, and the way
     // back is the legend that just disappeared with it.
@@ -1705,8 +1755,7 @@ function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyD
         draw();
       });
 
-    if (chart) chart.destroy();
-    chart = seriesChart(plotEl);
+    if (!chart) chart = seriesChart(plotEl);
     // Re-stacked from the visible rows, not merely hidden. The stored values are
     // cumulative, so dropping a middle band from a finished stack would leave every
     // band above it still carrying its contribution.
@@ -1729,10 +1778,13 @@ function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyD
   };
 
   async function load() {
+    if (disposed) return;
+    const seq = ++loadSeq;
     renderTabs();
     renderControls(selected === 'all' ? shown.length : 1);
     noteEl.textContent = t(chartNote(granularity, rate));
     if (chart) chart.destroy();
+    chart = null;
     clear(legendEl);
     drawn = null;
 
@@ -1749,7 +1801,8 @@ function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyD
       // which reads as far more emphatic than the data warrants.
       if (selected === 'all' && shown.length === 1) {
         const only = shown[0];
-        const res = await fetchFor(only.key, { granularity });
+        const res = await historyFor(only.key);
+        if (seq !== loadSeq) return;
         one(res.data.points || [], only.label, perDay, false);
         return;
       }
@@ -1759,9 +1812,10 @@ function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyD
         // stacked below, and a stack is only meaningful if every band is in the same
         // unit. Doing it once here is the only way that stays true down every branch.
         const fetched = await Promise.all(shown.map(async (c) => {
-          const pts = (await fetchFor(c.key, { granularity })).data.points || [];
+          const pts = (await historyFor(c.key)).data.points || [];
           return { c, points: perDay ? perDayPoints(pts, granularity, win.until, win.since) : pts };
         }));
+        if (seq !== loadSeq) return;
 
         // A contributor that produced nothing *in this window* gets no band, no legend
         // entry and no tooltip row. Selecting series by the recent figure is wrong as
@@ -1798,7 +1852,8 @@ function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyD
           // Everything past the slot count, as one band — but only if it actually
           // produced in this window.
           const others = await Promise.all(
-            rest.slice(0, 8).map((c) => fetchFor(c.key, { granularity })));
+            rest.slice(0, 8).map((c) => historyFor(c.key)));
+          if (seq !== loadSeq) return;
           const arr = new Array(times.length).fill(0);
           for (const r of others) {
             const pts = r.data.points || [];
@@ -1827,10 +1882,12 @@ function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyD
         };
         draw();
       } else {
-        const res = await fetchFor(selected, { granularity });
+        const res = await historyFor(selected);
+        if (seq !== loadSeq) return;
         one(res.data.points || [], undefined, perDay, false);
       }
     } catch (err) {
+      if (seq !== loadSeq) return;
       legendEl.append(el('div.error', { style: 'padding:40px 0' }, err.message));
     }
   }
@@ -1839,6 +1896,7 @@ function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyD
     if (refresh) {
       try {
         const fresh = await refresh(producers);
+        if (disposed) return;
         if (fresh && fresh.length) setSeries(fresh);
       } catch {
         // Fall back to whatever we started with; a worse ordering, not a broken one.
@@ -1846,7 +1904,11 @@ function contributionCard({ title, noun, items, total, fetchFor, refresh, emptyD
     }
     load();
   })();
-  return { node, destroy: () => chart && chart.destroy() };
+  return { node, destroy: () => {
+    disposed = true;
+    loadSeq++;
+    if (chart) chart.destroy();
+  } };
 }
 
 /** A donor's production, split across the teams they fold for. */
@@ -2326,10 +2388,16 @@ export async function rivalsPage(view, { kind, id, page, teamID }, nav) {
     // looking at — the whole reason this exists as a page and not only a card.
     const base = `${back}/rivals`;
     const c = rivalsCard(load, kind, {
-      onPage: (p) => history.replaceState(null, '', p > 1 ? `${base}?page=${p}` : base),
+      onPage: (p) => {
+        const params = new URLSearchParams();
+        if (p > 1) params.set('page', p);
+        if (teamID) params.set('team_id', teamID);
+        const query = params.toString();
+        history.replaceState(null, '', base + (query ? `?${query}` : ''));
+      },
     });
     view.append(el('section.section', c.node));
-    await c.go(page);
+    await c.go(page, res);
   } catch (err) {
     errorView(view, err);
   }

@@ -82,6 +82,26 @@ func TestMCPHandshake(t *testing.T) {
 	}
 }
 
+func TestSearchKeepsLowRankedExactDonorAcrossRESTAndMCP(t *testing.T) {
+	state := model.NewState()
+	state.Apply(at(1), nil, []parse.UserRow{u("abc", 1, 1), u("abcd", 100, 1)})
+	mw, tw := metrics.New(len(state.Members)), metrics.New(0)
+	mw.Push(at(1), nil)
+	tw.Push(at(1), nil)
+	tbl := rank.Build(state, at(1), rank.DefaultConfig)
+	srv := NewServer()
+	srv.Publish(Build(state, mw, tw, tbl, nil, at(1), at(2), "search"))
+	_, env := get(t, srv, "/v1/search?q=abc&type=donor&limit=1")
+	res := decode[SearchResults](t, env.Data)
+	if len(res.Donors) != 1 || res.Donors[0].Name != "abc" || !res.ExactDonor {
+		t.Fatalf("REST search = %+v, want the exact donor", res)
+	}
+	text := mcpText(t, srv, "search", `{"query":"abc","limit":1}`)
+	if !strings.Contains(text, "  abc  ") || strings.Contains(text, "  abcd  ") {
+		t.Fatalf("MCP lost the exact donor: %s", text)
+	}
+}
+
 // TestMCPToolsAreWellFormed guards the contract a model reads before it can call
 // anything. A tool with no description or a malformed schema is not a broken call —
 // it is a tool the model declines to use, or uses wrongly, with no error anywhere.

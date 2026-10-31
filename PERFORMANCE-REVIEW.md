@@ -1,10 +1,143 @@
+**Final validation — 31 October 2026**
+
+The measured comparison below uses the earliest compatible revision in this
+repository, `d699cfb` (3 August 2026), and the current working tree. Both binaries
+served copies of the same SQLite snapshot on this Apple M3 Pro with Go 1.26.4.
+These results supersede the untested-area statements in the historical notes below.
+
+| Measurement | Earliest revision | Current | Change |
+| --- | ---: | ---: | ---: |
+| Mixed HTTP throughput | 15,618 req/s | 46,408 req/s | 2.97× higher |
+| Mixed HTTP p50 | 0.38 ms | 0.30 ms | 21% lower |
+| Mixed HTTP p99 | 14.31 ms | 1.15 ms | 92% lower |
+| Search p50 | 12.83 ms | 0.16 ms | 80× faster |
+| Search p99 | 21.52 ms | 0.74 ms | 29× faster |
+
+Values are medians of three trials per version, alternating order. Each trial had
+16 concurrent workers, a three-second warmup, and ten measured seconds. The existing
+load-test endpoint weights were retained; both versions used the same fixed list of
+100 teams, 100 donors, largest team 0, and widest donor PS3. The mix covers summary,
+collections and deep pages, detail, rosters, search, and cycle history. All six runs
+had zero HTTP or transport errors. Baseline throughput ranged 15,577–15,645 req/s;
+current throughput ranged 45,629–46,936 req/s. Timing trials ran without other test
+jobs. This is a local closed-loop comparison, not a production capacity ceiling.
+The revisions also differ in features and response sizes, so the gains cannot be
+attributed solely to the latest audit batches.
+
+**Full-corpus and browser checks**
+
+- One real upstream team/user feed pair contained 130,208 teams, 2,722,471 user rows,
+  and 2,125,416 donor names; aggregation produced 2,712,482 memberships. Parser,
+  model, ranking, persistence, and sparse-update corpus tests passed. First Apply
+  took 375 ms with 299.7 MiB live heap; rank construction took 1.245 s. Cold SQLite
+  persistence took 6.717 s, and a 27,219-member changed cycle took 302 ms to apply
+  plus 363 ms to persist. These are current-code checks, not comparative timings.
+- Five archived cycles used that real corpus plus two controlled donors and one
+  team to exercise production from zero and a rename. Restart and clean replay
+  produced exactly equal data and snapshot timestamps across 14 API routes,
+  including summary, detail, histories, active rosters, search, movers, changes,
+  and PS3's large team breakdown. The extra cycles are synthetic temporal changes,
+  not five different upstream snapshots.
+- Chromium 151 passed 17 browser checks with 39 API requests and zero page errors.
+  Checks covered rendered charts, shared history requests, contributor controls,
+  active roster, donor detail, a single initial rivals fetch, superseded navigation,
+  and dismissal of a delayed autocomplete response. The rendered team page was
+  also inspected visually.
+
+**Consistency failure found and fixed during ingest validation**
+
+The full-corpus probe reproduced 146 responses whose old snapshot timestamp
+accompanied newer team totals or donor breakdowns. Applying state, committing
+SQLite, updating windows, building ranks, and publishing now share the ingest
+write lock. Waiting HTTP, MCP, badge, and metadata readers reselect the published
+snapshot after acquiring the read lock. A failed commit withdraws the unsafe
+snapshot until restart. Response writes, including conditional 304 headers, release
+the lock first so a slow client cannot hold up ingest.
+
+The repeat probe sampled 6,160 responses across publication with **zero mixed
+snapshots**. Its p99 was 2.37 ms and its maximum was 2.534 s; observed peak process
+RSS was 1,685 MiB. The corresponding mixed load run completed 23,568 requests with
+zero HTTP errors and 2.02 ms service p99. Requests arriving during publication wait
+for correctness: this pause caused the open-loop generator to issue only 295 of
+its target 300 req/s, leaving 432 requests unissued. That run therefore establishes
+consistency under concurrent requests, not sustained 300 req/s during ingest.
+The observed pause is not an upper bound for larger updates or catch-up replay.
+
+Deterministic regression tests cover readers waiting through a blocked commit,
+failed-commit withdrawal, and releasing the read lock before response writes.
+`go test -race ./... -timeout 120s`, `go vet ./...`, and `git diff --check` pass.
+Raw trial logs, scripts, browser screenshots, corpus output, and equality captures
+are saved locally under `data/validation-2026-10-31/artifacts/` (ignored by Git).
+
+Not checked: production network/CDN behavior, sustained production traffic, or
+repair of an existing deployment's historical gaps. Broad-prefix search still
+ranks a bounded candidate set. No deployment or historical data repair was made.
+
+---
+
 **Performance and code review — 7 September 2026**
 
 Reviewed the HTTP/MCP request paths, rankings and rosters, SQLite history queries,
 ingestion and its request lock, browser loading, and bot/agent connections. Focused
 improvements are implemented in the working tree. No dependencies were added.
 
-**Remaining findings, in priority order**
+**Follow-up — 28 October 2026**
+
+The main bugs in all six findings below are now fixed. Incremental ingest skips
+older archive pairs; explicit baseline flags preserve production from zero through
+restart and replay; team renames are persisted even without production; navigation
+owns its view and cleanup; team search prioritizes exact names before limiting
+results; and history presentation changes reuse fetched and prepared data.
+
+The follow-up also caches large-team MCP activity summaries, exercises the actual
+large-roster cache branch in tests, and prevents obsolete contribution-chart loads
+from recreating charts after cleanup or overwriting a newer selection.
+
+`go test -race ./...`, `go vet ./...`, and `git diff --check` pass. The new regression
+checks fail against the corresponding original code. No production load test,
+live-browser check, or real-corpus replay was run. Existing historical gaps require
+an ordered replay to repair. Broad-prefix search still ranks a bounded candidate
+set; superseded browser requests finish, but their obsolete results are ignored.
+
+**Next batch — 28 October 2026**
+
+- Active-only lifetime roster pages now reuse the existing snapshot cache for large
+  teams. Small teams keep the direct scan. The first cached request builds the
+  filtered order; subsequent pages slice it. With about 883k synthetic memberships
+  and recent producers at the lifetime tail, the paging helper measured about
+  0.55 ms uncached versus 17 ns with a warm cache, with no warm-path allocations.
+  These are helper timings, not HTTP response times.
+- Contribution charts share pending and resolved histories by contributor,
+  granularity, and snapshot. Rate changes reuse responses; shape and legend changes
+  reuse prepared arrays and the chart observer. Failures remain retryable.
+- Roster and rivals controls ignore obsolete responses and errors. Standalone rivals
+  pages reuse the response already fetched for the heading instead of fetching it
+  twice, and paging links retain their team scope.
+
+The full race suite, vet, and whitespace checks pass after this batch. Regression
+checks cover cache reuse and fallback, history invalidation and retry, overlapping
+controls, the single initial rivals request, and scoped paging links. Production
+load, live-browser behavior, and real-corpus replay remain unchecked.
+
+**Search and changes-feed batch — 29 October 2026**
+
+- Live search invalidates results as soon as input changes. It cancels queued and
+  in-flight searches when superseded, cleared, dismissed, or used to navigate; old
+  responses and errors cannot reopen or erase the current dropdown.
+- The shared donor search selects the exact name through the existing identity
+  index before limiting prefix candidates. MCP now preserves low-ranked exact
+  donors, and REST no longer repeats exact-name selection and deduplication.
+- Changes queries now cover `(since, snapshot.at]`. A cycle committed before its
+  snapshot is published cannot leak into an older response, and it becomes visible
+  when that snapshot is published. Both bounds use the existing time index.
+
+Regression tests cover each fix and fail with the corresponding behavior disabled.
+The full race suite, vet, and whitespace checks pass; affected backend race tests
+were repeated after refining the indexed exact-name selection. Production load,
+live-browser behavior, and real-corpus replay remain unchecked. Broad-prefix search
+still uses a bounded candidate set.
+
+**Original findings, in priority order**
 
 1. **P1 — An older archive pair can rewind live statistics.**
    [Service.Ingest](internal/service/service.go) checks whether a timestamp was already

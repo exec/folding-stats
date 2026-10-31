@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -204,12 +203,15 @@ func (s *Server) mcpDispatch(r *http.Request, req mcpRequest) mcpResponse {
 		if err := json.Unmarshal(req.Params, &p); err != nil {
 			return mcpResponse{Error: &mcpError{mcpInvalidParams, err.Error()}}
 		}
-		snap := s.Current()
+		snap := s.lockSnapshot()
 		if snap == nil {
 			return mcpResponse{Result: mcpToolResult{
 				Content: []mcpContent{{Type: "text", Text: "The service is still starting up and has no snapshot yet."}},
 				IsError: true,
 			}}
+		}
+		if snap.Guard != nil {
+			defer snap.Guard.RUnlock()
 		}
 		text, err := s.mcpCall(r, snap, p.Name, p.Arguments)
 		if err != nil {
@@ -529,11 +531,6 @@ func (s *Server) mcpCall(r *http.Request, snap *Snapshot, name string, raw json.
 	teamID, err := a.TeamID.team("team_id")
 	if err != nil {
 		return "", err
-	}
-
-	if snap.Guard != nil {
-		snap.Guard.RLock()
-		defer snap.Guard.RUnlock()
 	}
 
 	switch name {
@@ -1303,9 +1300,7 @@ const surgeRatio = 1.5
 // surface, and until now there was no way to ask for it — not here, and not on any
 // comparable site.
 //
-// One pass over the roster, which is what every roster operation costs. The lists are
-// capped, so a team where five hundred people went quiet reports the largest losses and
-// a count, rather than five hundred lines.
+// Large rosters are classified once per snapshot; freshness is formatted on every call.
 func (s *Snapshot) mcpTeamActivity(id *int32, limit int) (string, error) {
 	if id == nil {
 		return "", fmt.Errorf("team_activity needs a team_id")
@@ -1313,79 +1308,39 @@ func (s *Snapshot) mcpTeamActivity(id *int32, limit int) (string, error) {
 	if _, ok := s.State.TeamSlot(*id); !ok {
 		return "", fmt.Errorf("no team numbered %d", *id)
 	}
-	limit = clampInt(limit, 10, 1, 25)
+	limit = clampInt(limit, 10, 1, maxActivityMembers)
 	slot, _ := s.State.TeamSlot(*id)
 	team := s.teamView(slot)
-	roster := s.Ranks.TeamMembers(*id)
-
-	type entry struct {
-		slot int32
-		by   int64 // what the section is ranked on
-	}
-	var stopped, surging, joined []entry
-	newKnown := false
-
-	for _, m := range roster {
-		last24, last7 := s.Members.Last24h(m), s.Members.Last7d(m)
-		if arrived, ok := s.Ranks.MemberArrivedSince24h(m); ok {
-			newKnown = true
-			if arrived {
-				joined = append(joined, entry{m, s.State.Members[m].Score})
-				// A member who did not exist yesterday has no yesterday to have stopped
-				// or surged against, so they belong in one section only.
-				continue
-			}
-		}
-		switch {
-		case last7 > 0 && last24 == 0:
-			// Ranked by what the team is missing while they are quiet, so the biggest
-			// loss is first rather than the biggest name.
-			stopped = append(stopped, entry{m, last7})
-		case last24 > 0:
-			// Against their own average, not against the team's: the question is
-			// whether this member changed, and a small folder doubling is the same
-			// event as a large one doubling.
-			if rate := s.Members.PointsPerDay(m); rate > 0 && float64(last24) >= surgeRatio*float64(rate) {
-				surging = append(surging, entry{m, last24 - rate})
-			}
-		}
-	}
-
-	byMagnitude := func(e []entry) {
-		sort.Slice(e, func(i, j int) bool { return e[i].by > e[j].by })
-	}
-	byMagnitude(stopped)
-	byMagnitude(surging)
-	byMagnitude(joined)
+	activity := s.teamActivity(*id)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "What changed on %s (team %d)\n", team.Name, team.TeamID)
 	fmt.Fprintf(&b, "%s members, %s produced in the last 7 days.\n",
 		fmtInt(int64(team.MembersTotal)), fmtInt(int64(team.MembersActive)))
 
-	section := func(title, note string, e []entry, show func(int32) string) {
-		if len(e) == 0 {
+	section := func(title, note string, e activityList, show func(int32) string) {
+		if e.total == 0 {
 			return
 		}
-		fmt.Fprintf(&b, "\n%s (%s)", title, fmtInt(int64(len(e))))
-		if len(e) > limit {
+		fmt.Fprintf(&b, "\n%s (%s)", title, fmtInt(int64(e.total)))
+		if e.total > limit {
 			fmt.Fprintf(&b, ", largest %d", limit)
 		}
 		fmt.Fprintf(&b, ":\n%s\n", note)
-		for _, x := range e[:min(limit, len(e))] {
-			b.WriteString(show(x.slot))
+		for _, slot := range e.members[:min(limit, len(e.members))] {
+			b.WriteString(show(slot))
 		}
 	}
 
 	section("Stopped", "  Producing all week, nothing in the last 24 hours.",
-		stopped, func(m int32) string {
+		activity.stopped, func(m int32) string {
 			v := s.memberView(m, false)
 			return fmt.Sprintf("  %-26s %12s over 7 days, %s/day average\n",
 				truncate(v.Name, 26), fmtShort(v.PointsLast7d), fmtShort(v.PointsPerDay7dAvg))
 		})
 
 	section("Producing above their own average", "  Last 24 hours against their seven-day rate.",
-		surging, func(m int32) string {
+		activity.surging, func(m int32) string {
 			v := s.memberView(m, false)
 			mult := float64(v.PointsLast24h) / float64(max64(v.PointsPerDay7dAvg, 1))
 			return fmt.Sprintf("  %-26s %12s in 24h, %.1f× their %s/day average\n",
@@ -1393,24 +1348,24 @@ func (s *Snapshot) mcpTeamActivity(id *int32, limit int) (string, error) {
 		})
 
 	section("Joined", "  First seen on this team within the last 24 hours.",
-		joined, func(m int32) string {
+		activity.joined, func(m int32) string {
 			v := s.memberView(m, false)
 			return fmt.Sprintf("  %-26s arrived with %s points, %s in 24h\n",
 				truncate(v.Name, 26), fmtShort(v.PointsTotal), fmtShort(v.PointsLast24h))
 		})
 
-	if len(stopped) == 0 && len(surging) == 0 && len(joined) == 0 {
+	if activity.stopped.total == 0 && activity.surging.total == 0 && activity.joined.total == 0 {
 		b.WriteString("\nNothing changed: no arrivals, nobody stopped, and nobody is producing\n" +
 			"far above their own average.\n")
 	}
-	if !newKnown {
+	if !activity.newKnown {
 		b.WriteString("\nArrivals are not reported yet — less than 24 hours of history has been\n" +
 			"observed, so there is no earlier roster to compare against.\n")
 	}
 	// A first sighting carries the entity's whole pre-existing lifetime total, which is
 	// production we never saw. Left unsaid, a model reads "arrived with 4.2B points" as
 	// four billion points earned yesterday.
-	if len(joined) > 0 {
+	if activity.joined.total > 0 {
 		b.WriteString("\nA joiner's lifetime total was earned before we first saw them; only the\n" +
 			"24-hour figure is production we actually observed.\n")
 	}

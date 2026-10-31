@@ -57,11 +57,14 @@ const siteSuffix = " — Folding@home Stats"
 // Returns false for anything it has no opinion about, which leaves the shell's own
 // defaults in place — the homepage among them.
 func (s *Server) PageMeta(p string) (PageMeta, bool) {
-	snap := s.snap.Load()
+	snap := s.lockSnapshot()
 	if snap == nil {
 		// Before the first ingest there is nothing true to say about a donor, and a
 		// description invented now would be cached by whoever read it.
 		return PageMeta{}, false
+	}
+	if snap.Guard != nil {
+		defer snap.Guard.RUnlock()
 	}
 
 	switch {
@@ -181,10 +184,6 @@ func (s *Server) PageMeta(p string) (PageMeta, bool) {
 
 // donorMeta describes one donor's page. rest is everything after /donors/.
 func (s *Snapshot) donorMeta(rest string) (PageMeta, bool) {
-	if s.Guard != nil {
-		s.Guard.RLock()
-		defer s.Guard.RUnlock()
-	}
 	name, rivals := strings.CutSuffix(rest, "/rivals")
 	name = strings.TrimSuffix(name, "/")
 	if name == "" {
@@ -233,10 +232,6 @@ func (s *Snapshot) donorMeta(rest string) (PageMeta, bool) {
 
 // teamMeta describes one team's page. rest is everything after /teams/.
 func (s *Snapshot) teamMeta(rest string) (PageMeta, bool) {
-	if s.Guard != nil {
-		s.Guard.RLock()
-		defer s.Guard.RUnlock()
-	}
 	idStr, rivals := strings.CutSuffix(rest, "/rivals")
 	idStr = strings.TrimSuffix(idStr, "/")
 

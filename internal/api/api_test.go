@@ -1704,14 +1704,19 @@ func TestSnapshotSurvivesStateGrowingPastItsTable(t *testing.T) {
 // blockingWriter stalls inside Write, the way a client that stops reading stalls the
 // kernel send buffer.
 type blockingWriter struct {
-	hdr     http.Header
-	started chan struct{}
-	release chan struct{}
-	once    sync.Once
+	hdr         http.Header
+	started     chan struct{}
+	release     chan struct{}
+	once        sync.Once
+	blockHeader bool
 }
 
 func (w *blockingWriter) Header() http.Header { return w.hdr }
-func (w *blockingWriter) WriteHeader(int)     {}
+func (w *blockingWriter) WriteHeader(int) {
+	if w.blockHeader {
+		w.Write(nil)
+	}
+}
 func (w *blockingWriter) Write(p []byte) (int, error) {
 	w.once.Do(func() { close(w.started) })
 	<-w.release
@@ -1725,35 +1730,44 @@ func TestGuardIsReleasedBeforeTheResponseIsWritten(t *testing.T) {
 	// and Go's RWMutex blocks new readers once a writer waits — so every subsequent
 	// request blocked too, including /v1/status. One connection renewed every 59
 	// seconds was an unauthenticated outage from a single host.
-	srv := fixture(t)
-	guard := &sync.RWMutex{}
-	srv.Current().Guard = guard
+	for _, conditional := range []bool{false, true} {
+		t.Run(fmt.Sprintf("conditional=%t", conditional), func(t *testing.T) {
+			srv := fixture(t)
+			guard := &sync.RWMutex{}
+			srv.Current().Guard = guard
 
-	bw := &blockingWriter{hdr: http.Header{}, started: make(chan struct{}), release: make(chan struct{})}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		srv.ServeHTTP(bw, httptest.NewRequest(http.MethodGet, "/v1/teams?per_page=1000", nil))
-	}()
+			req := httptest.NewRequest(http.MethodGet, "/v1/teams?per_page=1000", nil)
+			if conditional {
+				rec, _ := get(t, srv, req.URL.String())
+				req.Header.Set("If-None-Match", rec.Header().Get("ETag"))
+			}
+			bw := &blockingWriter{hdr: http.Header{}, started: make(chan struct{}), release: make(chan struct{}), blockHeader: conditional}
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				srv.ServeHTTP(bw, req)
+			}()
 
-	select {
-	case <-bw.started:
-	case <-time.After(5 * time.Second):
-		t.Fatal("handler never reached Write")
+			select {
+			case <-bw.started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("handler never reached Write")
+			}
+
+			// We are now parked inside Write. The writer must be able to take the lock — that
+			// is ingest, and on the old code it could not until the client drained or the
+			// write timed out.
+			if !guard.TryLock() {
+				close(bw.release)
+				<-done
+				t.Fatal("the response write still holds the read lock; ingest would block behind a stalled client")
+			}
+			guard.Unlock()
+
+			close(bw.release)
+			<-done
+		})
 	}
-
-	// We are now parked inside Write. The writer must be able to take the lock — that
-	// is ingest, and on the old code it could not until the client drained or the
-	// write timed out.
-	if !guard.TryLock() {
-		close(bw.release)
-		<-done
-		t.Fatal("the response write still holds the read lock; ingest would block behind a stalled client")
-	}
-	guard.Unlock()
-
-	close(bw.release)
-	<-done
 }
 
 func TestTeamSearchIndexPreservesSemantics(t *testing.T) {
@@ -1772,7 +1786,7 @@ func TestTeamSearchIndexPreservesSemantics(t *testing.T) {
 	// "Folders" is an exact name shared by two teams, and a prefix of three more.
 	// Scores set the rank order the results must come back in.
 	teams := []parse.TeamRow{
-		tr(1, "Folders", 900), tr(2, "Folders United", 800), tr(3, "Folders", 700),
+		tr(1, "Folders", 900), tr(2, "Folders United", 1800), tr(3, "Folders", 700),
 		tr(4, "folders anonymous", 600), tr(5, "FOLDERSXTREME", 500), tr(6, "Unrelated", 400),
 	}
 	users := []parse.UserRow{u("someone", 100, 1)}
@@ -1818,6 +1832,9 @@ func TestTeamSearchIndexPreservesSemantics(t *testing.T) {
 			t.Errorf("q=Folders order = %v, want %v", got, want)
 			break
 		}
+	}
+	if got, exact := ids("/v1/search?q=Folders&type=team&limit=1"); len(got) != 1 || got[0] != 1 || !exact {
+		t.Errorf("limited exact search returned %v exact=%v, want team 1 marked exact", got, exact)
 	}
 
 	// A lowercase query must find the mixed- and upper-case names too.

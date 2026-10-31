@@ -288,6 +288,19 @@ func (s *Store) WriteCycle(ctx context.Context, st *model.State, c *model.Cycle,
 		}
 		stmt.Close()
 	}
+	if len(c.RenamedTeams) > 0 {
+		stmt, err := tx.PrepareContext(ctx, `UPDATE teams SET name_id = ? WHERE slot = ?`)
+		if err != nil {
+			return err
+		}
+		for _, slot := range c.RenamedTeams {
+			if _, err := stmt.ExecContext(ctx, st.Teams[slot].NameID, slot); err != nil {
+				stmt.Close()
+				return fmt.Errorf("store: renaming team slot %d: %w", slot, err)
+			}
+		}
+		stmt.Close()
+	}
 
 	if err := insertDeltas(ctx, tx,
 		`INSERT OR REPLACE INTO member_deltas(member_id, ts, d_score, d_wu) VALUES(?, ?, ?, ?)`,

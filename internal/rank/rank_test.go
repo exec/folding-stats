@@ -44,6 +44,61 @@ func TestMemberRankingIsByScoreDescending(t *testing.T) {
 	}
 }
 
+func TestTeamPrefixPreservesExactNamesPastCandidateLimit(t *testing.T) {
+	var rows []parse.TeamRow
+	for i := range 30 {
+		rows = append(rows, parse.TeamRow{ID: int32(i + 1), Name: "ABC", Score: 100})
+	}
+	rows = append(rows,
+		parse.TeamRow{ID: 31, Name: "abc", Score: 1},
+		parse.TeamRow{ID: 32, Name: "abc", Score: 2},
+		parse.TeamRow{ID: 33, Name: "abcd", Score: 1000})
+	st, tbl := build(t, rows, nil)
+	// Equal folded names may appear in any order. Put verbatim matches beyond
+	// the prefix candidate cap to exercise the case-variant boundary directly.
+	for i := range tbl.teamNameOrder {
+		tbl.teamNameOrder[i] = int32(i)
+	}
+	for _, limit := range []int{1, 2} {
+		hits := tbl.TeamPrefix(st, "abc", limit)
+		if len(hits) != limit || hits[0] != 31 || limit == 2 && hits[1] != 30 {
+			t.Fatalf("limit %d: slots %v, want exact names in rank order", limit, hits)
+		}
+	}
+}
+
+func TestDonorPrefixPreservesExactNamePastCandidateLimit(t *testing.T) {
+	const query = "abcdefgh"
+	var rows []parse.UserRow
+	for i := 1; i <= 32; i++ {
+		name := []byte(query)
+		for bit := range 6 {
+			if i&(1<<bit) != 0 {
+				name[bit] -= 'a' - 'A'
+			}
+		}
+		rows = append(rows, u(string(name), int64(i+100), 1))
+	}
+	rows = append(rows, u(query, 1, 1), u(query+"more", 10000, 1))
+	st, tbl := build(t, nil, rows)
+	id, _ := st.Names.Lookup(query)
+	exact := tbl.DonorIndexOf(id)
+	// Equal folded names may sort in any order; force the exact hit past the cap.
+	tbl.nameOrder = tbl.nameOrder[:0]
+	for i := range tbl.Donors {
+		if i != 0 && int32(i) != exact {
+			tbl.nameOrder = append(tbl.nameOrder, int32(i))
+		}
+	}
+	tbl.nameOrder = append(tbl.nameOrder, exact, 0)
+	for _, limit := range []int{1, 2} {
+		hits := tbl.DonorPrefix(st, query, limit)
+		if len(hits) != limit || hits[0] != exact || limit == 2 && hits[1] != 0 {
+			t.Fatalf("limit %d: donors %v, want exact donor %d first", limit, hits, exact)
+		}
+	}
+}
+
 func TestTiesBreakDeterministicallyBySlot(t *testing.T) {
 	// Millions of donors are tied on zero. If ties shuffled between cycles, rank
 	// movement would be pure noise and every rank-change column would be garbage.

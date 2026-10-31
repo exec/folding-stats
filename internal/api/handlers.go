@@ -202,14 +202,6 @@ func (s *Server) teamMembers(snap *Snapshot, r *http.Request) (any, *PageInfo, e
 		return nil, nil, err
 	}
 
-	// Unfiltered and in the stored order is the common case and stays a slice.
-	if !activeOnly && sortKey == rank.Lifetime {
-		out := make([]Member, 0, hi-lo)
-		for _, slot := range slots[lo:hi] {
-			out = append(out, snap.memberView(slot, false))
-		}
-		return out, page, nil
-	}
 	ordered := snap.orderRoster(slots, sortKey, activeOnly, lo, hi)
 	out := make([]Member, 0, len(ordered))
 	for _, slot := range ordered {
@@ -384,17 +376,10 @@ func (s *Server) search(snap *Snapshot, r *http.Request) (any, *PageInfo, error)
 	// real names such as "DH" permanently unfindable, which is the whole reason
 	// this endpoint exists.
 	if kind == "" || kind == "donor" {
-		seen := map[int32]bool{}
-		if idx, ok := snap.donorIndexByName(q); ok {
-			res.Donors = append(res.Donors, snap.donorView(idx, false))
-			res.ExactDonor = true
-			seen[idx] = true
-		}
 		for _, idx := range snap.Ranks.DonorPrefix(snap.State, q, limit) {
-			if seen[idx] || len(res.Donors) >= limit {
-				continue
-			}
-			res.Donors = append(res.Donors, snap.donorView(idx, false))
+			v := snap.donorView(idx, false)
+			res.Donors = append(res.Donors, v)
+			res.ExactDonor = res.ExactDonor || v.Name == q
 		}
 	}
 
@@ -414,35 +399,13 @@ func (s *Server) search(snap *Snapshot, r *http.Request) (any, *PageInfo, error)
 			}
 		}
 
-		// One indexed lookup, where there used to be two full passes over every team.
-		//
-		// The old exact-name branch scanned all ~130k teams whenever the query was an
-		// interned string — which every one of the 2.1M donor names is — and the prefix
-		// branch scanned them again, allocating a string per team to read the name and
-		// another to lowercase it. A query matching nothing did both and cost 16.8ms
-		// against a 0.18ms baseline, on the endpoint the search box calls as you type.
-		//
-		// An exact name is a prefix of itself, so both questions are answered by the
-		// same range. Exact hits lead: the index is ordered case-insensitively, so a
-		// name equal to the query sorts ahead of every longer name sharing it.
+		// The shared index preserves exact hits before applying the result limit.
 		exactNameID, hasExactName := snap.State.Names.Lookup(q)
 		hits := snap.Ranks.TeamPrefix(snap.State, q, limit)
-		if hasExactName {
-			exact := make([]int32, 0, len(hits))
-			rest := make([]int32, 0, len(hits))
-			for _, slot := range hits {
-				if snap.State.Teams[slot].NameID == exactNameID {
-					exact = append(exact, slot)
-				} else {
-					rest = append(rest, slot)
-				}
-			}
-			if len(exact) > 0 {
-				res.ExactTeam = true
-				hits = append(exact, rest...)
-			}
-		}
 		for _, slot := range hits {
+			if hasExactName && snap.State.Teams[slot].NameID == exactNameID {
+				res.ExactTeam = true
+			}
 			add(slot)
 		}
 	}

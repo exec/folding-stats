@@ -82,7 +82,7 @@ func (s *Server) changes(snap *Snapshot, r *http.Request) (any, *PageInfo, error
 
 	switch kind {
 	case "teams":
-		slots, err := snap.Store.ChangedTeams(ctx, since)
+		slots, err := snap.Store.ChangedTeams(ctx, since, snap.At)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -98,7 +98,7 @@ func (s *Server) changes(snap *Snapshot, r *http.Request) (any, *PageInfo, error
 		return out, page, nil
 
 	case "members":
-		slots, err := snap.Store.ChangedMembers(ctx, since)
+		slots, err := snap.Store.ChangedMembers(ctx, since, snap.At)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -117,7 +117,7 @@ func (s *Server) changes(snap *Snapshot, r *http.Request) (any, *PageInfo, error
 		// A donor changed when any of its memberships did, so the member set collapses
 		// onto fewer donors — which is the point of asking at this grain rather than
 		// reconstructing the aggregate from member rows on the client.
-		slots, err := snap.Store.ChangedMembers(ctx, since)
+		slots, err := snap.Store.ChangedMembers(ctx, since, snap.At)
 		if err != nil {
 			return nil, nil, err
 		}

@@ -211,6 +211,57 @@ func TestRestartResumesWithoutReapplying(t *testing.T) {
 	}
 }
 
+func TestIngestSkipsLateOlderCycles(t *testing.T) {
+	dir := t.TempDir()
+	a := seed(t, dir, twoCycles()[1:])
+	svc, srv, db := newService(t, dir, a)
+	defer db.Close()
+	ctx := context.Background()
+	if n, err := svc.Ingest(ctx); err != nil || n != 1 {
+		t.Fatalf("initial Ingest = %d, %v", n, err)
+	}
+	want := srv.Current().Totals
+
+	// The missing older pair arrives inside the ingest lookback.
+	seed(t, dir, twoCycles()[:1])
+	if n, err := svc.Ingest(ctx); err != nil || n != 0 {
+		t.Fatalf("late Ingest = %d, %v, want 0, nil", n, err)
+	}
+	if !svc.state.At.Equal(cyc(22)) || srv.Current().Totals != want {
+		t.Fatal("late archive pair changed live statistics")
+	}
+	applied, err := db.AppliedCycles(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applied) != 1 || applied[cyc(21).Unix()] {
+		t.Fatalf("late pair entered stored history: %v", applied)
+	}
+
+	// Restart must retain the same baseline even though the old pair is on disk.
+	srv = api.NewServer()
+	svc, err = New(a, db, srv, discardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := svc.Ingest(ctx); err != nil || n != 0 {
+		t.Fatalf("restart Ingest = %d, %v, want 0, nil", n, err)
+	}
+	if srv.Current().Totals != want {
+		t.Fatal("restart changed statistics after late arrival")
+	}
+	seed(t, dir, []world{{cyc(23),
+		[]string{"32\tocuk\t2500\t25", "51\talliance\t900\t9"},
+		[]string{"DH\t1400\t14\t32", "toTOW\t1100\t11\t32", "DH\t500\t5\t51"},
+	}})
+	if n, err := svc.Ingest(ctx); err != nil || n != 1 {
+		t.Fatalf("next Ingest = %d, %v, want 1, nil", n, err)
+	}
+	if got := srv.Current().Totals; got.PointsTotal != 3400 || got.PointsLast24h != 800 {
+		t.Fatalf("next totals = %+v, want 3400 lifetime and 800 production", got)
+	}
+}
+
 func TestRestartPreservesDonorIdentity(t *testing.T) {
 	// Identity slots are referenced by stored deltas. If a restart reassigned them,
 	// history would silently attach to the wrong donor.

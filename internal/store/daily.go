@@ -86,27 +86,27 @@ func (s *Store) days(ctx context.Context, query string, args ...any) ([]Day, err
 	return out, rows.Err()
 }
 
-// ChangedTeams returns the slots of teams that produced after since, exclusive.
-func (s *Store) ChangedTeams(ctx context.Context, since time.Time) ([]int32, error) {
-	return s.changed(ctx, `SELECT DISTINCT slot FROM team_deltas WHERE ts > ?`, since)
+// ChangedTeams returns team slots changed in (since, until].
+func (s *Store) ChangedTeams(ctx context.Context, since, until time.Time) ([]int32, error) {
+	return s.changed(ctx, `SELECT DISTINCT slot FROM team_deltas WHERE ts > ? AND ts <= ?`, since, until)
 }
 
-// ChangedMembers returns the slots of members that produced after since, exclusive.
+// ChangedMembers returns member slots changed in (since, until].
 //
-// Exclusive because the natural cursor is the snapshot time of the last response a
-// client held, and an inclusive bound would hand back that whole cycle every poll.
+// The lower bound is exclusive because the cursor is the last response's snapshot;
+// an inclusive bound would hand back that whole cycle every poll.
 //
 // Both of these ride the covering (ts, d_score, d_wu) index, whose entries carry the
 // primary key along — so the distinct set of ids in a time range never touches the
 // table. That matters more here than anywhere: this is the query that exists to keep a
 // mirror off the full collections, and it would be a poor trade if it cost more than
 // the crawl it replaces.
-func (s *Store) ChangedMembers(ctx context.Context, since time.Time) ([]int32, error) {
-	return s.changed(ctx, `SELECT DISTINCT member_id FROM member_deltas WHERE ts > ?`, since)
+func (s *Store) ChangedMembers(ctx context.Context, since, until time.Time) ([]int32, error) {
+	return s.changed(ctx, `SELECT DISTINCT member_id FROM member_deltas WHERE ts > ? AND ts <= ?`, since, until)
 }
 
-func (s *Store) changed(ctx context.Context, query string, since time.Time) ([]int32, error) {
-	rows, err := s.query(ctx, query, since.UTC().Unix())
+func (s *Store) changed(ctx context.Context, query string, since, until time.Time) ([]int32, error) {
+	rows, err := s.query(ctx, query, since.UTC().Unix(), until.UTC().Unix())
 	if err != nil {
 		return nil, err
 	}

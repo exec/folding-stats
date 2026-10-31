@@ -58,6 +58,8 @@ type Cycle struct {
 	NewMembers []int32
 	NewTeams   []int32
 
+	RenamedTeams []int32
+
 	// Regressions counts entities whose cumulative score decreased. That should be
 	// impossible; it indicates a feed glitch or a renamed donor colliding with an
 	// existing row, and is surfaced rather than silently clamped.
@@ -88,6 +90,10 @@ type State struct {
 	memberIdx map[uint64]int32
 	// teamIdx maps the upstream team number to a slot in Teams.
 	teamIdx map[int32]int32
+
+	// A zero total is a valid baseline; replay clears these flags, not identity.
+	memberSeen []bool
+	teamSeen   []bool
 
 	// Scratch buffers reused across cycles. Accumulating a snapshot in maps keyed
 	// by slot costs ~125 MB per map at corpus scale and is re-allocated every hour;
@@ -165,6 +171,7 @@ func (s *State) Apply(at time.Time, teams []parse.TeamRow, users []parse.UserRow
 	}
 
 	n := len(s.Members)
+	s.memberSeen = growBool(s.memberSeen, n)
 	s.accScore = grow64(s.accScore, n)
 	s.accWUs = grow64(s.accWUs, n)
 	s.touched = growBool(s.touched, n)
@@ -196,12 +203,13 @@ func (s *State) Apply(at time.Time, teams []parse.TeamRow, users []parse.UserRow
 		// A member's first sighting carries its entire pre-existing lifetime total.
 		// Recording that as production would invent an enormous fake spike on the
 		// day we happened to start watching.
-		if m.Score != 0 || m.WUs != 0 {
+		if s.memberSeen[slot] {
 			if d != 0 || dw != 0 {
 				c.MemberDeltas = append(c.MemberDeltas, Delta{ID: slot, DScore: d, DWUs: dw})
 			}
 		}
 		m.Score, m.WUs = score, wus
+		s.memberSeen[slot] = true
 	}
 
 	for _, t := range teams {
@@ -210,6 +218,7 @@ func (s *State) Apply(at time.Time, teams []parse.TeamRow, users []parse.UserRow
 		if !ok {
 			slot = int32(len(s.Teams))
 			s.Teams = append(s.Teams, Team{ID: t.ID, NameID: nameID})
+			s.teamSeen = append(s.teamSeen, false)
 			s.teamIdx[t.ID] = slot
 			c.NewTeams = append(c.NewTeams, slot)
 		}
@@ -221,14 +230,18 @@ func (s *State) Apply(at time.Time, teams []parse.TeamRow, users []parse.UserRow
 				c.RegressedTeams = append(c.RegressedTeams, Delta{ID: slot, DScore: d, DWUs: dw})
 			}
 		}
-		if tm.Score != 0 || tm.WUs != 0 {
+		if s.teamSeen[slot] {
 			if d != 0 || dw != 0 {
 				c.TeamDeltas = append(c.TeamDeltas, Delta{ID: slot, DScore: d, DWUs: dw})
 			}
 		}
 		// Teams can be renamed upstream; keep the latest.
+		if tm.NameID != nameID {
+			c.RenamedTeams = append(c.RenamedTeams, slot)
+		}
 		tm.NameID = nameID
 		tm.Score, tm.WUs = t.Score, t.WUs
+		s.teamSeen[slot] = true
 	}
 
 	s.At = at
@@ -302,6 +315,7 @@ func growBool(s []bool, n int) []bool {
 func (s *State) AppendTeam(teamID, nameID int32) int32 {
 	slot := int32(len(s.Teams))
 	s.Teams = append(s.Teams, Team{ID: teamID, NameID: nameID})
+	s.teamSeen = append(s.teamSeen, true)
 	s.teamIdx[teamID] = slot
 	return slot
 }
@@ -310,6 +324,7 @@ func (s *State) AppendTeam(teamID, nameID int32) int32 {
 func (s *State) AppendMember(nameID, teamID int32) int32 {
 	slot := int32(len(s.Members))
 	s.Members = append(s.Members, Member{NameID: nameID, TeamID: teamID})
+	s.memberSeen = append(s.memberSeen, true)
 	s.memberIdx[memberKey(nameID, teamID)] = slot
 	return slot
 }
@@ -322,6 +337,8 @@ func (s *State) AppendMember(nameID, teamID int32) int32 {
 // forward from the newest cycle wants the opposite, which is why restoring totals
 // and clearing them are separate operations.
 func (s *State) ResetTotals() {
+	clear(s.memberSeen)
+	clear(s.teamSeen)
 	for i := range s.Members {
 		s.Members[i].Score, s.Members[i].WUs = 0, 0
 	}
