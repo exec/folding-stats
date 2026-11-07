@@ -60,6 +60,8 @@ func TestQueryValidationPreservesValidQueriesAndDiagnostics(t *testing.T) {
 		{"/v1/teams?sort=lifetime&page=1&per_page=10&typo=1", "typo is not a parameter of this endpoint. It accepts: page, per_page, sort"},
 		{"/v1/teams?sort=lifetime&sort=today", "sort was given 2 times; each parameter may appear once"},
 		{"/badge/team/32?metric=rank&metric=points", "metric was given 2 times; each parameter may appear once"},
+		{"/v1/search?q=DH&type=bogus", "type must be donor or team"},
+		{"/v1/search?q=DH&type=", ""},
 	} {
 		rec := httptest.NewRecorder()
 		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))

@@ -360,6 +360,9 @@ func (s *Server) search(snap *Snapshot, r *http.Request) (any, *PageInfo, error)
 		return nil, nil, badRequest("q is required")
 	}
 	kind := r.URL.Query().Get("type")
+	if kind != "" && kind != "donor" && kind != "team" {
+		return nil, nil, badRequest("type must be donor or team")
+	}
 
 	limit, err := intParam(r, "limit", defaultSearchLimit)
 	if err != nil {
